@@ -1,0 +1,10 @@
+services:
+  worker:
+    build: .
+    container_name: streamrecorder-worker
+    restart: unless-stopped
+    environment:
+      POLL_INTERVAL: "60"
+    volumes:
+      - ./config:/app/config
+      - ../recordings:/recordings
