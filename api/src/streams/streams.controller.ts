@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Delete, Param, Body } from "@nestjs/common";
 import { StreamerService, SessionService } from "./streams.service";
-import { StreamerDto } from "./dto/streamer.dto";
+import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { SessionDto } from "./dto/session.dto";
 
 @Controller()
@@ -21,7 +21,7 @@ export class StreamController {
   }
 
   @Post("/streamer")
-  createStreamer(@Body() dto: StreamerDto): Promise<StreamerDto> {
+  createStreamer(@Body() dto: CreateStreamerDto): Promise<StreamerDto> {
     return this.streamerService.createStreamer(dto);
   }
 

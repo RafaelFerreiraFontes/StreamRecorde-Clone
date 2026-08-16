@@ -254,6 +254,8 @@ def poll_loop():
             log.error("Erro ao ler sessões: %s", e)
             sessions = []
 
+        watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
+
         for entry in watchlist:
             url = entry.get("url")
             channel_name = entry.get("channel_name")
@@ -287,6 +289,17 @@ def poll_loop():
                     save_status()
             except Exception as e:
                 log.warning("Erro ao verificar status do canal %s: %s", channel_name, e)
+                continue
+
+            try:
+                new_watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
+                if new_watchlist_lastmodified > watchlist_lastmodified:
+                    watchlist_lastmodified = new_watchlist_lastmodified
+
+                    watchlist = load_watchlist()
+                    continue
+            except Exception as e:
+                log.warning("Erro ao verificar watchlist: %s", e)
                 continue
 
         time.sleep(POLL_INTERVAL)

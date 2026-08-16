@@ -16,7 +16,7 @@ import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
-import { StreamerDto } from "./dto/streamer.dto";
+import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 
 // ─── Tipos internos (espelham o que o worker escreve) ────────────────────────
 
@@ -181,7 +181,7 @@ export class StreamsRepository {
   /**
    * Cria uma nova entrada na watchlist (gera uuid v4) e persiste.
    */
-  async createStreamer(dto: StreamerDto): Promise<StreamerDto> {
+  async createStreamer(dto: CreateStreamerDto): Promise<StreamerDto> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
         this.readWatchlist(),

@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { StreamsRepository } from "./streams.repository";
-import { StreamerDto } from "./dto/streamer.dto";
+import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { SessionDto } from "./dto/session.dto";
 
 @Injectable()
@@ -15,7 +15,7 @@ export class StreamerService {
     return await this.repository.findOneStreamer(id);
   }
 
-  async createStreamer(dto: StreamerDto): Promise<StreamerDto> {
+  async createStreamer(dto: CreateStreamerDto): Promise<StreamerDto> {
     return await this.repository.createStreamer(dto);
   }
 
