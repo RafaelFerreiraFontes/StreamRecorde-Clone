@@ -25,12 +25,6 @@ export type StreamPlatform = "youtube" | "twitch" | "kick";
 export interface Creator {
   id: string;
   display_name: string;
-  /**
-   * The current code does not yet separate a creator identity record from the
-   * monitoring configuration stored in watchlist.json. This field remains the
-   * minimum identity boundary for Wave 02.1.
-   */
-  channel_name?: string;
 }
 
 export interface WatchTarget {

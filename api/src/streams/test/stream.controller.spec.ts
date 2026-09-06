@@ -54,6 +54,86 @@ describe("StreamController", () => {
     expect(controller).toBeDefined();
   });
 
+  it("should group multiple watch targets under the same creator", async () => {
+    const repo = new StreamsRepository();
+
+    const watchlistPath = process.env.WATCHLIST_PATH;
+    if (!watchlistPath) {
+      throw new Error("WATCHLIST_PATH is not configured");
+    }
+
+    await fs.writeFile(
+      watchlistPath,
+      JSON.stringify(
+        [
+          {
+            id: "watch-target-1",
+            display_name: "ExampleCreator",
+            channel_name: "example1",
+            platform: "twitch",
+            url: "https://www.twitch.tv/example1",
+            quality: "best",
+          },
+          {
+            id: "watch-target-2",
+            display_name: "ExampleCreator",
+            channel_name: "example2",
+            platform: "youtube",
+            url: "https://www.youtube.com/@example2",
+            quality: "1080p",
+          },
+          {
+            id: "watch-target-3",
+            display_name: "OtherCreator",
+            channel_name: "other",
+            platform: "kick",
+            url: "https://kick.com/other",
+            quality: "720p",
+          },
+        ],
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const creators = await repo.findAllCreators();
+    expect(creators).toEqual([
+      {
+        id: "ExampleCreator",
+        display_name: "ExampleCreator",
+      },
+      {
+        id: "OtherCreator",
+        display_name: "OtherCreator",
+      },
+    ]);
+
+    const watchTargets = await repo.findWatchTargetsByCreator("ExampleCreator");
+    expect(watchTargets).toEqual([
+      {
+        id: "watch-target-1",
+        creator_id: "ExampleCreator",
+        channel_name: "example1",
+        platform: "twitch",
+        url: "https://www.twitch.tv/example1",
+        quality: "best",
+        enabled: true,
+        state: "idle",
+      },
+      {
+        id: "watch-target-2",
+        creator_id: "ExampleCreator",
+        channel_name: "example2",
+        platform: "youtube",
+        url: "https://www.youtube.com/@example2",
+        quality: "1080p",
+        enabled: true,
+        state: "idle",
+      },
+    ]);
+  });
+
   it("should get all streamers", async () => {
     const streamers = await controller.getAllStreamers();
     expect(streamers).toEqual([

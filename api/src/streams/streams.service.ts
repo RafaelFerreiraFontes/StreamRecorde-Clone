@@ -2,10 +2,23 @@ import { Injectable } from "@nestjs/common";
 import { StreamsRepository } from "./streams.repository";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { SessionDto } from "./dto/session.dto";
+import { Creator, WatchTarget } from "./domain.model";
 
 @Injectable()
 export class StreamerService {
   constructor(private readonly repository: StreamsRepository) {}
+
+  async findAllCreators(): Promise<Creator[]> {
+    return await this.repository.findAllCreators();
+  }
+
+  async findOneCreator(creatorId: string): Promise<Creator> {
+    return await this.repository.findOneCreator(creatorId);
+  }
+
+  async findWatchTargetsByCreator(creatorId: string): Promise<WatchTarget[]> {
+    return await this.repository.findWatchTargetsByCreator(creatorId);
+  }
 
   async findAllStreamer(): Promise<StreamerDto[]> {
     return await this.repository.findAllStreamer();

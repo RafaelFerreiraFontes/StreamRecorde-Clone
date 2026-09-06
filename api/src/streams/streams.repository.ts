@@ -17,6 +17,7 @@ import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
+import { Creator, StreamPlatform, WatchTarget } from "./domain.model";
 
 // ─── Tipos internos (espelham o que o worker escreve) ────────────────────────
 
@@ -111,6 +112,39 @@ export class StreamsRepository {
 
   // ── merge helper ────────────────────────────────────────────────────────────
 
+  private normalizeCreatorId(displayName: string): string {
+    const normalized = (displayName ?? "").trim();
+    return normalized || "unknown-creator";
+  }
+
+  private toCreator(entry: WatchlistEntry): Creator {
+    const displayName = entry.display_name?.trim() || entry.channel_name || "unknown-creator";
+    return {
+      id: this.normalizeCreatorId(displayName),
+      display_name: displayName,
+    };
+  }
+
+  private toWatchTarget(
+    entry: WatchlistEntry,
+    status: Record<string, ChannelStatus>,
+  ): WatchTarget {
+    const creatorId = this.normalizeCreatorId(
+      entry.display_name?.trim() || entry.channel_name || "unknown-creator",
+    );
+
+    return {
+      id: entry.id,
+      creator_id: creatorId,
+      channel_name: entry.channel_name,
+      platform: (entry.platform as StreamPlatform) || "youtube",
+      url: entry.url ?? "",
+      quality: entry.quality ?? "best",
+      enabled: true,
+      state: status[entry.id]?.state ?? "idle",
+    };
+  }
+
   private mergeStreamer(
     entry: WatchlistEntry,
     status: Record<string, ChannelStatus>,
@@ -147,6 +181,55 @@ export class StreamsRepository {
   // ═══════════════════════════════════════════════════════════════════════════
   // Streamer methods  (watchlist.json + channels_status.json merged by id)
   // ═══════════════════════════════════════════════════════════════════════════
+
+  async findAllCreators(): Promise<Creator[]> {
+    return this.mutex.runExclusive(async () => {
+      const watchlist = await this.readWatchlist();
+      const creators = new Map<string, Creator>();
+
+      for (const entry of watchlist) {
+        const creator = this.toCreator(entry);
+        if (!creators.has(creator.id)) {
+          creators.set(creator.id, creator);
+        }
+      }
+
+      return Array.from(creators.values());
+    });
+  }
+
+  async findOneCreator(creatorId: string): Promise<Creator> {
+    return this.mutex.runExclusive(async () => {
+      const watchlist = await this.readWatchlist();
+      const entry = watchlist.find(
+        (item) =>
+          this.toCreator(item).id === creatorId ||
+          this.toCreator(item).display_name === creatorId,
+      );
+
+      if (!entry) {
+        throw new NotFoundException(`Creator ${creatorId} não encontrado`);
+      }
+
+      return this.toCreator(entry);
+    });
+  }
+
+  async findWatchTargetsByCreator(creatorId: string): Promise<WatchTarget[]> {
+    return this.mutex.runExclusive(async () => {
+      const [watchlist, status] = await Promise.all([
+        this.readWatchlist(),
+        this.readChannelsStatus(),
+      ]);
+
+      return watchlist
+        .filter((entry) => {
+          const creator = this.toCreator(entry);
+          return creator.id === creatorId || creator.display_name === creatorId;
+        })
+        .map((entry) => this.toWatchTarget(entry, status));
+    });
+  }
 
   /**
    * Retorna todos os streamers da watchlist com o estado atual de cada um.
