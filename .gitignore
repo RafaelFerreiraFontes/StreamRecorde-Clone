@@ -5,4 +5,8 @@ recordings
 .vscode
 worker/config/
 .github/
+<<<<<<< HEAD
 *.tsbuildinfo
+=======
+*.tsbuildinfo
+>>>>>>> 7f9c1ed9ff19d786ec8d6bfe551244c8732ce79b
