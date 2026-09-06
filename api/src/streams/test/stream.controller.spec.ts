@@ -57,24 +57,29 @@ describe("StreamController", () => {
   });
 
   it("should create a streamer", async () => {
+    const expectedStreamer = {
+      id: "3",
+      display_name: "Streamer 3",
+      channel_name: "channel_name",
+      platform: "youtube",
+      url: "https://www.youtube.com/watch?v=3",
+      quality: "1080p",
+      state: "offline",
+    };
+    const createStreamer = jest
+      .spyOn(StreamerService.prototype, "createStreamer")
+      .mockResolvedValue(expectedStreamer);
+
     const streamer = await controller.createStreamer({
-      id: "3",
       display_name: "Streamer 3",
       channel_name: "channel_name",
       platform: "youtube",
       url: "https://www.youtube.com/watch?v=3",
       quality: "1080p",
-      state: "offline",
     });
-    expect(streamer).toEqual({
-      id: "3",
-      display_name: "Streamer 3",
-      channel_name: "channel_name",
-      platform: "youtube",
-      url: "https://www.youtube.com/watch?v=3",
-      quality: "1080p",
-      state: "offline",
-    });
+
+    expect(streamer).toEqual(expectedStreamer);
+    createStreamer.mockRestore();
   });
 
   it("should delete a streamer", async () => {
