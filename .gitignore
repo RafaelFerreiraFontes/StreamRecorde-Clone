@@ -4,3 +4,4 @@ node_modules
 recordings
 .vscode
 worker/config/
+.github/

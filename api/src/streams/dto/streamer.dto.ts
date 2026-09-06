@@ -13,7 +13,7 @@ export class StreamerDto {
   @Transform(({ value }: { value: string }) => sanitizeHtml(value).trim())
   channel_name: string;
 
-  @IsIn(["youtube", "twitch", "offline"])
+  @IsIn(["youtube", "twitch", "kick"])
   @IsString()
   @Transform(
     ({ value }: { value: string }) => value.toLowerCase().trim() || "youtube",

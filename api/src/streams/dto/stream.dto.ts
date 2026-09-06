@@ -14,7 +14,7 @@ export class StreamDto {
   @IsDateString()
   updated_at: string;
 
-  @IsIn(["youtube", "twitch", "offline"])
+  @IsIn(["youtube", "twitch", "kick"])
   @IsString()
   @Transform(
     ({ value }: { value: string }) => value.toLowerCase().trim() || "youtube",

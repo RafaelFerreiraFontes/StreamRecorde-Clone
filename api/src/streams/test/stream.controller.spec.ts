@@ -157,4 +157,14 @@ describe("StreamController", () => {
       },
     ]);
   });
+
+  it("should forward the channel route parameter to the session service", async () => {
+    const findSessionsByChannel = jest
+      .spyOn(SessionService.prototype, "findSessionsByChannel")
+      .mockResolvedValue([]);
+
+    await controller.getSessionByChannel("channel-id");
+
+    expect(findSessionsByChannel).toHaveBeenCalledWith("channel-id");
+  });
 });
