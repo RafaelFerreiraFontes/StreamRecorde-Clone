@@ -36,7 +36,7 @@ export class SessionDto {
   )
   state: string;
 
-  @IsIn(["youtube", "twitch", "offline"])
+  @IsIn(["youtube", "twitch", "kick"])
   @IsString()
   @Transform(
     ({ value }: { value: string }) => value.toLowerCase().trim() || "youtube",

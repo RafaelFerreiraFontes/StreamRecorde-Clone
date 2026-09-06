@@ -79,6 +79,47 @@ def save_sessions():
         json.dump(sessions, f, ensure_ascii=False, indent=2, default=str)
 
 
+def reload_sessions_preserving_active():
+    global sessions
+
+    loaded_sessions = load_sessions()
+    active_session_ids = {
+        info["session_id"] for info in active_recordings.values()
+    }
+    active_sessions = [
+        session
+        for session in sessions
+        if session["session_id"] in active_session_ids
+    ]
+    sessions = [
+        session
+        for session in loaded_sessions
+        if session["session_id"] not in active_session_ids
+    ]
+    sessions.extend(active_sessions)
+
+
+def preserve_active_channel_status():
+    for channel_id, info in active_recordings.items():
+        status = channels_status.setdefault(
+            channel_id,
+            {
+                "channel_name": info["channel_name"],
+                "platform": info["platform"],
+                "state": "recording",
+            },
+        )
+        status["state"] = "recording"
+
+
+def reload_channels_status_preserving_active():
+    global channels_status
+
+    loaded_status = load_channels_status()
+    channels_status = loaded_status
+    preserve_active_channel_status()
+
+
 def sanitize(s: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in s)
 
@@ -163,6 +204,7 @@ def start_recording(entry: dict):
         )
 
         save_status()
+        save_sessions()
 
     threading.Thread(target=monitor_recording, args=(id,), daemon=True).start()
 
@@ -184,13 +226,17 @@ def monitor_recording(id: str):
 
         output_file = info["output_file"]
 
-        ok = os.path.exists(output_file) and os.path.getsize(output_file) > 0
+        ok = (
+            proc.returncode == 0
+            and os.path.exists(output_file)
+            and os.path.getsize(output_file) > 0
+        )
 
         finished_stream = next(
             (
                 i
                 for i, s in enumerate(sessions)
-                if s["channel_id"] == id and s["finished_at"] is None
+                if s["session_id"] == info["session_id"]
             ),
             None,
         )
@@ -225,16 +271,19 @@ def poll_loop():
     while True:
         # load channels_status, watchlist and sessions
         try:
-            channels_status = load_channels_status()
+            with lock:
+                reload_channels_status_preserving_active()
         except FileNotFoundError:
             log.warning(
                 "Channels status não encontrado em %s. Aguardando...",
                 CHANNELS_STATUS_PATH,
             )
-            channels_status = {}
+            with lock:
+                preserve_active_channel_status()
         except Exception as e:
             log.error("Erro ao ler channels status: %s", e)
-            channels_status = {}
+            with lock:
+                preserve_active_channel_status()
 
         try:
             watchlist = load_watchlist()
@@ -246,13 +295,12 @@ def poll_loop():
             watchlist = []
 
         try:
-            sessions = load_sessions()
+            with lock:
+                reload_sessions_preserving_active()
         except FileNotFoundError:
             log.warning("Sessões não encontradas em %s. Aguardando...", SESSIONS_PATH)
-            sessions = []
         except Exception as e:
             log.error("Erro ao ler sessões: %s", e)
-            sessions = []
 
         watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
 
@@ -309,8 +357,17 @@ def handle_shutdown(signum, frame):
     log.info("Encerrando worker... finalizando gravações em andamento.")
 
     with lock:
-        for info in active_recordings.values():
+        finished_at = datetime.now().isoformat()
+        for channel_id, info in active_recordings.items():
             info["process"].terminate()
+            channels_status[channel_id]["state"] = "error"
+            for session in sessions:
+                if session["session_id"] == info["session_id"]:
+                    session["state"] = "error"
+                    session["finished_at"] = finished_at
+                    break
+        save_status()
+        save_sessions()
     sys.exit(0)
 
 

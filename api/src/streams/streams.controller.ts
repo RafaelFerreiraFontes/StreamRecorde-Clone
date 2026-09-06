@@ -41,7 +41,7 @@ export class StreamController {
   }
 
   @Get("/session/channel/:id")
-  getSessionByChannel(@Param("channel_id") id: string): Promise<SessionDto[]> {
+  getSessionByChannel(@Param("id") id: string): Promise<SessionDto[]> {
     return this.sessionService.findSessionsByChannel(id);
   }
 }
