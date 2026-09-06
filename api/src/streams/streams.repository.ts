@@ -13,7 +13,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
@@ -53,19 +53,18 @@ interface SessionWithChannel extends SessionDto {
 
 // ─── Caminhos dos arquivos ────────────────────────────────────────────────────
 
-const CONFIG_DIR: string =
-  (process.env.CONFIG_DIR ??
-    path.join(process.cwd(), "..", "worker", "config")) ||
-  "";
+const getConfigDir = (): string =>
+  process.env.CONFIG_DIR ?? path.join(process.cwd(), "..", "worker", "config");
 
-const WATCHLIST_PATH: string =
-  (process.env.WATCHLIST_PATH ?? path.join(CONFIG_DIR, "watchlist.json")) || "";
-const CHANNELS_STATUS_PATH: string =
-  (process.env.CHANNELS_STATUS_PATH ??
-    path.join(CONFIG_DIR, "channels_status.json")) ||
-  "";
-const SESSIONS_PATH: string =
-  (process.env.SESSIONS_PATH ?? path.join(CONFIG_DIR, "sessions.json")) || "";
+const getWatchlistPath = (): string =>
+  process.env.WATCHLIST_PATH ?? path.join(getConfigDir(), "watchlist.json");
+
+const getChannelsStatusPath = (): string =>
+  process.env.CHANNELS_STATUS_PATH ??
+  path.join(getConfigDir(), "channels_status.json");
+
+const getSessionsPath = (): string =>
+  process.env.SESSIONS_PATH ?? path.join(getConfigDir(), "sessions.json");
 
 // ─── Repository ──────────────────────────────────────────────────────────────
 
@@ -78,7 +77,7 @@ export class StreamsRepository {
 
   private async readWatchlist(): Promise<WatchlistEntry[]> {
     try {
-      const raw = await fs.readFile(WATCHLIST_PATH, "utf-8");
+      const raw = await fs.readFile(getWatchlistPath(), "utf-8");
       return JSON.parse(raw) as WatchlistEntry[];
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -87,12 +86,12 @@ export class StreamsRepository {
   }
 
   private async writeWatchlist(data: WatchlistEntry[]): Promise<void> {
-    await fs.writeFile(WATCHLIST_PATH, JSON.stringify(data, null, 2), "utf-8");
+    await fs.writeFile(getWatchlistPath(), JSON.stringify(data, null, 2), "utf-8");
   }
 
   private async readChannelsStatus(): Promise<Record<string, ChannelStatus>> {
     try {
-      const raw = await fs.readFile(CHANNELS_STATUS_PATH, "utf-8");
+      const raw = await fs.readFile(getChannelsStatusPath(), "utf-8");
       return JSON.parse(raw) as Record<string, ChannelStatus>;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
@@ -102,7 +101,7 @@ export class StreamsRepository {
 
   private async readSessions(): Promise<SessionEntry[]> {
     try {
-      const raw = await fs.readFile(SESSIONS_PATH, "utf-8");
+      const raw = await fs.readFile(getSessionsPath(), "utf-8");
       return JSON.parse(raw) as SessionEntry[];
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -189,7 +188,7 @@ export class StreamsRepository {
       ]);
 
       const newEntry: WatchlistEntry = {
-        id: uuidv4(),
+        id: randomUUID(),
         display_name: dto.display_name ?? "",
         channel_name: dto.channel_name,
         platform: dto.platform,

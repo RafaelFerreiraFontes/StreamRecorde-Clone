@@ -1,13 +1,13 @@
 import { IsDateString, IsIn, IsString, IsUUID } from "class-validator";
 import { Transform, Type } from "class-transformer";
-import sanitizeHtml from "sanitize-html";
+import { normalizeTextInput } from "../sanitize";
 
 export class StreamDto {
   @IsUUID()
   id: string;
 
   @IsString()
-  @Transform(({ value }: { value: string }) => sanitizeHtml(value).trim())
+  @Transform(({ value }: { value: string }) => normalizeTextInput(value))
   channel_name: string;
 
   @Type(() => Date)

@@ -1,6 +1,6 @@
 import { IsIn, IsString, IsUrl, IsUUID } from "class-validator";
 import { Transform } from "class-transformer";
-import sanitizeHtml from "sanitize-html";
+import { normalizeTextInput } from "../sanitize";
 
 export class StreamerDto {
   @IsUUID()
@@ -10,7 +10,7 @@ export class StreamerDto {
   display_name: string;
 
   @IsString()
-  @Transform(({ value }: { value: string }) => sanitizeHtml(value).trim())
+  @Transform(({ value }: { value: string }) => normalizeTextInput(value))
   channel_name: string;
 
   @IsIn(["youtube", "twitch", "kick"])
@@ -39,7 +39,7 @@ export class CreateStreamerDto {
   display_name: string;
 
   @IsString()
-  @Transform(({ value }: { value: string }) => sanitizeHtml(value).trim())
+  @Transform(({ value }: { value: string }) => normalizeTextInput(value))
   channel_name: string;
 
   @IsIn(["youtube", "twitch", "kick"])

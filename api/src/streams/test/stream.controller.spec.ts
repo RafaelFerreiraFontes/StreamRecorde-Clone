@@ -1,18 +1,53 @@
 import { Test, TestingModule } from "@nestjs/testing";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 import { StreamController } from "../streams.controller";
 import { StreamerService, SessionService } from "../streams.service";
 import { StreamsRepository } from "../streams.repository";
+import {
+  legacyChannelStatus,
+  legacySessions,
+  legacyWatchlist,
+} from "./fixtures/legacy-data";
 
 describe("StreamController", () => {
   let controller: StreamController;
+  const originalEnv = { ...process.env };
 
   beforeEach(async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stream-controller-"));
+    process.env.CONFIG_DIR = tempDir;
+    process.env.WATCHLIST_PATH = path.join(tempDir, "watchlist.json");
+    process.env.CHANNELS_STATUS_PATH = path.join(tempDir, "channels_status.json");
+    process.env.SESSIONS_PATH = path.join(tempDir, "sessions.json");
+
+    await fs.writeFile(
+      process.env.WATCHLIST_PATH,
+      JSON.stringify(legacyWatchlist, null, 2),
+      "utf-8",
+    );
+    await fs.writeFile(
+      process.env.CHANNELS_STATUS_PATH,
+      JSON.stringify(legacyChannelStatus, null, 2),
+      "utf-8",
+    );
+    await fs.writeFile(
+      process.env.SESSIONS_PATH,
+      JSON.stringify(legacySessions, null, 2),
+      "utf-8",
+    );
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [StreamController],
       providers: [StreamsRepository, StreamerService, SessionService],
     }).compile();
 
     controller = module.get<StreamController>(StreamController);
+  });
+
+  afterEach(async () => {
+    process.env = { ...originalEnv };
   });
 
   it("should be defined", () => {
@@ -103,6 +138,26 @@ describe("StreamController", () => {
       {
         session_id: "2",
         channel_id: "2",
+        channel_name: "channel_name",
+        platform: "youtube",
+        started_at: "2022-01-01T00:00:00.000Z",
+        finished_at: "2022-01-01T00:00:00.000Z",
+        output_file: "output.mp4",
+        state: "idle",
+      },
+      {
+        session_id: "3",
+        channel_id: "1",
+        channel_name: "channel_name",
+        platform: "youtube",
+        started_at: "2022-01-01T00:00:00.000Z",
+        finished_at: "2022-01-01T00:00:00.000Z",
+        output_file: "output.mp4",
+        state: "idle",
+      },
+      {
+        session_id: "5",
+        channel_id: "1",
         channel_name: "channel_name",
         platform: "youtube",
         started_at: "2022-01-01T00:00:00.000Z",

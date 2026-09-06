@@ -5,3 +5,4 @@ recordings
 .vscode
 worker/config/
 .github/
+*.tsbuildinfo
