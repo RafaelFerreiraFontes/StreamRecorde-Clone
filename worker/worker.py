@@ -46,11 +46,13 @@ log = logging.getLogger("worker")
 
 active_recordings = (
     {}
-)  # channel_id -> {process, output_file, started_at, channel_name, url, platform, session_id(current)}
+)  # watch_target_id -> {process, output_file, started_at, channel_name, url, platform, session_id(current)}
 channels_status = (
     {}
-)  # channel_id -> { channel_name, platform, state(idle, offline, recording, finished, error)}
-sessions = []  # session_id -> {channel_id, started_at, finished_at, output_file, state}
+)  # watch_target_id -> { channel_name, platform, state(idle, offline, recording, finished, error)}
+recordings = (
+    []
+)  # session_id -> {watch_target_id, started_at, finished_at, output_file, state}
 lock = threading.Lock()
 
 
@@ -69,34 +71,54 @@ def load_sessions():
         return json.load(f)
 
 
+def deserialize_session(session: dict) -> dict:
+    recording = dict(session)
+    recording["watch_target_id"] = recording.pop("channel_id")
+    return recording
+
+
+def serialize_recording(recording: dict) -> dict:
+    session = dict(recording)
+    session["channel_id"] = session.pop("watch_target_id")
+    return session
+
+
 def save_status():
     with open(CHANNELS_STATUS_PATH, "w", encoding="utf-8") as f:
         json.dump(channels_status, f, ensure_ascii=False, indent=2, default=str)
 
 
-def save_sessions():
+def load_recordings():
+    return [deserialize_session(session) for session in load_sessions()]
+
+
+def save_recordings():
     with open(SESSIONS_PATH, "w", encoding="utf-8") as f:
-        json.dump(sessions, f, ensure_ascii=False, indent=2, default=str)
+        json.dump(
+            [serialize_recording(recording) for recording in recordings],
+            f,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
 
 
-def reload_sessions_preserving_active():
-    global sessions
+def reload_recordings_preserving_active():
+    global recordings
 
-    loaded_sessions = load_sessions()
-    active_session_ids = {
-        info["session_id"] for info in active_recordings.values()
-    }
-    active_sessions = [
-        session
-        for session in sessions
-        if session["session_id"] in active_session_ids
+    loaded_recordings = load_recordings()
+    active_recording_ids = {info["session_id"] for info in active_recordings.values()}
+    active_recordings_in_memory = [
+        recording
+        for recording in recordings
+        if recording["session_id"] in active_recording_ids
     ]
-    sessions = [
-        session
-        for session in loaded_sessions
-        if session["session_id"] not in active_session_ids
+    recordings = [
+        recording
+        for recording in loaded_recordings
+        if recording["session_id"] not in active_recording_ids
     ]
-    sessions.extend(active_sessions)
+    recordings.extend(active_recordings_in_memory)
 
 
 def preserve_active_channel_status():
@@ -145,13 +167,13 @@ def is_live(url: str) -> bool:
 
 
 def start_recording(entry: dict):
-    global active_recordings, channels_status, sessions, lock
+    global active_recordings, channels_status, recordings, lock
 
     url = entry["url"]
     quality = entry.get("quality", "best")
     platform = entry.get("platform", "unknown")
-    channel_name = entry.get("channel_name")
-    id = entry.get("id")
+    channel_name = str(entry.get("channel_name") or "unknown-channel")
+    watch_target_id = entry.get("id")
     session_id = str(uuid.uuid4())
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -180,7 +202,7 @@ def start_recording(entry: dict):
 
     started_at = datetime.now().isoformat()
     with lock:
-        active_recordings[id] = {
+        active_recordings[watch_target_id] = {
             "process": process,
             "output_file": str(out_path),
             "started_at": started_at,
@@ -190,12 +212,12 @@ def start_recording(entry: dict):
             "session_id": session_id,
         }
 
-        channels_status[id]["state"] = "recording"
+        channels_status[watch_target_id]["state"] = "recording"
 
-        sessions.append(
+        recordings.append(
             {
                 "session_id": session_id,
-                "channel_id": id,
+                "watch_target_id": watch_target_id,
                 "started_at": started_at,
                 "finished_at": None,
                 "output_file": str(out_path),
@@ -204,13 +226,15 @@ def start_recording(entry: dict):
         )
 
         save_status()
-        save_sessions()
+        save_recordings()
 
-    threading.Thread(target=monitor_recording, args=(id,), daemon=True).start()
+    threading.Thread(
+        target=monitor_recording, args=(watch_target_id,), daemon=True
+    ).start()
 
 
 def monitor_recording(id: str):
-    global active_recordings, channels_status, sessions, lock
+    global active_recordings, channels_status, recordings, lock
 
     with lock:
         proc = active_recordings[id]["process"]
@@ -232,30 +256,30 @@ def monitor_recording(id: str):
             and os.path.getsize(output_file) > 0
         )
 
-        finished_stream = next(
+        recording_index = next(
             (
                 i
-                for i, s in enumerate(sessions)
-                if s["session_id"] == info["session_id"]
+                for i, recording in enumerate(recordings)
+                if recording["session_id"] == info["session_id"]
             ),
             None,
         )
 
-        if finished_stream is None:
+        if recording_index is None:
             log.warning("Sessão em aberto não encontrada para o canal %s", id)
             return
 
         channels_status[id]["state"] = "finished" if ok else "error"
 
-        sessions[finished_stream]["state"] = "finished" if ok else "error"
+        recordings[recording_index]["state"] = "finished" if ok else "error"
 
-        sessions[finished_stream]["finished_at"] = finished_at
+        recordings[recording_index]["finished_at"] = finished_at
 
-        sessions[finished_stream]["output_file"] = output_file
+        recordings[recording_index]["output_file"] = output_file
 
         save_status()
 
-        save_sessions()
+        save_recordings()
 
     log.info(
         "[%s] Gravação finalizada (%s) -> %s",
@@ -266,7 +290,7 @@ def monitor_recording(id: str):
 
 
 def poll_loop():
-    global active_recordings, channels_status, sessions, lock
+    global active_recordings, channels_status, recordings, lock
 
     while True:
         # load channels_status, watchlist and sessions
@@ -296,7 +320,7 @@ def poll_loop():
 
         try:
             with lock:
-                reload_sessions_preserving_active()
+                reload_recordings_preserving_active()
         except FileNotFoundError:
             log.warning("Sessões não encontradas em %s. Aguardando...", SESSIONS_PATH)
         except Exception as e:
@@ -361,13 +385,13 @@ def handle_shutdown(signum, frame):
         for channel_id, info in active_recordings.items():
             info["process"].terminate()
             channels_status[channel_id]["state"] = "error"
-            for session in sessions:
-                if session["session_id"] == info["session_id"]:
-                    session["state"] = "error"
-                    session["finished_at"] = finished_at
+            for recording in recordings:
+                if recording["session_id"] == info["session_id"]:
+                    recording["state"] = "error"
+                    recording["finished_at"] = finished_at
                     break
         save_status()
-        save_sessions()
+        save_recordings()
     sys.exit(0)
 
 
