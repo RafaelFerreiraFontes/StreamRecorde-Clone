@@ -262,6 +262,122 @@ describe("StreamController", () => {
     });
   });
 
+  it("should map legacy sessions to independent recordings with session_id identity", async () => {
+    const repo = new StreamsRepository();
+    const recordings = await repo.findAllRecordings();
+
+    expect(recordings).toEqual([
+      {
+        session_id: "1",
+        watch_target_id: "1",
+        started_at: "2022-01-01T00:00:00.000Z",
+        finished_at: "2022-01-01T00:00:00.000Z",
+        output_file: "output.mp4",
+        state: "idle",
+      },
+      {
+        session_id: "2",
+        watch_target_id: "2",
+        started_at: "2022-01-01T00:00:00.000Z",
+        finished_at: "2022-01-01T00:00:00.000Z",
+        output_file: "output.mp4",
+        state: "idle",
+      },
+      {
+        session_id: "3",
+        watch_target_id: "1",
+        started_at: "2022-01-01T00:00:00.000Z",
+        finished_at: "2022-01-01T00:00:00.000Z",
+        output_file: "output.mp4",
+        state: "idle",
+      },
+      {
+        session_id: "5",
+        watch_target_id: "1",
+        started_at: "2022-01-01T00:00:00.000Z",
+        finished_at: "2022-01-01T00:00:00.000Z",
+        output_file: "output.mp4",
+        state: "idle",
+      },
+    ]);
+
+    for (const recording of recordings) {
+      expect(recording).not.toHaveProperty("recording_id");
+      expect(recording).not.toHaveProperty("channel_id");
+      expect(recording).not.toHaveProperty("platform");
+      expect(recording).not.toHaveProperty("stream_id");
+    }
+  });
+
+  it("should preserve recording lifecycle fields and map channel_id explicitly", async () => {
+    const repo = new StreamsRepository();
+    const sessionsPath = process.env.SESSIONS_PATH;
+    if (!sessionsPath) {
+      throw new Error("SESSIONS_PATH is not configured");
+    }
+
+    await fs.writeFile(
+      sessionsPath,
+      JSON.stringify(
+        [
+          {
+            session_id: "finished-session",
+            channel_id: "watch-target-1",
+            started_at: "2026-09-06T00:00:00.000Z",
+            finished_at: "2026-09-06T01:00:00.000Z",
+            output_file: "finished.mp4",
+            state: "finished",
+          },
+          {
+            session_id: "error-session",
+            channel_id: "watch-target-1",
+            started_at: "2026-09-06T02:00:00.000Z",
+            finished_at: null,
+            output_file: null,
+            state: "error",
+          },
+        ],
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const recordings = await repo.findRecordingsByWatchTarget("watch-target-1");
+    expect(recordings).toEqual([
+      {
+        session_id: "finished-session",
+        watch_target_id: "watch-target-1",
+        started_at: "2026-09-06T00:00:00.000Z",
+        finished_at: "2026-09-06T01:00:00.000Z",
+        output_file: "finished.mp4",
+        state: "finished",
+      },
+      {
+        session_id: "error-session",
+        watch_target_id: "watch-target-1",
+        started_at: "2026-09-06T02:00:00.000Z",
+        state: "error",
+      },
+    ]);
+  });
+
+  it("should enrich the legacy SessionDto without persisting channel metadata", async () => {
+    const repo = new StreamsRepository();
+    const session = await repo.findOneSession("1");
+
+    expect(session).toEqual({
+      session_id: "1",
+      channel_id: "1",
+      channel_name: "channel_name",
+      platform: "youtube",
+      started_at: "2022-01-01T00:00:00.000Z",
+      finished_at: "2022-01-01T00:00:00.000Z",
+      output_file: "output.mp4",
+      state: "idle",
+    });
+  });
+
   it("should get a one session by channel", async () => {
     const session = await controller.getSessionByChannel("1");
     expect(session).toEqual([

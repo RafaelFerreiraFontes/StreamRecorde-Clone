@@ -54,12 +54,10 @@ export interface Recording {
   session_id: string;
   watch_target_id: string;
   stream_id?: string;
-  channel_id: string;
   started_at: string;
   finished_at?: string;
   output_file?: string;
   state: RecordingState;
-  platform: StreamPlatform;
 }
 
 /**

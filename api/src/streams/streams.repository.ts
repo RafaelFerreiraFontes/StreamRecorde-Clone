@@ -17,7 +17,7 @@ import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
-import { Creator, StreamPlatform, WatchTarget } from "./domain.model";
+import { Creator, Recording, StreamPlatform, WatchTarget } from "./domain.model";
 
 // ─── Tipos internos (espelham o que o worker escreve) ────────────────────────
 
@@ -162,19 +162,30 @@ export class StreamsRepository {
   }
 
   private mergeSession(
-    session: SessionEntry,
+    recording: Recording,
     status: Record<string, ChannelStatus>,
   ): SessionWithChannel {
-    const channelStatus = status[session.channel_id];
+    const channelStatus = status[recording.watch_target_id];
     return {
-      session_id: session.session_id,
-      channel_id: session.channel_id,
+      session_id: recording.session_id,
+      channel_id: recording.watch_target_id,
       channel_name: channelStatus?.channel_name ?? "",
       platform: channelStatus?.platform ?? "",
-      started_at: session.started_at || "",
-      finished_at: session.finished_at || "",
-      output_file: session.output_file || "",
-      state: session.state || "idle",
+      started_at: recording.started_at || "",
+      finished_at: recording.finished_at || "",
+      output_file: recording.output_file || "",
+      state: recording.state || "idle",
+    };
+  }
+
+  private legacySessionToRecording(session: SessionEntry): Recording {
+    return {
+      session_id: session.session_id,
+      watch_target_id: session.channel_id,
+      ...(session.finished_at ? { finished_at: session.finished_at } : {}),
+      ...(session.output_file ? { output_file: session.output_file } : {}),
+      started_at: session.started_at,
+      state: session.state,
     };
   }
 
@@ -302,20 +313,47 @@ export class StreamsRepository {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Session methods  (sessions.json + channels_status.json for channel info)
+  // Recording methods (sessions.json mapped to the internal Recording shape)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async findAllRecordings(): Promise<Recording[]> {
+    return this.mutex.runExclusive(async () => {
+      const sessions = await this.readSessions();
+      return sessions.map((session) => this.legacySessionToRecording(session));
+    });
+  }
+
+  async findOneRecording(sessionId: string): Promise<Recording> {
+    return this.mutex.runExclusive(async () => {
+      const sessions = await this.readSessions();
+      const session = sessions.find((entry) => entry.session_id === sessionId);
+      if (!session)
+        throw new NotFoundException(`Recording ${sessionId} não encontrado`);
+      return this.legacySessionToRecording(session);
+    });
+  }
+
+  async findRecordingsByWatchTarget(watchTargetId: string): Promise<Recording[]> {
+    return this.mutex.runExclusive(async () => {
+      const sessions = await this.readSessions();
+      return sessions
+        .filter((session) => session.channel_id === watchTargetId)
+        .map((session) => this.legacySessionToRecording(session));
+    });
+  }
+
+  // Legacy Session methods (sessions.json + channels_status.json compatibility)
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
    * Retorna todas as sessões de gravação enriquecidas com info do canal.
    */
   async findAllSessions(): Promise<SessionDto[]> {
-    return this.mutex.runExclusive(async () => {
-      const [sessions, status] = await Promise.all([
-        this.readSessions(),
-        this.readChannelsStatus(),
-      ]);
-      return sessions.map((s) => this.mergeSession(s, status));
-    });
+    const [recordings, status] = await Promise.all([
+      this.findAllRecordings(),
+      this.readChannelsStatus(),
+    ]);
+    return recordings.map((recording) => this.mergeSession(recording, status));
   }
 
   /**
@@ -323,30 +361,21 @@ export class StreamsRepository {
    * Lança NotFoundException se não existir.
    */
   async findOneSession(sessionId: string): Promise<SessionDto> {
-    return this.mutex.runExclusive(async () => {
-      const [sessions, status] = await Promise.all([
-        this.readSessions(),
-        this.readChannelsStatus(),
-      ]);
-      const session = sessions.find((s) => s.session_id === sessionId);
-      if (!session)
-        throw new NotFoundException(`Sessão ${sessionId} não encontrada`);
-      return this.mergeSession(session, status);
-    });
+    const [recording, status] = await Promise.all([
+      this.findOneRecording(sessionId),
+      this.readChannelsStatus(),
+    ]);
+    return this.mergeSession(recording, status);
   }
 
   /**
    * Retorna todas as sessões de um canal específico (channel_id).
    */
   async findSessionsByChannel(channelId: string): Promise<SessionDto[]> {
-    return this.mutex.runExclusive(async () => {
-      const [sessions, status] = await Promise.all([
-        this.readSessions(),
-        this.readChannelsStatus(),
-      ]);
-      return sessions
-        .filter((s) => s.channel_id === channelId)
-        .map((s) => this.mergeSession(s, status));
-    });
+    const [recordings, status] = await Promise.all([
+      this.findRecordingsByWatchTarget(channelId),
+      this.readChannelsStatus(),
+    ]);
+    return recordings.map((recording) => this.mergeSession(recording, status));
   }
 }

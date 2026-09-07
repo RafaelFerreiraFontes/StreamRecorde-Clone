@@ -31,7 +31,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker.SESSIONS_PATH = str(config_dir / "sessions.json")
         worker.OUTPUT_DIR = str(config_dir / "recordings")
         worker.channels_status = {}
-        worker.sessions = []
+        worker.recordings = []
         worker.active_recordings = {}
         worker.lock = worker.threading.Lock()
         Path(worker.CHANNELS_STATUS_PATH).write_text("{}", encoding="utf-8")
@@ -43,7 +43,7 @@ class WorkerLifecycleTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_start_recording_persists_recording_session_immediately(self):
+    def test_start_recording_persists_recording_immediately(self):
         entry = {
             "id": "channel-1",
             "channel_name": "example",
@@ -64,10 +64,26 @@ class WorkerLifecycleTests(unittest.TestCase):
             worker.start_recording(entry)
             thread.assert_called_once()
 
-        sessions = json.loads(Path(worker.SESSIONS_PATH).read_text(encoding="utf-8"))
-        self.assertEqual(len(sessions), 1)
-        self.assertEqual(sessions[0]["channel_id"], "channel-1")
-        self.assertEqual(sessions[0]["state"], "recording")
+        persisted_sessions = json.loads(
+            Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(worker.recordings), 1)
+        self.assertEqual(worker.recordings[0]["watch_target_id"], "channel-1")
+        self.assertEqual(persisted_sessions[0]["channel_id"], "channel-1")
+        self.assertEqual(persisted_sessions[0]["state"], "recording")
+
+    def test_session_adapters_map_legacy_channel_id_to_watch_target_id(self):
+        session = {
+            "session_id": "session-1",
+            "channel_id": "channel-1",
+            "state": "recording",
+        }
+
+        recording = worker.deserialize_session(session)
+
+        self.assertEqual(recording["watch_target_id"], "channel-1")
+        self.assertNotIn("channel_id", recording)
+        self.assertEqual(worker.serialize_recording(recording), session)
 
     def test_poll_reload_preserves_active_session(self):
         active_session = {
@@ -78,14 +94,14 @@ class WorkerLifecycleTests(unittest.TestCase):
             "output_file": "recording.mp4",
             "state": "recording",
         }
-        worker.sessions = [active_session]
+        worker.recordings = [worker.deserialize_session(active_session)]
         worker.active_recordings = {"channel-1": {"session_id": "session-1"}}
         Path(worker.SESSIONS_PATH).write_text("[]", encoding="utf-8")
 
         with worker.lock:
-            worker.reload_sessions_preserving_active()
+            worker.reload_recordings_preserving_active()
 
-        self.assertEqual(worker.sessions, [active_session])
+        self.assertEqual(worker.recordings, [worker.deserialize_session(active_session)])
 
     def test_monitor_updates_the_existing_session(self):
         output_file = Path(worker.OUTPUT_DIR) / "recording.mp4"
@@ -98,10 +114,10 @@ class WorkerLifecycleTests(unittest.TestCase):
                 "state": "recording",
             }
         }
-        worker.sessions = [
+        worker.recordings = [
             {
                 "session_id": "session-1",
-                "channel_id": "channel-1",
+            "watch_target_id": "channel-1",
                 "started_at": "2026-09-05T00:00:00",
                 "finished_at": None,
                 "output_file": str(output_file),
@@ -119,10 +135,10 @@ class WorkerLifecycleTests(unittest.TestCase):
 
         worker.monitor_recording("channel-1")
 
-        self.assertEqual(len(worker.sessions), 1)
-        self.assertEqual(worker.sessions[0]["session_id"], "session-1")
-        self.assertEqual(worker.sessions[0]["state"], "finished")
-        self.assertIsNotNone(worker.sessions[0]["finished_at"])
+        self.assertEqual(len(worker.recordings), 1)
+        self.assertEqual(worker.recordings[0]["session_id"], "session-1")
+        self.assertEqual(worker.recordings[0]["state"], "finished")
+        self.assertIsNotNone(worker.recordings[0]["finished_at"])
 
     def test_monitor_marks_the_existing_session_as_error_on_process_failure(self):
         worker.channels_status = {
@@ -132,10 +148,10 @@ class WorkerLifecycleTests(unittest.TestCase):
                 "state": "recording",
             }
         }
-        worker.sessions = [
+        worker.recordings = [
             {
                 "session_id": "session-1",
-                "channel_id": "channel-1",
+            "watch_target_id": "channel-1",
                 "started_at": "2026-09-05T00:00:00",
                 "finished_at": None,
                 "output_file": "missing.mp4",
@@ -153,8 +169,8 @@ class WorkerLifecycleTests(unittest.TestCase):
 
         worker.monitor_recording("channel-1")
 
-        self.assertEqual(worker.sessions[0]["state"], "error")
-        self.assertIsNotNone(worker.sessions[0]["finished_at"])
+        self.assertEqual(worker.recordings[0]["state"], "error")
+        self.assertIsNotNone(worker.recordings[0]["finished_at"])
 
     def test_offline_channel_does_not_start_a_recording(self):
         entry = {
@@ -179,7 +195,7 @@ class WorkerLifecycleTests(unittest.TestCase):
                 worker.poll_loop()
 
         popen.assert_not_called()
-        self.assertEqual(worker.sessions, [])
+        self.assertEqual(worker.recordings, [])
         self.assertEqual(worker.channels_status["channel-1"]["state"], "offline")
 
     def test_session_reload_failure_preserves_active_session_for_finalization(self):
@@ -194,7 +210,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             "output_file": str(output_file),
             "state": "recording",
         }
-        worker.sessions = [session]
+        worker.recordings = [worker.deserialize_session(session)]
         worker.channels_status = {
             "channel-1": {
                 "channel_name": "example",
@@ -215,13 +231,13 @@ class WorkerLifecycleTests(unittest.TestCase):
         with patch.object(worker, "load_sessions", side_effect=OSError("temporary failure")):
             with worker.lock:
                 try:
-                    worker.reload_sessions_preserving_active()
+                    worker.reload_recordings_preserving_active()
                 except OSError:
                     pass
 
-        self.assertEqual(worker.sessions, [session])
+        self.assertEqual(worker.recordings, [worker.deserialize_session(session)])
         worker.monitor_recording("channel-1")
-        self.assertEqual(worker.sessions[0]["state"], "finished")
+        self.assertEqual(worker.recordings[0]["state"], "finished")
 
     def test_active_channel_status_survives_reload_without_disk_entry(self):
         worker.channels_status = {}
@@ -256,7 +272,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             "state": "recording",
         }
         process = FakeProcess()
-        worker.sessions = [session]
+        worker.recordings = [worker.deserialize_session(session)]
         worker.channels_status = {
             "channel-1": {
                 "channel_name": "example",
@@ -277,8 +293,8 @@ class WorkerLifecycleTests(unittest.TestCase):
             worker.handle_shutdown(None, None)
 
         self.assertEqual(process.returncode, -15)
-        self.assertEqual(session["state"], "error")
-        self.assertIsNotNone(session["finished_at"])
+        self.assertEqual(worker.recordings[0]["state"], "error")
+        self.assertIsNotNone(worker.recordings[0]["finished_at"])
         persisted_sessions = json.loads(
             Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")
         )
