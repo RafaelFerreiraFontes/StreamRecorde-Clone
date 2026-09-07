@@ -72,18 +72,68 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(persisted_sessions[0]["channel_id"], "channel-1")
         self.assertEqual(persisted_sessions[0]["state"], "recording")
 
-    def test_session_adapters_map_legacy_channel_id_to_watch_target_id(self):
-        session = {
+    def test_deserialize_session_maps_channel_id_to_watch_target_id(self):
+        legacy_session = {
             "session_id": "session-1",
             "channel_id": "channel-1",
             "state": "recording",
         }
 
-        recording = worker.deserialize_session(session)
+        recording = worker.deserialize_session(legacy_session)
 
         self.assertEqual(recording["watch_target_id"], "channel-1")
         self.assertNotIn("channel_id", recording)
-        self.assertEqual(worker.serialize_recording(recording), session)
+
+    def test_serialize_recording_maps_watch_target_id_to_channel_id(self):
+        recording = {
+            "session_id": "session-1",
+            "watch_target_id": "channel-1",
+            "state": "recording",
+        }
+
+        session = worker.serialize_recording(recording)
+
+        self.assertEqual(session["channel_id"], "channel-1")
+        self.assertNotIn("watch_target_id", session)
+
+    def test_recording_session_adapter_round_trip_preserves_legacy_shape(self):
+        legacy_session = {
+            "session_id": "session-1",
+            "channel_id": "channel-1",
+            "started_at": "2026-09-05T00:00:00",
+            "finished_at": None,
+            "output_file": "recording.mp4",
+            "state": "recording",
+        }
+
+        recording = worker.deserialize_session(legacy_session)
+
+        self.assertEqual(worker.serialize_recording(recording), legacy_session)
+
+    def test_save_recordings_preserves_legacy_json_fields(self):
+        worker.recordings = [
+            {
+                "session_id": "session-1",
+                "watch_target_id": "channel-1",
+                "started_at": "2026-09-05T00:00:00",
+                "finished_at": None,
+                "output_file": "recording.mp4",
+                "state": "recording",
+            }
+        ]
+
+        worker.save_recordings()
+        persisted_session = json.loads(
+            Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")
+        )[0]
+
+        self.assertIn("channel_id", persisted_session)
+        self.assertNotIn("watch_target_id", persisted_session)
+        self.assertEqual(persisted_session["session_id"], "session-1")
+        self.assertEqual(persisted_session["started_at"], "2026-09-05T00:00:00")
+        self.assertIsNone(persisted_session["finished_at"])
+        self.assertEqual(persisted_session["output_file"], "recording.mp4")
+        self.assertEqual(persisted_session["state"], "recording")
 
     def test_poll_reload_preserves_active_session(self):
         active_session = {

@@ -256,7 +256,7 @@ def monitor_recording(id: str):
             and os.path.getsize(output_file) > 0
         )
 
-        finished_stream = next(
+        recording_index = next(
             (
                 i
                 for i, recording in enumerate(recordings)
@@ -265,17 +265,17 @@ def monitor_recording(id: str):
             None,
         )
 
-        if finished_stream is None:
+        if recording_index is None:
             log.warning("Sessão em aberto não encontrada para o canal %s", id)
             return
 
         channels_status[id]["state"] = "finished" if ok else "error"
 
-        recordings[finished_stream]["state"] = "finished" if ok else "error"
+        recordings[recording_index]["state"] = "finished" if ok else "error"
 
-        recordings[finished_stream]["finished_at"] = finished_at
+        recordings[recording_index]["finished_at"] = finished_at
 
-        recordings[finished_stream]["output_file"] = output_file
+        recordings[recording_index]["output_file"] = output_file
 
         save_status()
 
