@@ -3,7 +3,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { StreamController } from "../streams.controller";
-import { StreamerService, SessionService } from "../streams.service";
+import { StreamerService, SessionService, StreamService } from "../streams.service";
 import { StreamsRepository } from "../streams.repository";
 import {
   legacyChannelStatus,
@@ -40,7 +40,7 @@ describe("StreamController", () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [StreamController],
-      providers: [StreamsRepository, StreamerService, SessionService],
+      providers: [StreamsRepository, StreamerService, SessionService, StreamService],
     }).compile();
 
     controller = module.get<StreamController>(StreamController);
@@ -422,5 +422,188 @@ describe("StreamController", () => {
     await controller.getSessionByChannel("channel-id");
 
     expect(findSessionsByChannel).toHaveBeenCalledWith("channel-id");
+  });
+});
+
+describe("StreamRepository", () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stream-repo-"));
+    process.env.CONFIG_DIR = tempDir;
+    process.env.WATCHLIST_PATH = path.join(tempDir, "watchlist.json");
+    process.env.CHANNELS_STATUS_PATH = path.join(tempDir, "channels_status.json");
+    process.env.SESSIONS_PATH = path.join(tempDir, "sessions.json");
+    process.env.STREAMS_PATH = path.join(tempDir, "streams.json");
+
+    await fs.writeFile(
+      process.env.WATCHLIST_PATH,
+      JSON.stringify(legacyWatchlist, null, 2),
+      "utf-8",
+    );
+    await fs.writeFile(
+      process.env.CHANNELS_STATUS_PATH,
+      JSON.stringify(legacyChannelStatus, null, 2),
+      "utf-8",
+    );
+    await fs.writeFile(
+      process.env.SESSIONS_PATH,
+      JSON.stringify(legacySessions, null, 2),
+      "utf-8",
+    );
+  });
+
+  afterEach(async () => {
+    process.env = { ...originalEnv };
+  });
+
+  it("should read streams from streams.json", async () => {
+    const streamsPath = process.env.STREAMS_PATH;
+    if (!streamsPath) {
+      throw new Error("STREAMS_PATH is not configured");
+    }
+
+    const testStreams = [
+      {
+        id: "stream-1",
+        watch_target_id: "1",
+        state: "recording",
+        started_at: "2026-09-14T00:00:00.000Z",
+        finished_at: null,
+      },
+      {
+        id: "stream-2",
+        watch_target_id: "1",
+        state: "finished",
+        started_at: "2026-09-13T00:00:00.000Z",
+        finished_at: "2026-09-13T01:00:00.000Z",
+      },
+    ];
+
+    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
+
+    const repo = new StreamsRepository();
+    const streams = await repo.findAllStreams();
+
+    expect(streams).toEqual(testStreams);
+  });
+
+  it("should find active stream by watch target id", async () => {
+    const streamsPath = process.env.STREAMS_PATH;
+    if (!streamsPath) {
+      throw new Error("STREAMS_PATH is not configured");
+    }
+
+    const testStreams = [
+      {
+        id: "stream-1",
+        watch_target_id: "1",
+        state: "recording",
+        started_at: "2026-09-14T00:00:00.000Z",
+        finished_at: null,
+      },
+      {
+        id: "stream-2",
+        watch_target_id: "1",
+        state: "finished",
+        started_at: "2026-09-13T00:00:00.000Z",
+        finished_at: "2026-09-13T01:00:00.000Z",
+      },
+    ];
+
+    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
+
+    const repo = new StreamsRepository();
+    const activeStream = await repo.findActiveStreamByWatchTarget("1");
+
+    expect(activeStream).toEqual(testStreams[0]);
+  });
+
+  it("should return null when no active stream exists", async () => {
+    const streamsPath = process.env.STREAMS_PATH;
+    if (!streamsPath) {
+      throw new Error("STREAMS_PATH is not configured");
+    }
+
+    await fs.writeFile(streamsPath, JSON.stringify([], null, 2), "utf-8");
+
+    const repo = new StreamsRepository();
+    const activeStream = await repo.findActiveStreamByWatchTarget("nonexistent");
+
+    expect(activeStream).toBeNull();
+  });
+
+  it("should filter streams by watch target and time window", async () => {
+    const streamsPath = process.env.STREAMS_PATH;
+    if (!streamsPath) {
+      throw new Error("STREAMS_PATH is not configured");
+    }
+
+    const testStreams = [
+      {
+        id: "stream-1",
+        watch_target_id: "1",
+        state: "recording",
+        started_at: "2026-09-14T00:00:00.000Z",
+        finished_at: null,
+      },
+      {
+        id: "stream-2",
+        watch_target_id: "1",
+        state: "finished",
+        started_at: "2026-09-13T00:00:00.000Z",
+        finished_at: "2026-09-13T01:00:00.000Z",
+      },
+      {
+        id: "stream-3",
+        watch_target_id: "2",
+        state: "finished",
+        started_at: "2026-09-14T00:00:00.000Z",
+        finished_at: "2026-09-14T01:00:00.000Z",
+      },
+    ];
+
+    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
+
+    const repo = new StreamsRepository();
+
+    const allStreams = await repo.findStreamsByWatchTarget("1");
+    expect(allStreams).toHaveLength(2);
+
+    const recentStreams = await repo.findStreamsByWatchTarget(
+      "1",
+      "2026-09-13T12:00:00.000Z",
+    );
+    expect(recentStreams).toHaveLength(1);
+    expect(recentStreams[0].id).toBe("stream-1");
+  });
+
+  it("should not have channel_id in stream records", async () => {
+    const streamsPath = process.env.STREAMS_PATH;
+    if (!streamsPath) {
+      throw new Error("STREAMS_PATH is not configured");
+    }
+
+    const testStreams = [
+      {
+        id: "stream-1",
+        watch_target_id: "1",
+        state: "recording",
+        started_at: "2026-09-14T00:00:00.000Z",
+        finished_at: null,
+      },
+    ];
+
+    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
+
+    const repo = new StreamsRepository();
+    const streams = await repo.findAllStreams();
+
+    for (const stream of streams) {
+      expect(stream).not.toHaveProperty("channel_id");
+      expect(stream).not.toHaveProperty("channel_name");
+      expect(stream).not.toHaveProperty("platform");
+      expect(stream).not.toHaveProperty("url");
+    }
   });
 });

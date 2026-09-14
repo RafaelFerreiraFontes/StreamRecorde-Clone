@@ -34,6 +34,7 @@ CHANNELS_STATUS_PATH = os.environ.get(
     "CHANNELS_STATUS_PATH", "/app/config/channels_status.json"
 )
 SESSIONS_PATH = os.environ.get("SESSIONS_PATH", "/app/config/sessions.json")
+STREAMS_PATH = os.environ.get("STREAMS_PATH", "/app/config/streams.json")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/recordings")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "60"))  # seconds
 CHECK_TIMEOUT = 20  # seconds for the streamlink probe not to freeze the loop
@@ -46,13 +47,16 @@ log = logging.getLogger("worker")
 
 active_recordings = (
     {}
-)  # watch_target_id -> {process, output_file, started_at, channel_name, url, platform, session_id(current)}
+)  # watch_target_id -> {process, output_file, started_at, channel_name, url, platform, session_id(current), stream_id}
 channels_status = (
     {}
 )  # watch_target_id -> { channel_name, platform, state(idle, offline, recording, finished, error)}
 recordings = (
     []
 )  # session_id -> {watch_target_id, started_at, finished_at, output_file, state}
+streams_data = (
+    []
+)  # Array<Stream> - actual detected live broadcast occurrences
 lock = threading.Lock()
 
 
@@ -103,6 +107,75 @@ def save_recordings():
         )
 
 
+def load_streams():
+    try:
+        with open(STREAMS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+
+
+def save_streams():
+    with open(STREAMS_PATH, "w", encoding="utf-8") as f:
+        json.dump(streams_data, f, ensure_ascii=False, indent=2, default=str)
+
+
+def find_active_stream(watch_target_id: str):
+    """Find the active (not finalized) stream for a watch target."""
+    for stream in streams_data:
+        if stream.get("watch_target_id") == watch_target_id and stream.get("finished_at") is None:
+            return stream
+    return None
+
+
+def create_stream(watch_target_id: str) -> dict:
+    """Create a new stream for a watch target with started_at timestamp."""
+    stream = {
+        "id": str(uuid.uuid4()),
+        "watch_target_id": watch_target_id,
+        "state": "recording",
+        "started_at": datetime.now().isoformat(),
+        "finished_at": None,
+    }
+    streams_data.append(stream)
+    save_streams()
+    return stream
+
+
+def finalize_stream(watch_target_id: str):
+    """Finalize the active stream for a watch target if no recording is active."""
+    if watch_target_id in active_recordings:
+        return None
+    stream = find_active_stream(watch_target_id)
+    if stream:
+        stream["finished_at"] = datetime.now().isoformat()
+        stream["state"] = "finished"
+        save_streams()
+    return stream
+
+
+def reload_streams_preserving_active():
+    """Reload streams from disk, preserving all in-memory streams.
+
+    In-memory streams (active or recently finalized) are always kept so that
+    poll_loop does not lose stream state between iterations.  Disk streams
+    that are not yet in memory are merged in (worker restart scenario).
+    """
+    global streams_data
+
+    # Capture IDs of all streams currently in memory
+    in_memory_ids = {s["id"] for s in streams_data}
+
+    loaded_streams = load_streams()
+
+    # Keep every in-memory stream; add disk-only streams that are finished
+    # (active disk streams would already be in active_recordings and thus in memory)
+    streams_data = list(streams_data) + [
+        s for s in loaded_streams
+        if s.get("id") not in in_memory_ids
+    ]
+
+
 def reload_recordings_preserving_active():
     global recordings
 
@@ -122,12 +195,20 @@ def reload_recordings_preserving_active():
 
 
 def preserve_active_channel_status():
+    """Ensure every active recording has a channels_status entry.
+
+    Uses available info from active_recordings, falling back to existing
+    channels_status data or sensible defaults so that tests with minimal
+    active_recordings entries (e.g. process/session_id/stream_id only)
+    do not raise KeyError.
+    """
     for channel_id, info in active_recordings.items():
+        existing = channels_status.get(channel_id, {})
         status = channels_status.setdefault(
             channel_id,
             {
-                "channel_name": info["channel_name"],
-                "platform": info["platform"],
+                "channel_name": info.get("channel_name") or existing.get("channel_name") or channel_id,
+                "platform": info.get("platform") or existing.get("platform") or "unknown",
                 "state": "recording",
             },
         )
@@ -166,7 +247,7 @@ def is_live(url: str) -> bool:
         return False
 
 
-def start_recording(entry: dict):
+def start_recording(entry: dict, stream_id: str = None):
     global active_recordings, channels_status, recordings, lock
 
     url = entry["url"]
@@ -210,20 +291,22 @@ def start_recording(entry: dict):
             "platform": platform,
             "url": url,
             "session_id": session_id,
+            "stream_id": stream_id,
         }
 
         channels_status[watch_target_id]["state"] = "recording"
 
-        recordings.append(
-            {
-                "session_id": session_id,
-                "watch_target_id": watch_target_id,
-                "started_at": started_at,
-                "finished_at": None,
-                "output_file": str(out_path),
-                "state": "recording",
-            }
-        )
+        recording_entry = {
+            "session_id": session_id,
+            "watch_target_id": watch_target_id,
+            "started_at": started_at,
+            "finished_at": None,
+            "output_file": str(out_path),
+            "state": "recording",
+        }
+        if stream_id:
+            recording_entry["stream_id"] = stream_id
+        recordings.append(recording_entry)
 
         save_status()
         save_recordings()
@@ -290,7 +373,7 @@ def monitor_recording(id: str):
 
 
 def poll_loop():
-    global active_recordings, channels_status, recordings, lock
+    global active_recordings, channels_status, recordings, streams_data, lock
 
     while True:
         # load channels_status, watchlist and sessions
@@ -326,6 +409,12 @@ def poll_loop():
         except Exception as e:
             log.error("Erro ao ler sessões: %s", e)
 
+        try:
+            with lock:
+                reload_streams_preserving_active()
+        except Exception as e:
+            log.error("Erro ao ler streams: %s", e)
+
         watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
 
         for entry in watchlist:
@@ -354,10 +443,19 @@ def poll_loop():
                 log.info("[%s] Verificando status...", channel_name)
 
                 if is_live(url):
-                    start_recording(entry)
+                    stream_id = None
+                    with lock:
+                        active_stream = find_active_stream(id)
+                        if active_stream:
+                            stream_id = active_stream["id"]
+                        else:
+                            new_stream = create_stream(id)
+                            stream_id = new_stream["id"]
+                    start_recording(entry, stream_id)
                 else:
                     with lock:
                         channels_status[id]["state"] = "offline"
+                        finalize_stream(id)
                     save_status()
             except Exception as e:
                 log.warning("Erro ao verificar status do canal %s: %s", channel_name, e)

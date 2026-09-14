@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { StreamsRepository } from "./streams.repository";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { SessionDto } from "./dto/session.dto";
-import { Creator, WatchTarget } from "./domain.model";
+import { Creator, Stream, WatchTarget } from "./domain.model";
 
 @Injectable()
 export class StreamerService {
@@ -51,5 +51,25 @@ export class SessionService {
 
   async findSessionsByChannel(channel_id: string): Promise<SessionDto[]> {
     return await this.repository.findSessionsByChannel(channel_id);
+  }
+}
+
+@Injectable()
+export class StreamService {
+  constructor(private readonly repository: StreamsRepository) {}
+
+  async findAllStreams(): Promise<Stream[]> {
+    return await this.repository.findAllStreams();
+  }
+
+  async findActiveStreamByWatchTarget(watchTargetId: string): Promise<Stream | null> {
+    return await this.repository.findActiveStreamByWatchTarget(watchTargetId);
+  }
+
+  async findStreamsByWatchTarget(
+    watchTargetId: string,
+    since?: string,
+  ): Promise<Stream[]> {
+    return await this.repository.findStreamsByWatchTarget(watchTargetId, since);
   }
 }

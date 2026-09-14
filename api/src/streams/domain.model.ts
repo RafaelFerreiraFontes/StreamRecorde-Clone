@@ -41,12 +41,8 @@ export interface WatchTarget {
 export interface Stream {
   id: string;
   watch_target_id: string;
-  channel_id: string;
-  channel_name: string;
-  platform: StreamPlatform;
-  url: string;
   state: RecordingState;
-  started_at?: string;
+  started_at: string;
   finished_at?: string;
 }
 

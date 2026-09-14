@@ -17,7 +17,7 @@ import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
-import { Creator, Recording, StreamPlatform, WatchTarget } from "./domain.model";
+import { Creator, Recording, Stream, StreamPlatform, WatchTarget } from "./domain.model";
 
 // ─── Tipos internos (espelham o que o worker escreve) ────────────────────────
 
@@ -67,6 +67,9 @@ const getChannelsStatusPath = (): string =>
 const getSessionsPath = (): string =>
   process.env.SESSIONS_PATH ?? path.join(getConfigDir(), "sessions.json");
 
+const getStreamsPath = (): string =>
+  process.env.STREAMS_PATH ?? path.join(getConfigDir(), "streams.json");
+
 // ─── Repository ──────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -104,6 +107,16 @@ export class StreamsRepository {
     try {
       const raw = await fs.readFile(getSessionsPath(), "utf-8");
       return JSON.parse(raw) as SessionEntry[];
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw err;
+    }
+  }
+
+  private async readStreams(): Promise<Stream[]> {
+    try {
+      const raw = await fs.readFile(getStreamsPath(), "utf-8");
+      return JSON.parse(raw) as Stream[];
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw err;
@@ -377,5 +390,46 @@ export class StreamsRepository {
       this.readChannelsStatus(),
     ]);
     return recordings.map((recording) => this.mergeSession(recording, status));
+  }
+
+  // Stream methods (streams.json)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Retorna todos os streams.
+   */
+  async findAllStreams(): Promise<Stream[]> {
+    return this.mutex.runExclusive(async () => {
+      return this.readStreams();
+    });
+  }
+
+  /**
+   * Retorna o stream ativo (não finalizado) para um watch target.
+   */
+  async findActiveStreamByWatchTarget(watchTargetId: string): Promise<Stream | null> {
+    return this.mutex.runExclusive(async () => {
+      const streams = await this.readStreams();
+      return streams.find(
+        (s) => s.watch_target_id === watchTargetId && !s.finished_at,
+      ) ?? null;
+    });
+  }
+
+  /**
+   * Retorna todos os streams finalizados para um watch target dentro de uma janela de tempo.
+   */
+  async findStreamsByWatchTarget(
+    watchTargetId: string,
+    since?: string,
+  ): Promise<Stream[]> {
+    return this.mutex.runExclusive(async () => {
+      const streams = await this.readStreams();
+      return streams.filter((s) => {
+        if (s.watch_target_id !== watchTargetId) return false;
+        if (since && s.started_at < since) return false;
+        return true;
+      });
+    });
   }
 }

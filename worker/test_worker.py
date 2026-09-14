@@ -353,3 +353,333 @@ class WorkerLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StreamDetectionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        config_dir = Path(self.temp_dir.name)
+        worker.CHANNELS_STATUS_PATH = str(config_dir / "channels_status.json")
+        worker.SESSIONS_PATH = str(config_dir / "sessions.json")
+        worker.STREAMS_PATH = str(config_dir / "streams.json")
+        worker.OUTPUT_DIR = str(config_dir / "recordings")
+        worker.channels_status = {}
+        worker.recordings = []
+        worker.active_recordings = {}
+        worker.streams_data = []
+        worker.lock = worker.threading.Lock()
+        Path(worker.CHANNELS_STATUS_PATH).write_text("{}", encoding="utf-8")
+        Path(worker.SESSIONS_PATH).write_text("[]", encoding="utf-8")
+        Path(worker.STREAMS_PATH).write_text("[]", encoding="utf-8")
+        self.watchlist_path = config_dir / "watchlist.json"
+        self.watchlist_path.write_text("[]", encoding="utf-8")
+        worker.CONFIG_PATH = str(self.watchlist_path)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_first_positive_poll_creates_stream(self):
+        entry = {
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
+        }
+        worker.channels_status["channel-1"] = {
+            "channel_name": "example",
+            "platform": "twitch",
+            "state": "idle",
+        }
+        self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
+
+        with patch.object(worker, "is_live", return_value=True), \
+             patch.object(worker.subprocess, "Popen") as popen_mock, \
+             patch.object(worker.threading, "Thread"), \
+             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            popen_mock.return_value = FakeProcess()
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+        self.assertEqual(len(worker.streams_data), 1)
+        self.assertEqual(worker.streams_data[0]["watch_target_id"], "channel-1")
+        self.assertIsNotNone(worker.streams_data[0]["started_at"])
+        self.assertIsNone(worker.streams_data[0]["finished_at"])
+
+    def test_repeated_positive_polls_reuse_same_stream(self):
+        entry = {
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
+        }
+        worker.channels_status["channel-1"] = {
+            "channel_name": "example",
+            "platform": "twitch",
+            "state": "recording",
+        }
+        self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
+
+        existing_stream = {
+            "id": "stream-123",
+            "watch_target_id": "channel-1",
+            "state": "recording",
+            "started_at": "2026-09-14T00:00:00",
+            "finished_at": None,
+        }
+        worker.streams_data.append(existing_stream)
+        worker.active_recordings["channel-1"] = {
+            "process": FakeProcess(),
+            "session_id": "session-1",
+            "stream_id": "stream-123",
+        }
+
+        with patch.object(worker, "is_live", return_value=True), \
+             patch.object(worker.subprocess, "Popen") as popen_mock, \
+             patch.object(worker.threading, "Thread"), \
+             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            popen_mock.return_value = FakeProcess()
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+        self.assertEqual(len(worker.streams_data), 1)
+        self.assertEqual(worker.streams_data[0]["id"], "stream-123")
+        self.assertEqual(popen_mock.call_count, 0)
+
+    def test_negative_poll_finalizes_stream_when_no_recording_active(self):
+        entry = {
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
+        }
+        worker.channels_status["channel-1"] = {
+            "channel_name": "example",
+            "platform": "twitch",
+            "state": "idle",
+        }
+        self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
+
+        existing_stream = {
+            "id": "stream-123",
+            "watch_target_id": "channel-1",
+            "state": "recording",
+            "started_at": "2026-09-14T00:00:00",
+            "finished_at": None,
+        }
+        worker.streams_data.append(existing_stream)
+
+        with patch.object(worker, "is_live", return_value=False), \
+             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+        self.assertIsNotNone(worker.streams_data[0]["finished_at"])
+        self.assertEqual(worker.streams_data[0]["state"], "finished")
+
+    def test_negative_poll_does_not_finalize_stream_when_recording_active(self):
+        entry = {
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
+        }
+        worker.channels_status["channel-1"] = {
+            "channel_name": "example",
+            "platform": "twitch",
+            "state": "recording",
+        }
+
+        existing_stream = {
+            "id": "stream-123",
+            "watch_target_id": "channel-1",
+            "state": "recording",
+            "started_at": "2026-09-14T00:00:00",
+            "finished_at": None,
+        }
+        worker.streams_data.append(existing_stream)
+        worker.active_recordings["channel-1"] = {
+            "process": FakeProcess(),
+            "session_id": "session-1",
+            "stream_id": "stream-123",
+        }
+
+        with patch.object(worker, "is_live", return_value=False), \
+             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+        self.assertIsNone(worker.streams_data[0]["finished_at"])
+        self.assertEqual(worker.streams_data[0]["state"], "recording")
+
+    def test_failed_recording_does_not_end_stream(self):
+        output_file = Path(worker.OUTPUT_DIR) / "recording.mp4"
+        output_file.parent.mkdir(parents=True)
+        output_file.write_bytes(b"recorded")
+        worker.channels_status["channel-1"] = {
+            "channel_name": "example",
+            "platform": "twitch",
+            "state": "recording",
+        }
+
+        existing_stream = {
+            "id": "stream-123",
+            "watch_target_id": "channel-1",
+            "state": "recording",
+            "started_at": "2026-09-14T00:00:00",
+            "finished_at": None,
+        }
+        worker.streams_data.append(existing_stream)
+        worker.recordings = [
+            {
+                "session_id": "session-1",
+                "watch_target_id": "channel-1",
+                "stream_id": "stream-123",
+                "started_at": "2026-09-14T00:00:00",
+                "finished_at": None,
+                "output_file": str(output_file),
+                "state": "recording",
+            }
+        ]
+        worker.active_recordings["channel-1"] = {
+            "process": FakeProcess(returncode=1),
+            "session_id": "session-1",
+            "stream_id": "stream-123",
+            "output_file": str(output_file),
+            "channel_name": "example",
+        }
+
+        worker.monitor_recording("channel-1")
+
+        self.assertIsNone(worker.streams_data[0]["finished_at"])
+        self.assertEqual(worker.recordings[0]["state"], "error")
+
+    def test_later_broadcast_creates_new_stream_id(self):
+        entry = {
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
+        }
+
+        old_stream = {
+            "id": "stream-123",
+            "watch_target_id": "channel-1",
+            "state": "finished",
+            "started_at": "2026-09-14T00:00:00",
+            "finished_at": "2026-09-14T01:00:00",
+        }
+        worker.streams_data.append(old_stream)
+        worker.channels_status["channel-1"] = {
+            "channel_name": "example",
+            "platform": "twitch",
+            "state": "idle",
+        }
+        self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
+
+        with patch.object(worker, "is_live", return_value=True), \
+             patch.object(worker.subprocess, "Popen") as popen_mock, \
+             patch.object(worker.threading, "Thread"), \
+             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            popen_mock.return_value = FakeProcess()
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+        self.assertEqual(len(worker.streams_data), 2)
+        self.assertEqual(worker.streams_data[0]["id"], "stream-123")
+        self.assertNotEqual(worker.streams_data[1]["id"], "stream-123")
+        self.assertEqual(worker.streams_data[1]["watch_target_id"], "channel-1")
+
+    def test_recording_stores_stream_id(self):
+        entry = {
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
+        }
+        worker.channels_status["channel-1"] = {
+            "channel_name": "example",
+            "platform": "twitch",
+            "state": "idle",
+        }
+        self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
+
+        with patch.object(worker, "is_live", return_value=True), \
+             patch.object(worker.subprocess, "Popen") as popen_mock, \
+             patch.object(worker.threading, "Thread"), \
+             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            popen_mock.return_value = FakeProcess()
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+        self.assertEqual(len(worker.recordings), 1)
+        self.assertEqual(worker.recordings[0]["watch_target_id"], "channel-1")
+        self.assertIn("stream_id", worker.recordings[0])
+        self.assertEqual(worker.recordings[0]["stream_id"], worker.streams_data[0]["id"])
+
+    def test_streams_json_excludes_channel_id(self):
+        entry = {
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
+        }
+        worker.channels_status["channel-1"] = {
+            "channel_name": "example",
+            "platform": "twitch",
+            "state": "idle",
+        }
+        self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
+
+        with patch.object(worker, "is_live", return_value=True), \
+             patch.object(worker.subprocess, "Popen") as popen_mock, \
+             patch.object(worker.threading, "Thread"), \
+             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            popen_mock.return_value = FakeProcess()
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+        persisted_streams = json.loads(
+            Path(worker.STREAMS_PATH).read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(persisted_streams), 1)
+        self.assertNotIn("channel_id", persisted_streams[0])
+        self.assertEqual(persisted_streams[0]["watch_target_id"], "channel-1")
+
+    def test_worker_restart_reloads_streams_preserving_active(self):
+        existing_stream = {
+            "id": "stream-123",
+            "watch_target_id": "channel-1",
+            "state": "recording",
+            "started_at": "2026-09-14T00:00:00",
+            "finished_at": None,
+        }
+        worker.streams_data.append(existing_stream)
+        worker.active_recordings["channel-1"] = {
+            "session_id": "session-1",
+            "stream_id": "stream-123",
+            "channel_name": "example",
+            "platform": "twitch",
+        }
+
+        with patch.object(worker, "load_streams", return_value=[existing_stream]):
+            with worker.lock:
+                worker.reload_streams_preserving_active()
+
+        # Active stream from disk is preserved in memory
+        self.assertEqual(len(worker.streams_data), 1)
+        self.assertEqual(worker.streams_data[0]["id"], "stream-123")
+
+        with patch.object(worker, "load_streams", return_value=[]):
+            with worker.lock:
+                worker.reload_streams_preserving_active()
+
+        # Active stream remains even when disk has nothing new
+        self.assertEqual(len(worker.streams_data), 1)
+        self.assertEqual(worker.streams_data[0]["id"], "stream-123")
