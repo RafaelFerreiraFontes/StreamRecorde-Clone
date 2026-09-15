@@ -4,6 +4,7 @@ node_modules
 recordings
 .vscode
 worker/config/
+worker/__pycache__/
 .github/
 <<<<<<< HEAD
 *.tsbuildinfo
