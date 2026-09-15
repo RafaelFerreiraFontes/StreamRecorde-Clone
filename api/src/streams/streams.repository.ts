@@ -12,6 +12,7 @@ import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
+import { CreateWatchTargetDto } from "./dto/watch-target.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 import {
   RecordingJsonAdapter,
@@ -21,7 +22,9 @@ import {
 } from "./json-compatibility.adapters";
 
 type WatchlistEntries = Awaited<ReturnType<typeof WatchTargetJsonAdapter.read>>;
-type RuntimeStatuses = Awaited<ReturnType<typeof RuntimeStatusJsonAdapter.read>>;
+type RuntimeStatuses = Awaited<
+  ReturnType<typeof RuntimeStatusJsonAdapter.read>
+>;
 
 interface SessionWithChannel extends SessionDto {
   channel_name: string | null;
@@ -82,18 +85,28 @@ export class StreamsRepository {
   }
 
   private toCreator(entry: WatchlistEntries[number]): Creator {
-    const displayName = entry.display_name?.trim() || entry.channel_name || "unknown-creator";
+    const displayName =
+      entry.display_name?.trim() || entry.channel_name || "unknown-creator";
     return {
       id: this.normalizeCreatorId(displayName),
       display_name: displayName,
     };
   }
 
-  private toWatchTarget(entry: WatchlistEntries[number], status: RuntimeStatuses): WatchTarget {
-    return WatchTargetJsonAdapter.toDomain(entry, status[entry.id]?.state ?? "idle");
+  private toWatchTarget(
+    entry: WatchlistEntries[number],
+    status: RuntimeStatuses,
+  ): WatchTarget {
+    return WatchTargetJsonAdapter.toDomain(
+      entry,
+      status[entry.id]?.state ?? "idle",
+    );
   }
 
-  private mergeStreamer(entry: WatchlistEntries[number], status: RuntimeStatuses): StreamerDto {
+  private mergeStreamer(
+    entry: WatchlistEntries[number],
+    status: RuntimeStatuses,
+  ): StreamerDto {
     const channelStatus = status[entry.id];
     return {
       id: entry.id,
@@ -106,7 +119,10 @@ export class StreamsRepository {
     };
   }
 
-  private mergeSession(recording: Recording, status: RuntimeStatuses): SessionWithChannel {
+  private mergeSession(
+    recording: Recording,
+    status: RuntimeStatuses,
+  ): SessionWithChannel {
     const channelStatus = status[recording.watch_target_id];
     return {
       session_id: recording.session_id,
@@ -170,6 +186,65 @@ export class StreamsRepository {
           return creator.id === creatorId || creator.display_name === creatorId;
         })
         .map((entry) => this.toWatchTarget(entry, status));
+    });
+  }
+
+  async findAllWatchTargets(): Promise<WatchTarget[]> {
+    return this.mutex.runExclusive(async () => {
+      const [watchlist, status] = await Promise.all([
+        this.readWatchlist(),
+        this.readChannelsStatus(),
+      ]);
+      return watchlist.map((entry) => this.toWatchTarget(entry, status));
+    });
+  }
+
+  async findOneWatchTarget(id: string): Promise<WatchTarget> {
+    return this.mutex.runExclusive(async () => {
+      const [watchlist, status] = await Promise.all([
+        this.readWatchlist(),
+        this.readChannelsStatus(),
+      ]);
+      const entry = watchlist.find((item) => item.id === id);
+      if (!entry) throw new NotFoundException(`Watch target ${id} not found`);
+      return this.toWatchTarget(entry, status);
+    });
+  }
+
+  async createWatchTarget(dto: CreateWatchTargetDto): Promise<WatchTarget> {
+    return this.mutex.runExclusive(async () => {
+      const [watchlist, status] = await Promise.all([
+        this.readWatchlist(),
+        this.readChannelsStatus(),
+      ]);
+      const watchTarget: WatchTarget = {
+        id: randomUUID(),
+        creator_id: dto.creator_id,
+        channel_name: dto.channel_name,
+        platform: dto.platform,
+        url: dto.url,
+        quality: dto.quality,
+        enabled: true,
+        state: "idle",
+      };
+
+      watchlist.push(WatchTargetJsonAdapter.fromDomain(watchTarget));
+      await this.writeWatchlist(watchlist);
+      return this.toWatchTarget(
+        WatchTargetJsonAdapter.fromDomain(watchTarget),
+        status,
+      );
+    });
+  }
+
+  async removeWatchTarget(id: string): Promise<void> {
+    return this.mutex.runExclusive(async () => {
+      const watchlist = await this.readWatchlist();
+      const index = watchlist.findIndex((entry) => entry.id === id);
+      if (index === -1)
+        throw new NotFoundException(`Watch target ${id} not found`);
+      watchlist.splice(index, 1);
+      await this.writeWatchlist(watchlist);
     });
   }
 
@@ -263,11 +338,14 @@ export class StreamsRepository {
     });
   }
 
-  async findRecordingsByWatchTarget(watchTargetId: string): Promise<Recording[]> {
+  async findRecordingsByWatchTarget(
+    watchTargetId: string,
+  ): Promise<Recording[]> {
     return this.mutex.runExclusive(async () => {
       const sessions = await this.readSessions();
-      return sessions
-        .filter((session) => session.watch_target_id === watchTargetId);
+      return sessions.filter(
+        (session) => session.watch_target_id === watchTargetId,
+      );
     });
   }
 
@@ -323,12 +401,16 @@ export class StreamsRepository {
   /**
    * Retorna o stream ativo (não finalizado) para um watch target.
    */
-  async findActiveStreamByWatchTarget(watchTargetId: string): Promise<Stream | null> {
+  async findActiveStreamByWatchTarget(
+    watchTargetId: string,
+  ): Promise<Stream | null> {
     return this.mutex.runExclusive(async () => {
       const streams = await this.readStreams();
-      return streams.find(
-        (s) => s.watch_target_id === watchTargetId && !s.finished_at,
-      ) ?? null;
+      return (
+        streams.find(
+          (s) => s.watch_target_id === watchTargetId && !s.finished_at,
+        ) ?? null
+      );
     });
   }
 
@@ -346,6 +428,15 @@ export class StreamsRepository {
         if (since && s.started_at < since) return false;
         return true;
       });
+    });
+  }
+
+  async findOneStream(id: string): Promise<Stream> {
+    return this.mutex.runExclusive(async () => {
+      const streams = await this.readStreams();
+      const stream = streams.find((entry) => entry.id === id);
+      if (!stream) throw new NotFoundException(`Stream ${id} not found`);
+      return stream;
     });
   }
 }

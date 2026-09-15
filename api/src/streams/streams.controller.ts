@@ -1,14 +1,87 @@
-import { Controller, Get, Post, Delete, Param, Body } from "@nestjs/common";
-import { StreamerService, SessionService } from "./streams.service";
+import {
+  Controller,
+  Get,
+  Post,
+  Delete,
+  Param,
+  Body,
+  Query,
+} from "@nestjs/common";
+import {
+  RecordingService,
+  SessionService,
+  StreamerService,
+  StreamService,
+} from "./streams.service";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { SessionDto } from "./dto/session.dto";
+import { CreateWatchTargetDto } from "./dto/watch-target.dto";
+import { RecordingQueryDto } from "./dto/recording-query.dto";
+import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 
 @Controller()
 export class StreamController {
   constructor(
     private readonly streamerService: StreamerService,
     private readonly sessionService: SessionService,
+    private readonly streamService: StreamService,
+    private readonly recordingService: RecordingService,
   ) {}
+
+  @Get("/creators")
+  getAllCreators(): Promise<Creator[]> {
+    return this.streamerService.findAllCreators();
+  }
+
+  @Get("/creators/:id")
+  getCreator(@Param("id") id: string): Promise<Creator> {
+    return this.streamerService.findOneCreator(id);
+  }
+
+  @Get("/creators/:id/watch-targets")
+  getCreatorWatchTargets(@Param("id") id: string): Promise<WatchTarget[]> {
+    return this.streamerService.findWatchTargetsByCreator(id);
+  }
+
+  @Get("/watch-targets")
+  getAllWatchTargets(): Promise<WatchTarget[]> {
+    return this.streamerService.findAllWatchTargets();
+  }
+
+  @Get("/watch-targets/:id")
+  getWatchTarget(@Param("id") id: string): Promise<WatchTarget> {
+    return this.streamerService.findOneWatchTarget(id);
+  }
+
+  @Post("/watch-targets")
+  createWatchTarget(@Body() dto: CreateWatchTargetDto): Promise<WatchTarget> {
+    return this.streamerService.createWatchTarget(dto);
+  }
+
+  @Delete("/watch-targets/:id")
+  deleteWatchTarget(@Param("id") id: string): Promise<void> {
+    return this.streamerService.removeWatchTarget(id);
+  }
+
+  @Get("/streams")
+  getAllStreams(): Promise<Stream[]> {
+    return this.streamService.findAllStreams();
+  }
+
+  @Get("/streams/:id")
+  getStream(@Param("id") id: string): Promise<Stream> {
+    return this.streamService.findOneStream(id);
+  }
+
+  @Get("/recordings")
+  getAllRecordings(@Query() query: RecordingQueryDto): Promise<Recording[]> {
+    return this.recordingService.findAllRecordings(query.watchTargetId);
+  }
+
+  @Get("/recordings/:id")
+  getRecording(@Param("id") id: string): Promise<Recording> {
+    return this.recordingService.findOneRecording(id);
+  }
 
   @Get("/streamer")
   getAllStreamers(): Promise<StreamerDto[]> {

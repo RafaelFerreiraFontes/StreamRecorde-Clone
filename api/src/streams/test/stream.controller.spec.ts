@@ -3,7 +3,12 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { StreamController } from "../streams.controller";
-import { StreamerService, SessionService, StreamService } from "../streams.service";
+import {
+  RecordingService,
+  StreamerService,
+  SessionService,
+  StreamService,
+} from "../streams.service";
 import { StreamsRepository } from "../streams.repository";
 import { WatchTargetJsonAdapter } from "../json-compatibility.adapters";
 import {
@@ -17,11 +22,17 @@ describe("StreamController", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stream-controller-"));
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "stream-controller-"),
+    );
     process.env.CONFIG_DIR = tempDir;
     process.env.WATCHLIST_PATH = path.join(tempDir, "watchlist.json");
-    process.env.CHANNELS_STATUS_PATH = path.join(tempDir, "channels_status.json");
+    process.env.CHANNELS_STATUS_PATH = path.join(
+      tempDir,
+      "channels_status.json",
+    );
     process.env.SESSIONS_PATH = path.join(tempDir, "sessions.json");
+    process.env.STREAMS_PATH = path.join(tempDir, "streams.json");
 
     await fs.writeFile(
       process.env.WATCHLIST_PATH,
@@ -41,7 +52,13 @@ describe("StreamController", () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [StreamController],
-      providers: [StreamsRepository, StreamerService, SessionService, StreamService],
+      providers: [
+        StreamsRepository,
+        StreamerService,
+        SessionService,
+        StreamService,
+        RecordingService,
+      ],
     }).compile();
 
     controller = module.get<StreamController>(StreamController);
@@ -133,6 +150,113 @@ describe("StreamController", () => {
         state: "idle",
       },
     ]);
+  });
+
+  it("should expose domain creator and watch target routes", async () => {
+    await expect(controller.getAllCreators()).resolves.toEqual([
+      { id: "Streamer 1", display_name: "Streamer 1" },
+      { id: "Streamer 2", display_name: "Streamer 2" },
+    ]);
+    await expect(controller.getCreator("Streamer 1")).resolves.toEqual({
+      id: "Streamer 1",
+      display_name: "Streamer 1",
+    });
+    await expect(
+      controller.getCreatorWatchTargets("Streamer 1"),
+    ).resolves.toHaveLength(1);
+    await expect(controller.getAllWatchTargets()).resolves.toHaveLength(2);
+    await expect(controller.getWatchTarget("1")).resolves.toMatchObject({
+      id: "1",
+      creator_id: "Streamer 1",
+      enabled: true,
+    });
+    await expect(controller.getWatchTarget("missing")).rejects.toThrow(
+      "not found",
+    );
+  });
+
+  it("should persist created watch targets through the Worker-compatible adapter", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "New Creator",
+      channel_name: "new-channel",
+      platform: "twitch",
+      url: "https://twitch.tv/new-channel",
+      quality: "720p",
+    });
+    const watchlistPath = process.env.WATCHLIST_PATH;
+    if (!watchlistPath) throw new Error("WATCHLIST_PATH is not configured");
+
+    expect(target).toMatchObject({
+      creator_id: "New Creator",
+      channel_name: "new-channel",
+      enabled: true,
+      state: "idle",
+    });
+    await expect(
+      WatchTargetJsonAdapter.read(watchlistPath),
+    ).resolves.toContainEqual({
+      id: target.id,
+      display_name: "New Creator",
+      channel_name: "new-channel",
+      platform: "twitch",
+      url: "https://twitch.tv/new-channel",
+      quality: "720p",
+    });
+  });
+
+  it("should delete only the requested watch target", async () => {
+    await controller.deleteWatchTarget("1");
+    await expect(controller.getAllWatchTargets()).resolves.toEqual([
+      expect.objectContaining({ id: "2" }),
+    ]);
+    await expect(controller.deleteWatchTarget("missing")).rejects.toThrow(
+      "not found",
+    );
+  });
+
+  it("should resolve streams by stream identity rather than watch target identity", async () => {
+    const streamsPath = process.env.STREAMS_PATH;
+    if (!streamsPath) throw new Error("STREAMS_PATH is not configured");
+    await fs.writeFile(
+      streamsPath,
+      JSON.stringify([
+        {
+          id: "stream-1",
+          watch_target_id: "1",
+          state: "recording",
+          started_at: "2026-09-14T00:00:00.000Z",
+        },
+      ]),
+      "utf-8",
+    );
+
+    await expect(controller.getAllStreams()).resolves.toHaveLength(1);
+    await expect(controller.getStream("stream-1")).resolves.toMatchObject({
+      id: "stream-1",
+    });
+    await expect(controller.getStream("1")).rejects.toThrow("not found");
+  });
+
+  it("should expose recordings without legacy channel_id and filter by watch target", async () => {
+    const recordings = await controller.getAllRecordings({
+      watchTargetId: "1",
+    });
+
+    expect(recordings).toHaveLength(3);
+    expect(recordings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ session_id: "1", watch_target_id: "1" }),
+      ]),
+    );
+    for (const recording of recordings) {
+      expect(recording).not.toHaveProperty("channel_id");
+      expect(recording).not.toHaveProperty("stream_id");
+    }
+    await expect(controller.getRecording("1")).resolves.toMatchObject({
+      session_id: "1",
+      watch_target_id: "1",
+    });
+    await expect(controller.getRecording("missing")).rejects.toThrow();
   });
 
   it("should get all streamers", async () => {
@@ -433,7 +557,10 @@ describe("StreamRepository", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stream-repo-"));
     process.env.CONFIG_DIR = tempDir;
     process.env.WATCHLIST_PATH = path.join(tempDir, "watchlist.json");
-    process.env.CHANNELS_STATUS_PATH = path.join(tempDir, "channels_status.json");
+    process.env.CHANNELS_STATUS_PATH = path.join(
+      tempDir,
+      "channels_status.json",
+    );
     process.env.SESSIONS_PATH = path.join(tempDir, "sessions.json");
     process.env.STREAMS_PATH = path.join(tempDir, "streams.json");
 
@@ -481,7 +608,11 @@ describe("StreamRepository", () => {
       },
     ];
 
-    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
+    await fs.writeFile(
+      streamsPath,
+      JSON.stringify(testStreams, null, 2),
+      "utf-8",
+    );
 
     const repo = new StreamsRepository();
     const streams = await repo.findAllStreams();
@@ -512,7 +643,11 @@ describe("StreamRepository", () => {
       },
     ];
 
-    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
+    await fs.writeFile(
+      streamsPath,
+      JSON.stringify(testStreams, null, 2),
+      "utf-8",
+    );
 
     const repo = new StreamsRepository();
     const activeStream = await repo.findActiveStreamByWatchTarget("1");
@@ -529,7 +664,8 @@ describe("StreamRepository", () => {
     await fs.writeFile(streamsPath, JSON.stringify([], null, 2), "utf-8");
 
     const repo = new StreamsRepository();
-    const activeStream = await repo.findActiveStreamByWatchTarget("nonexistent");
+    const activeStream =
+      await repo.findActiveStreamByWatchTarget("nonexistent");
 
     expect(activeStream).toBeNull();
   });
@@ -564,7 +700,11 @@ describe("StreamRepository", () => {
       },
     ];
 
-    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
+    await fs.writeFile(
+      streamsPath,
+      JSON.stringify(testStreams, null, 2),
+      "utf-8",
+    );
 
     const repo = new StreamsRepository();
 
@@ -595,7 +735,11 @@ describe("StreamRepository", () => {
       },
     ];
 
-    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
+    await fs.writeFile(
+      streamsPath,
+      JSON.stringify(testStreams, null, 2),
+      "utf-8",
+    );
 
     const repo = new StreamsRepository();
     const streams = await repo.findAllStreams();
@@ -618,10 +762,14 @@ describe("JSON compatibility adapters", () => {
 
   it("uses an empty default only when the watchlist is missing", async () => {
     const watchlistPath = path.join(tempDir, "watchlist.json");
-    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([]);
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual(
+      [],
+    );
 
     await fs.writeFile(watchlistPath, "{", "utf-8");
-    await expect(WatchTargetJsonAdapter.read(watchlistPath)).rejects.toThrow(SyntaxError);
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).rejects.toThrow(
+      SyntaxError,
+    );
   });
 
   it("atomically replaces the watchlist without leaving temporary files", async () => {
@@ -639,7 +787,11 @@ describe("JSON compatibility adapters", () => {
 
     await WatchTargetJsonAdapter.write(watchlistPath, watchlist);
 
-    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual(watchlist);
-    expect((await fs.readdir(tempDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual(
+      watchlist,
+    );
+    expect(
+      (await fs.readdir(tempDir)).filter((name) => name.endsWith(".tmp")),
+    ).toEqual([]);
   });
 });
