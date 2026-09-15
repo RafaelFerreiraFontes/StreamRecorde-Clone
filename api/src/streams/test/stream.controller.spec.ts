@@ -5,6 +5,7 @@ import * as path from "path";
 import { StreamController } from "../streams.controller";
 import { StreamerService, SessionService, StreamService } from "../streams.service";
 import { StreamsRepository } from "../streams.repository";
+import { WatchTargetJsonAdapter } from "../json-compatibility.adapters";
 import {
   legacyChannelStatus,
   legacySessions,
@@ -605,5 +606,40 @@ describe("StreamRepository", () => {
       expect(stream).not.toHaveProperty("platform");
       expect(stream).not.toHaveProperty("url");
     }
+  });
+});
+
+describe("JSON compatibility adapters", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "json-adapter-"));
+  });
+
+  it("uses an empty default only when the watchlist is missing", async () => {
+    const watchlistPath = path.join(tempDir, "watchlist.json");
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([]);
+
+    await fs.writeFile(watchlistPath, "{", "utf-8");
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).rejects.toThrow(SyntaxError);
+  });
+
+  it("atomically replaces the watchlist without leaving temporary files", async () => {
+    const watchlistPath = path.join(tempDir, "watchlist.json");
+    await fs.writeFile(watchlistPath, "[]", "utf-8");
+    const watchlist = [
+      {
+        id: "watch-target-1",
+        channel_name: "example",
+        platform: "twitch",
+        url: "https://twitch.tv/example",
+        quality: "best",
+      },
+    ];
+
+    await WatchTargetJsonAdapter.write(watchlistPath, watchlist);
+
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual(watchlist);
+    expect((await fs.readdir(tempDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });

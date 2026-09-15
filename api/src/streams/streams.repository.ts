@@ -1,52 +1,27 @@
 /**
  * StreamsRepository — File-based repository (MVP)
  *
- * Lê/escreve três arquivos JSON gerenciados pelo worker Python:
- *   - watchlist.json      → Array<WatchlistEntry>   (streamer info + config)
- *   - channels_status.json → Record<id, ChannelStatus> (estado em tempo-real)
- *   - sessions.json       → Array<SessionEntry>     (histórico de gravações)
- *
- * Usa async-mutex para serializar os read-modify-write e evitar race conditions
- * com o worker Docker que também grava nesses mesmos arquivos.
+ * JSON compatibility adapters isolate the worker-owned file formats from the
+ * repository's domain operations. The mutex serializes Node read-modify-write
+ * operations only; it does not synchronize the separate Python worker process.
  */
 
 import { Injectable, NotFoundException } from "@nestjs/common";
-import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
-import { Creator, Recording, Stream, StreamPlatform, WatchTarget } from "./domain.model";
+import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
+import {
+  RecordingJsonAdapter,
+  RuntimeStatusJsonAdapter,
+  StreamJsonAdapter,
+  WatchTargetJsonAdapter,
+} from "./json-compatibility.adapters";
 
-// ─── Tipos internos (espelham o que o worker escreve) ────────────────────────
-
-/** Uma entrada na watchlist.json (array) */
-interface WatchlistEntry {
-  id: string;
-  display_name?: string;
-  channel_name: string;
-  platform: string;
-  url: string;
-  quality: string;
-}
-
-/** Um valor em channels_status.json (objeto indexado por channel_id) */
-interface ChannelStatus {
-  channel_name: string;
-  platform: string;
-  state: "idle" | "offline" | "recording" | "finished" | "error";
-}
-
-/** Uma entrada em sessions.json (array) */
-interface SessionEntry {
-  session_id: string;
-  channel_id: string;
-  started_at: string;
-  finished_at: string | null;
-  output_file: string | null;
-  state: "idle" | "offline" | "recording" | "finished" | "error";
-}
+type WatchlistEntries = Awaited<ReturnType<typeof WatchTargetJsonAdapter.read>>;
+type RuntimeStatuses = Awaited<ReturnType<typeof RuntimeStatusJsonAdapter.read>>;
 
 interface SessionWithChannel extends SessionDto {
   channel_name: string | null;
@@ -74,53 +49,29 @@ const getStreamsPath = (): string =>
 
 @Injectable()
 export class StreamsRepository {
-  /** Mutex compartilhado para todos os arquivos — serializa leituras + escritas */
+  /** Serializes read-modify-write operations inside this Node process only. */
   private readonly mutex = new Mutex();
 
   // ── helpers de I/O ──────────────────────────────────────────────────────────
 
-  private async readWatchlist(): Promise<WatchlistEntry[]> {
-    try {
-      const raw = await fs.readFile(getWatchlistPath(), "utf-8");
-      return JSON.parse(raw) as WatchlistEntry[];
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw err;
-    }
+  private async readWatchlist(): Promise<WatchlistEntries> {
+    return WatchTargetJsonAdapter.read(getWatchlistPath());
   }
 
-  private async writeWatchlist(data: WatchlistEntry[]): Promise<void> {
-    await fs.writeFile(getWatchlistPath(), JSON.stringify(data, null, 2), "utf-8");
+  private async writeWatchlist(data: WatchlistEntries): Promise<void> {
+    await WatchTargetJsonAdapter.write(getWatchlistPath(), data);
   }
 
-  private async readChannelsStatus(): Promise<Record<string, ChannelStatus>> {
-    try {
-      const raw = await fs.readFile(getChannelsStatusPath(), "utf-8");
-      return JSON.parse(raw) as Record<string, ChannelStatus>;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
-      throw err;
-    }
+  private async readChannelsStatus(): Promise<RuntimeStatuses> {
+    return RuntimeStatusJsonAdapter.read(getChannelsStatusPath());
   }
 
-  private async readSessions(): Promise<SessionEntry[]> {
-    try {
-      const raw = await fs.readFile(getSessionsPath(), "utf-8");
-      return JSON.parse(raw) as SessionEntry[];
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw err;
-    }
+  private async readSessions(): Promise<Recording[]> {
+    return RecordingJsonAdapter.read(getSessionsPath());
   }
 
   private async readStreams(): Promise<Stream[]> {
-    try {
-      const raw = await fs.readFile(getStreamsPath(), "utf-8");
-      return JSON.parse(raw) as Stream[];
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw err;
-    }
+    return StreamJsonAdapter.read(getStreamsPath());
   }
 
   // ── merge helper ────────────────────────────────────────────────────────────
@@ -130,7 +81,7 @@ export class StreamsRepository {
     return normalized || "unknown-creator";
   }
 
-  private toCreator(entry: WatchlistEntry): Creator {
+  private toCreator(entry: WatchlistEntries[number]): Creator {
     const displayName = entry.display_name?.trim() || entry.channel_name || "unknown-creator";
     return {
       id: this.normalizeCreatorId(displayName),
@@ -138,30 +89,11 @@ export class StreamsRepository {
     };
   }
 
-  private toWatchTarget(
-    entry: WatchlistEntry,
-    status: Record<string, ChannelStatus>,
-  ): WatchTarget {
-    const creatorId = this.normalizeCreatorId(
-      entry.display_name?.trim() || entry.channel_name || "unknown-creator",
-    );
-
-    return {
-      id: entry.id,
-      creator_id: creatorId,
-      channel_name: entry.channel_name,
-      platform: (entry.platform as StreamPlatform) || "youtube",
-      url: entry.url ?? "",
-      quality: entry.quality ?? "best",
-      enabled: true,
-      state: status[entry.id]?.state ?? "idle",
-    };
+  private toWatchTarget(entry: WatchlistEntries[number], status: RuntimeStatuses): WatchTarget {
+    return WatchTargetJsonAdapter.toDomain(entry, status[entry.id]?.state ?? "idle");
   }
 
-  private mergeStreamer(
-    entry: WatchlistEntry,
-    status: Record<string, ChannelStatus>,
-  ): StreamerDto {
+  private mergeStreamer(entry: WatchlistEntries[number], status: RuntimeStatuses): StreamerDto {
     const channelStatus = status[entry.id];
     return {
       id: entry.id,
@@ -174,10 +106,7 @@ export class StreamsRepository {
     };
   }
 
-  private mergeSession(
-    recording: Recording,
-    status: Record<string, ChannelStatus>,
-  ): SessionWithChannel {
+  private mergeSession(recording: Recording, status: RuntimeStatuses): SessionWithChannel {
     const channelStatus = status[recording.watch_target_id];
     return {
       session_id: recording.session_id,
@@ -188,17 +117,6 @@ export class StreamsRepository {
       finished_at: recording.finished_at || "",
       output_file: recording.output_file || "",
       state: recording.state || "idle",
-    };
-  }
-
-  private legacySessionToRecording(session: SessionEntry): Recording {
-    return {
-      session_id: session.session_id,
-      watch_target_id: session.channel_id,
-      ...(session.finished_at ? { finished_at: session.finished_at } : {}),
-      ...(session.output_file ? { output_file: session.output_file } : {}),
-      started_at: session.started_at,
-      state: session.state,
     };
   }
 
@@ -294,7 +212,7 @@ export class StreamsRepository {
         this.readChannelsStatus(),
       ]);
 
-      const newEntry: WatchlistEntry = {
+      const newEntry: WatchlistEntries[number] = {
         id: randomUUID(),
         display_name: dto.display_name ?? "",
         channel_name: dto.channel_name,
@@ -331,8 +249,7 @@ export class StreamsRepository {
 
   async findAllRecordings(): Promise<Recording[]> {
     return this.mutex.runExclusive(async () => {
-      const sessions = await this.readSessions();
-      return sessions.map((session) => this.legacySessionToRecording(session));
+      return this.readSessions();
     });
   }
 
@@ -342,7 +259,7 @@ export class StreamsRepository {
       const session = sessions.find((entry) => entry.session_id === sessionId);
       if (!session)
         throw new NotFoundException(`Recording ${sessionId} não encontrado`);
-      return this.legacySessionToRecording(session);
+      return session;
     });
   }
 
@@ -350,8 +267,7 @@ export class StreamsRepository {
     return this.mutex.runExclusive(async () => {
       const sessions = await this.readSessions();
       return sessions
-        .filter((session) => session.channel_id === watchTargetId)
-        .map((session) => this.legacySessionToRecording(session));
+        .filter((session) => session.watch_target_id === watchTargetId);
     });
   }
 

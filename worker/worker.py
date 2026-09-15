@@ -29,6 +29,21 @@ import threading
 import time
 from datetime import datetime
 
+try:
+    from worker.json_adapters import (
+        RecordingJsonAdapter,
+        RuntimeStatusJsonAdapter,
+        StreamJsonAdapter,
+        WatchTargetJsonAdapter,
+    )
+except ModuleNotFoundError:
+    from json_adapters import (
+        RecordingJsonAdapter,
+        RuntimeStatusJsonAdapter,
+        StreamJsonAdapter,
+        WatchTargetJsonAdapter,
+    )
+
 CONFIG_PATH = os.environ.get("WATCHLIST_PATH", "/app/config/watchlist.json")
 CHANNELS_STATUS_PATH = os.environ.get(
     "CHANNELS_STATUS_PATH", "/app/config/channels_status.json"
@@ -61,63 +76,43 @@ lock = threading.Lock()
 
 
 def load_watchlist():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return WatchTargetJsonAdapter.read(CONFIG_PATH)
 
 
 def load_channels_status():
-    with open(CHANNELS_STATUS_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return RuntimeStatusJsonAdapter.read(CHANNELS_STATUS_PATH)
 
 
 def load_sessions():
-    with open(SESSIONS_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return RecordingJsonAdapter.read(SESSIONS_PATH)
 
 
 def deserialize_session(session: dict) -> dict:
-    recording = dict(session)
-    recording["watch_target_id"] = recording.pop("channel_id")
-    return recording
+    return RecordingJsonAdapter.to_domain(session)
 
 
 def serialize_recording(recording: dict) -> dict:
-    session = dict(recording)
-    session["channel_id"] = session.pop("watch_target_id")
-    return session
+    return RecordingJsonAdapter.from_domain(recording)
 
 
 def save_status():
-    with open(CHANNELS_STATUS_PATH, "w", encoding="utf-8") as f:
-        json.dump(channels_status, f, ensure_ascii=False, indent=2, default=str)
+    RuntimeStatusJsonAdapter.write(CHANNELS_STATUS_PATH, channels_status)
 
 
 def load_recordings():
-    return [deserialize_session(session) for session in load_sessions()]
+    return load_sessions()
 
 
 def save_recordings():
-    with open(SESSIONS_PATH, "w", encoding="utf-8") as f:
-        json.dump(
-            [serialize_recording(recording) for recording in recordings],
-            f,
-            ensure_ascii=False,
-            indent=2,
-            default=str,
-        )
+    RecordingJsonAdapter.write(SESSIONS_PATH, recordings)
 
 
 def load_streams():
-    try:
-        with open(STREAMS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return []
+    return StreamJsonAdapter.read(STREAMS_PATH)
 
 
 def save_streams():
-    with open(STREAMS_PATH, "w", encoding="utf-8") as f:
-        json.dump(streams_data, f, ensure_ascii=False, indent=2, default=str)
+    StreamJsonAdapter.write(STREAMS_PATH, streams_data)
 
 
 def find_active_stream(watch_target_id: str):
@@ -415,7 +410,10 @@ def poll_loop():
         except Exception as e:
             log.error("Erro ao ler streams: %s", e)
 
-        watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
+        try:
+            watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
+        except FileNotFoundError:
+            watchlist_lastmodified = None
 
         for entry in watchlist:
             url = entry.get("url")
@@ -463,7 +461,10 @@ def poll_loop():
 
             try:
                 new_watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
-                if new_watchlist_lastmodified > watchlist_lastmodified:
+                if (
+                    watchlist_lastmodified is None
+                    or new_watchlist_lastmodified > watchlist_lastmodified
+                ):
                     watchlist_lastmodified = new_watchlist_lastmodified
 
                     watchlist = load_watchlist()

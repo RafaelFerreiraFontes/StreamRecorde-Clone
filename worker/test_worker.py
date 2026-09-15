@@ -29,6 +29,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         config_dir = Path(self.temp_dir.name)
         worker.CHANNELS_STATUS_PATH = str(config_dir / "channels_status.json")
         worker.SESSIONS_PATH = str(config_dir / "sessions.json")
+        worker.STREAMS_PATH = str(config_dir / "streams.json")
         worker.OUTPUT_DIR = str(config_dir / "recordings")
         worker.channels_status = {}
         worker.recordings = []
@@ -36,6 +37,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker.lock = worker.threading.Lock()
         Path(worker.CHANNELS_STATUS_PATH).write_text("{}", encoding="utf-8")
         Path(worker.SESSIONS_PATH).write_text("[]", encoding="utf-8")
+        Path(worker.STREAMS_PATH).write_text("[]", encoding="utf-8")
         self.watchlist_path = config_dir / "watchlist.json"
         self.watchlist_path.write_text("[]", encoding="utf-8")
         worker.CONFIG_PATH = str(self.watchlist_path)
@@ -115,6 +117,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             {
                 "session_id": "session-1",
                 "watch_target_id": "channel-1",
+                "stream_id": "stream-1",
                 "started_at": "2026-09-05T00:00:00",
                 "finished_at": None,
                 "output_file": "recording.mp4",
@@ -129,11 +132,47 @@ class WorkerLifecycleTests(unittest.TestCase):
 
         self.assertIn("channel_id", persisted_session)
         self.assertNotIn("watch_target_id", persisted_session)
+        self.assertNotIn("stream_id", persisted_session)
         self.assertEqual(persisted_session["session_id"], "session-1")
         self.assertEqual(persisted_session["started_at"], "2026-09-05T00:00:00")
         self.assertIsNone(persisted_session["finished_at"])
         self.assertEqual(persisted_session["output_file"], "recording.mp4")
         self.assertEqual(persisted_session["state"], "recording")
+
+    def test_malformed_json_is_an_explicit_error(self):
+        Path(worker.SESSIONS_PATH).write_text("{", encoding="utf-8")
+
+        with self.assertRaises(json.JSONDecodeError):
+            worker.load_sessions()
+
+    def test_stream_persistence_is_distinct_from_runtime_status(self):
+        worker.streams_data = [
+            {
+                "id": "stream-1",
+                "watch_target_id": "channel-1",
+                "state": "recording",
+                "started_at": "2026-09-05T00:00:00",
+                "finished_at": None,
+            }
+        ]
+        worker.save_streams()
+
+        persisted_stream = json.loads(Path(worker.STREAMS_PATH).read_text(encoding="utf-8"))[0]
+        self.assertEqual(persisted_stream["id"], "stream-1")
+        self.assertNotIn("channel_id", persisted_stream)
+        self.assertEqual(worker.channels_status, {})
+
+    def test_atomic_write_replaces_destination_without_temp_artifacts(self):
+        Path(worker.CHANNELS_STATUS_PATH).write_text('{"old": true}', encoding="utf-8")
+        worker.channels_status = {"channel-1": {"state": "offline"}}
+
+        worker.save_status()
+
+        self.assertEqual(
+            json.loads(Path(worker.CHANNELS_STATUS_PATH).read_text(encoding="utf-8")),
+            worker.channels_status,
+        )
+        self.assertEqual(list(Path(worker.CHANNELS_STATUS_PATH).parent.glob("*.tmp")), [])
 
     def test_poll_reload_preserves_active_session(self):
         active_session = {
@@ -247,6 +286,26 @@ class WorkerLifecycleTests(unittest.TestCase):
         popen.assert_not_called()
         self.assertEqual(worker.recordings, [])
         self.assertEqual(worker.channels_status["channel-1"]["state"], "offline")
+
+    def test_poll_loop_waits_for_a_missing_watchlist_to_reappear(self):
+        self.watchlist_path.unlink()
+
+        def recreate_watchlist_then_stop(_):
+            if not self.watchlist_path.exists():
+                self.watchlist_path.write_text("[]", encoding="utf-8")
+                return
+            raise KeyboardInterrupt
+
+        with patch.object(
+            worker.time,
+            "sleep",
+            side_effect=recreate_watchlist_then_stop,
+        ) as sleep:
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+        self.assertEqual(sleep.call_count, 2)
+        self.assertTrue(self.watchlist_path.exists())
 
     def test_session_reload_failure_preserves_active_session_for_finalization(self):
         output_file = Path(worker.OUTPUT_DIR) / "recording.mp4"
