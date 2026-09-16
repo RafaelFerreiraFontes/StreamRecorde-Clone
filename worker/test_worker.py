@@ -2,13 +2,16 @@ import json
 import importlib.util
 import tempfile
 import unittest
+from typing import Any
 from pathlib import Path
 from unittest.mock import patch
 
 worker_spec = importlib.util.spec_from_file_location(
     "worker_module", Path(__file__).with_name("worker.py")
 )
-worker = importlib.util.module_from_spec(worker_spec)
+if worker_spec is None or worker_spec.loader is None:
+    raise ImportError("Unable to load worker module")
+worker: Any = importlib.util.module_from_spec(worker_spec)
 worker_spec.loader.exec_module(worker)
 
 

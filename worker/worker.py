@@ -242,7 +242,7 @@ def is_live(url: str) -> bool:
         return False
 
 
-def start_recording(entry: dict, stream_id: str = None):
+def start_recording(entry: dict, stream_id: str | None = None):
     global active_recordings, channels_status, recordings, lock
 
     url = entry["url"]
@@ -250,6 +250,8 @@ def start_recording(entry: dict, stream_id: str = None):
     platform = entry.get("platform", "unknown")
     channel_name = str(entry.get("channel_name") or "unknown-channel")
     watch_target_id = entry.get("id")
+    if not isinstance(watch_target_id, str):
+        raise ValueError("Watch target id is required to start a recording")
     session_id = str(uuid.uuid4())
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
