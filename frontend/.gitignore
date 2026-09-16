@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.env*
+!.env.example
+*.tsbuildinfo
+test-results/
+
+# Override broad ignore patterns inherited from the repository root.
+!.gitignore
+!app/recordings/
+!app/recordings/**
