@@ -1,0 +1,63 @@
+# Cache directories
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+**/*.pyo
+*.pyc
+*.pyo
+__pycache__
+.pytest_cache
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Test files
+test_*.py
+*_test.py
+worker/test_*.py
+worker/*_test.py
+
+# Development config (runtime modules are copied explicitly)
+worker/config/
+config/
+
+# Local recordings (should be mounted from host)
+recordings/
+../recordings
+**/recordings
+
+# Node modules (if any)
+node_modules/
+**/node_modules
+
+# Docker files (not needed in image)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# Python virtual envs
+venv/
+env/
+.venv/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp

@@ -2,6 +2,7 @@ import json
 import importlib.util
 import tempfile
 import unittest
+import io
 from typing import Any
 from pathlib import Path
 from unittest.mock import patch
@@ -16,14 +17,45 @@ worker_spec.loader.exec_module(worker)
 
 
 class FakeProcess:
-    def __init__(self, returncode=0):
-        self.returncode = returncode
+    """Fake subprocess.Popen for testing.
 
-    def wait(self):
+    Supports:
+    - wait(timeout=None) - Python 3 subprocess compatibility
+    - kill() - for force termination
+    - stderr - file-like object for stderr drain tests
+    """
+
+    def __init__(self, returncode=0, stderr_lines=None):
+        self.returncode = returncode
+        self._stderr = io.StringIO(stderr_lines or "")
+        self.stderr = self._stderr
+        self._wait_called = False
+
+    def wait(self, timeout=None):
+        """Wait for process to complete.
+
+        Args:
+            timeout: Optional timeout in seconds. If None, returns immediately.
+
+        Returns:
+            The returncode of the process.
+        """
+        self._wait_called = True
         return self.returncode
 
     def terminate(self):
         self.returncode = -15
+
+    def kill(self):
+        self.returncode = -9
+
+    @property
+    def pid(self):
+        return 99999
+
+    def poll(self):
+        """Check if process has terminated."""
+        return self.returncode if self._wait_called else None
 
 
 class WorkerLifecycleTests(unittest.TestCase):
@@ -411,6 +443,168 @@ class WorkerLifecycleTests(unittest.TestCase):
             Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")
         )
         self.assertEqual(persisted_sessions[0]["state"], "error")
+
+    def test_shutdown_with_no_active_recordings_exits_cleanly(self):
+        """Shutdown handler should exit cleanly when no active recordings exist."""
+        worker.active_recordings = {}
+        worker.channels_status = {}
+        worker.recordings = []
+
+        with patch.object(worker, "save_status"), \
+             patch.object(worker, "save_recordings"):
+            with self.assertRaises(SystemExit) as ctx:
+                worker.handle_shutdown(None, None)
+            self.assertEqual(ctx.exception.code, 0)
+
+    def test_shutdown_with_already_exited_process_tolerates_gracefully(self):
+        """Shutdown should tolerate processes that have already exited."""
+        session = {
+            "session_id": "session-1",
+            "channel_id": "channel-1",
+            "started_at": "2026-09-05T00:00:00",
+            "finished_at": None,
+            "output_file": "recording.mp4",
+            "state": "recording",
+        }
+        # Process already exited with returncode=0
+        process = FakeProcess(returncode=0)
+        worker.recordings = [worker.deserialize_session(session)]
+        worker.channels_status = {
+            "channel-1": {
+                "channel_name": "example",
+                "platform": "twitch",
+                "state": "recording",
+            }
+        }
+        worker.active_recordings = {
+            "channel-1": {
+                "session_id": "session-1",
+                "process": process,
+                "channel_name": "example",
+                "platform": "twitch",
+            }
+        }
+
+        with patch.object(worker, "save_status"), \
+             patch.object(worker, "save_recordings"):
+            with self.assertRaises(SystemExit):
+                worker.handle_shutdown(None, None)
+
+    def test_drain_stderr_logs_non_empty_lines(self):
+        """Drain stderr should log non-empty stderr lines."""
+        stderr_lines = "streamlink output line 1\nstreamlink output line 2\n"
+        proc = FakeProcess(stderr_lines=stderr_lines)
+
+        with patch.object(worker.log, "info") as mock_log:
+            worker.drain_stderr(proc, "test-channel")
+
+        # Should have logged 2 lines (non-empty)
+        self.assertEqual(mock_log.call_count, 2)
+        mock_log.assert_any_call("[%s] [streamlink] %s", "test-channel", "streamlink output line 1")
+        mock_log.assert_any_call("[%s] [streamlink] %s", "test-channel", "streamlink output line 2")
+
+    def test_drain_stderr_skips_empty_lines(self):
+        """Drain stderr should skip empty or whitespace-only lines."""
+        # Only genuinely non-empty lines should be logged
+        stderr_lines = "valid line\n\nanother valid\n"
+        proc = FakeProcess(stderr_lines=stderr_lines)
+
+        with patch.object(worker.log, "info") as mock_log:
+            worker.drain_stderr(proc, "test-channel")
+
+        # Should log only non-empty lines (2 instead of 3)
+        self.assertEqual(mock_log.call_count, 2)
+
+    def test_drain_stderr_handles_missing_stderr(self):
+        """Drain stderr should handle missing/None stderr gracefully."""
+        proc = FakeProcess()
+        proc.stderr = None
+
+        # Should not raise
+        worker.drain_stderr(proc, "test-channel")
+
+    def test_drain_stderr_handles_empty_stderr(self):
+        """Drain stderr should handle empty stderr gracefully."""
+        proc = FakeProcess(stderr_lines="")
+
+        with patch.object(worker.log, "info") as mock_log:
+            worker.drain_stderr(proc, "test-channel")
+
+        mock_log.assert_not_called()
+
+    def test_monitor_recording_drains_stderr_before_wait(self):
+        """monitor_recording should drain stderr before calling wait."""
+        stderr_lines = "streamlink: connected\nstreamlink: downloading\n"
+        proc = FakeProcess(returncode=0, stderr_lines=stderr_lines)
+        output_file = Path(worker.OUTPUT_DIR) / "recording.mp4"
+        output_file.parent.mkdir(parents=True)
+        output_file.write_bytes(b"recorded")
+
+        worker.channels_status = {
+            "channel-1": {
+                "channel_name": "example",
+                "platform": "twitch",
+                "state": "recording",
+            }
+        }
+        worker.recordings = [
+            {
+                "session_id": "session-1",
+                "watch_target_id": "channel-1",
+                "started_at": "2026-09-05T00:00:00",
+                "finished_at": None,
+                "output_file": str(output_file),
+                "state": "recording",
+            }
+        ]
+        worker.active_recordings = {
+            "channel-1": {
+                "process": proc,
+                "output_file": str(output_file),
+                "channel_name": "example",
+                "session_id": "session-1",
+            }
+        }
+
+        with patch.object(worker.log, "info") as mock_log:
+            worker.monitor_recording("channel-1")
+
+        # Verify stderr lines were logged
+        self.assertGreaterEqual(mock_log.call_count, 2)
+        # Verify recording was finalized
+        self.assertEqual(worker.recordings[0]["state"], "finished")
+
+    def test_wait_for_process_calls_kill_on_timeout(self):
+        """_wait_for_process should call kill when terminate times out."""
+        proc = FakeProcess()
+
+        with patch.object(proc, "kill") as mock_kill:
+            with patch.object(proc, "wait", side_effect=worker.subprocess.TimeoutExpired("cmd", 5)):
+                worker._wait_for_process(proc)
+                mock_kill.assert_called_once()
+
+    def test_wait_for_process_handles_already_exited_process(self):
+        """_wait_for_process should tolerate already-exited processes."""
+        proc = FakeProcess(returncode=0)
+
+        # Should not raise
+        worker._wait_for_process(proc)
+
+    def test_wait_for_process_handles_missing_kill_method(self):
+        """_wait_for_process should handle processes without kill() method."""
+        # Create a minimal fake process without kill attribute
+        class MinimalFakeProcess:
+            def __init__(self):
+                self.returncode = 1
+            def wait(self, timeout=None):
+                return self.returncode
+            def terminate(self):
+                pass
+        proc = MinimalFakeProcess()
+
+        with patch.object(proc, "wait", side_effect=worker.subprocess.TimeoutExpired("cmd", 5)):
+            # Should not raise
+            worker._wait_for_process(proc)
 
 
 if __name__ == "__main__":

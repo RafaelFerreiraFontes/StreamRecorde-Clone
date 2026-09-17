@@ -313,11 +313,34 @@ def start_recording(entry: dict, stream_id: str | None = None):
     ).start()
 
 
+def drain_stderr(process, channel_name):
+    """Drain stderr continuously in the calling thread without a separate reader thread.
+
+    Logs non-empty Streamlink output lines without logging URLs or credentials.
+    """
+    try:
+        if process.stderr is None:
+            return
+        while True:
+            line = process.stderr.readline()
+            if not line:
+                break
+            stripped = line.rstrip("\r\n")
+            if stripped:
+                log.info("[%s] [streamlink] %s", channel_name, stripped)
+    except Exception:
+        pass  # Process may have ended; stderr is closed
+
+
 def monitor_recording(id: str):
     global active_recordings, channels_status, recordings, lock
 
     with lock:
         proc = active_recordings[id]["process"]
+        channel_name = active_recordings[id]["channel_name"]
+
+    # Drain stderr in this thread before waiting for process
+    drain_stderr(proc, channel_name)
     proc.wait()
 
     with lock:
@@ -478,21 +501,62 @@ def poll_loop():
         time.sleep(POLL_INTERVAL)
 
 
+def _wait_for_process(proc, timeout_sec=5):
+    """Wait for a process with timeout, using kill as fallback if needed.
+
+    Tolerates processes that have already exited (ProcessLookupError,
+    PermissionError, and other process-lifecycle errors).
+    """
+    try:
+        proc.wait(timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            log.warning("Process did not terminate after kill; forcibly exiting.")
+        except (OSError, AttributeError):
+            log.warning("Process already exited during kill/wait; skipping.")
+    except (OSError, AttributeError):
+        log.warning("Process already exited during wait; skipping.")
+
+
 def handle_shutdown(signum, frame):
     log.info("Encerrando worker... finalizando gravações em andamento.")
 
     with lock:
+        # Snapshot active processes before terminating
+        active_procs = [
+            (channel_id, info)
+            for channel_id, info in active_recordings.items()
+        ]
+
         finished_at = datetime.now().isoformat()
-        for channel_id, info in active_recordings.items():
-            info["process"].terminate()
+
+        for channel_id, info in active_procs:
+            proc = info["process"]
+            try:
+                proc.terminate()
+            except OSError:
+                log.warning(
+                    "Process for channel %s already exited during terminate; skipping.",
+                    channel_id,
+                )
+                continue
             channels_status[channel_id]["state"] = "error"
             for recording in recordings:
                 if recording["session_id"] == info["session_id"]:
                     recording["state"] = "error"
                     recording["finished_at"] = finished_at
                     break
+
         save_status()
         save_recordings()
+
+    # Wait for all processes outside the lock to avoid deadlocks
+    for channel_id, info in active_procs:
+        _wait_for_process(info["process"])
+
     sys.exit(0)
 
 
