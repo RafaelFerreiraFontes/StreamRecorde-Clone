@@ -196,6 +196,71 @@ Relevant observations:
 - `streams.json` is the operational history of stream occurrences;
 - `sessions.json` remains legacy for compatibility and does not fully represent the new domain model, especially regarding `stream_id`.
 
+## Configuration File Paths
+
+The Worker resolves file paths using explicit precedence:
+
+```
+NON-EMPTY individual env var > NON-EMPTY CONFIG_DIR + filename > module-relative default
+```
+
+Individual environment variables:
+
+- `WATCHLIST_PATH` - watchlist.json path
+- `CHANNELS_STATUS_PATH` - channels_status.json path
+- `SESSIONS_PATH` - sessions.json path
+- `STREAMS_PATH` - streams.json path
+- `OUTPUT_DIR` - recording output directory (default: `/recordings`)
+
+If an individual path is set and non-empty, it is used directly.
+
+Otherwise, if `CONFIG_DIR` is set and non-empty, the filename is appended to it.
+
+Otherwise, the module-relative default is used (relative to `worker/config/`).
+
+Important: an empty string is NOT a valid override. An empty `WATCHLIST_PATH` will fall through to `CONFIG_DIR` or the module-relative default.
+
+### Output Directory Structure
+
+The Worker writes recordings to `OUTPUT_DIR`, which is the root for all recording subdirectories.
+
+The `recording_subdir` field from watchlist entries is appended as a relative subdirectory:
+
+```
+OUTPUT_DIR/recording_subdir/recording.mp4
+```
+
+If `recording_subdir` is absent or invalid, the Worker falls back to a sanitized channel name:
+
+```
+OUTPUT_DIR/channel_name/recording.mp4
+```
+
+### recording_subdir Validation
+
+The `recording_subdir` field must be a relative path. Security rules:
+
+- Rejects absolute paths (leading `/` or `\`)
+- Rejects Windows drive letters (`C:\...`)
+- Rejects UNC paths (`\\server\share`)
+- Rejects traversal patterns (`.`, `..`)
+- Rejects null bytes and control characters
+- Max 255 characters
+- Normalized to forward slashes
+
+Invalid `recording_subdir` values trigger a ValueError in the Worker. The Worker does not silently fall back for invalid custom paths.
+
+### Cross-Process Considerations
+
+The API and Worker share JSON files through the filesystem. This creates a cross-process coordination scenario:
+
+- No distributed locking mechanism exists
+- File changes from one process are not immediately visible to the other
+- API updates to `watchlist.json` require the Worker to reload the file
+- Worker status updates require the API to read fresh data
+
+For MVP, the architecture relies on eventual consistency through periodic polling and file reloads. A queue or database will replace this in later phases.
+
 ## Restart and Reload Behavior
 
 The Worker currently supports:

@@ -42,6 +42,51 @@ try {
     assert.equal(response.data.state, "idle");
     created.push(response.data.id);
   }
+  // Test recording_subdir creation
+  const subdirCreator = `UI subdir test & ${randomUUID()}`;
+  const withSubdir = await request("/watch-targets", "POST", {
+    creator_id: subdirCreator,
+    channel_name: "subdir-channel",
+    platform: "twitch",
+    url: "https://twitch.tv/subdir-channel",
+    quality: "best",
+    recording_subdir: "favorites/twitch",
+  });
+  assert.equal(withSubdir.status, 201);
+  assert.equal(withSubdir.data.recording_subdir, "favorites/twitch");
+  created.push(withSubdir.data.id);
+
+  // Verify persisted recording_subdir
+  const readBack = await request(`/watch-targets/${withSubdir.data.id}`);
+  assert.equal(readBack.status, 200);
+  assert.equal(readBack.data.recording_subdir, "favorites/twitch");
+
+  // Test PATCH update
+  const patchResp = await request(`/watch-targets/${withSubdir.data.id}`, "PATCH", {
+    recording_subdir: "new/path",
+  });
+  assert.equal(patchResp.status, 200);
+  assert.equal(patchResp.data.recording_subdir, "new/path");
+
+  // Test PATCH clear (empty string)
+  const clearResp = await request(`/watch-targets/${withSubdir.data.id}`, "PATCH", {
+    recording_subdir: "",
+  });
+  assert.equal(clearResp.status, 200);
+  assert.equal(clearResp.data.recording_subdir, undefined);
+
+  // Test PATCH rejection for traversal
+  const invalidPatch = await request(`/watch-targets/${withSubdir.data.id}`, "PATCH", {
+    recording_subdir: "../etc",
+  });
+  assert.equal(invalidPatch.status, 400);
+
+  // Test PATCH rejection for absolute path
+  const absolutePatch = await request(`/watch-targets/${withSubdir.data.id}`, "PATCH", {
+    recording_subdir: "/absolute",
+  });
+  assert.equal(absolutePatch.status, 400);
+
   assert.equal(
     (await request(`/creators/${encodeURIComponent(creator)}/watch-targets`))
       .data.length,
@@ -75,7 +120,7 @@ try {
     before,
   );
   console.log(
-    "PASS: collections, create, Creator grouping, initial state, filtering, isolated deletion, errors, proxy method/origin restrictions, cleanup.",
+    "PASS: collections, create, recording_subdir, PATCH, clear, invalid rejection, Creator grouping, initial state, filtering, isolated deletion, errors, proxy method/origin restrictions, cleanup.",
   );
 } finally {
   for (const id of created)

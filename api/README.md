@@ -260,6 +260,52 @@ What exists today:
 
 Important observation: this layer is compatible with the current MVP, but it does not replace a more robust multi-process coordination solution in future phases.
 
+## Configuration File Paths
+
+The API resolves file paths using explicit precedence:
+
+```
+NON-EMPTY individual env var > NON-EMPTY CONFIG_DIR + filename > local default
+```
+
+Individual environment variables:
+
+- `WATCHLIST_PATH` - watchlist.json path
+- `CHANNELS_STATUS_PATH` - channels_status.json path
+- `SESSIONS_PATH` - sessions.json path
+- `STREAMS_PATH` - streams.json path
+
+If an individual path is set and non-empty, it is used directly.
+
+Otherwise, if `CONFIG_DIR` is set and non-empty, the filename is appended to it.
+
+Otherwise, the local default is used (relative to `cwd/../worker/config`).
+
+Important: an empty string is NOT a valid override. An empty `WATCHLIST_PATH` will fall through to `CONFIG_DIR` or the local default.
+
+### recording_subdir Field
+
+The `recording_subdir` field on WatchTarget specifies a relative subdirectory path for recordings.
+
+Validation rules:
+
+- Relative paths only (no leading `/` or `\`)
+- No Windows drive letters (`C:\...`)
+- No UNC paths (`\\server\share`)
+- No traversal patterns (`.`, `..`)
+- Max 255 characters
+- Normalized to forward slashes, with leading/trailing slashes removed
+
+Example: `favorites/twitch` or `twitch/channels/pixelcarvel`
+
+Empty string clears the override (uses channel name fallback).
+
+### OUTPUT_DIR Root
+
+The API does not directly control `OUTPUT_DIR`. This is a Worker configuration.
+
+The Worker uses `OUTPUT_DIR` as the root for all recording subdirectories. The `recording_subdir` field is appended as a relative subdirectory under this root.
+
 ## Running Locally
 
 The scripts actually available in `api/package.json` are:

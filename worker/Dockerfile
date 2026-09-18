@@ -18,15 +18,20 @@ COPY worker.py .
 COPY json_adapters.py .
 
 # Create runtime directories
-RUN mkdir -p /recordings /app/config
+RUN mkdir -p /recordings /data && \
+    groupadd -g 1000 workergrp && \
+    useradd -u 1000 -g workergrp workeruser && \
+    chown -R 1000:1000 /recordings /data
 
-# Environment variables for paths (can be overridden via docker-compose or runtime)
-ENV WATCHLIST_PATH=/app/config/watchlist.json \
-    CHANNELS_STATUS_PATH=/app/config/channels_status.json \
-    SESSIONS_PATH=/app/config/sessions.json \
-    STREAMS_PATH=/app/config/streams.json \
+# Set environment variables
+# CONFIG_DIR is the internal stack default; can be overridden at runtime
+# Individual *_PATH overrides take precedence over CONFIG_DIR
+ENV CONFIG_DIR=/data \
     OUTPUT_DIR=/recordings \
     POLL_INTERVAL=60
+
+# Drop root privileges and run as non-root user
+USER workeruser
 
 # Unbuffered output for docker logs
 CMD ["python", "-u", "worker.py"]

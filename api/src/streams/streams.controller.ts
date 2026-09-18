@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Param,
   Body,
@@ -15,7 +16,7 @@ import {
 } from "./streams.service";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { SessionDto } from "./dto/session.dto";
-import { CreateWatchTargetDto } from "./dto/watch-target.dto";
+import { CreateWatchTargetDto, PatchRecordingSubdirDto } from "./dto/watch-target.dto";
 import { RecordingQueryDto } from "./dto/recording-query.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 
@@ -61,6 +62,18 @@ export class StreamController {
   @Delete("/watch-targets/:id")
   deleteWatchTarget(@Param("id") id: string): Promise<void> {
     return this.streamerService.removeWatchTarget(id);
+  }
+
+  /**
+   * PATCH /watch-targets/:id - Update only the recording_subdir field.
+   * Payload must include recording_subdir (empty string clears, undefined is no-op).
+   */
+  @Patch("/watch-targets/:id")
+  patchWatchTarget(
+    @Param("id") id: string,
+    @Body() dto: PatchRecordingSubdirDto,
+  ): Promise<WatchTarget> {
+    return this.streamerService.updateRecordingSubdir(id, dto);
   }
 
   @Get("/streams")

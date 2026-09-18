@@ -1,4 +1,4 @@
-import { IsIn, IsString, IsUrl } from "class-validator";
+import { IsIn, IsString, IsUrl, IsOptional } from "class-validator";
 import { Transform } from "class-transformer";
 import { normalizeTextInput } from "../sanitize";
 
@@ -39,4 +39,18 @@ export class CreateWatchTargetDto {
     ({ value }: { value: string }) => value.toLowerCase().trim() || "best",
   )
   quality: string;
+
+  /**
+   * Optional relative subdirectory for recordings.
+   * Must be a safe relative path (no traversal, no absolute paths).
+   * Example: "twitch/pixelcarvel"
+   */
+  @IsOptional()
+  @IsString()
+  recording_subdir?: string;
+}
+
+export class PatchRecordingSubdirDto {
+  @IsString({ message: "recording_subdir must be a string" })
+  recording_subdir?: string;
 }

@@ -1,9 +1,97 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, BadRequestException } from "@nestjs/common";
 import { StreamsRepository } from "./streams.repository";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
-import { CreateWatchTargetDto } from "./dto/watch-target.dto";
+import { CreateWatchTargetDto, PatchRecordingSubdirDto } from "./dto/watch-target.dto";
 import { SessionDto } from "./dto/session.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
+
+/**
+ * Validate recording_subdir input and throw BadRequestException for invalid values.
+ * Returns normalized value or undefined for empty/absent.
+ *
+ * Security rules applied BEFORE normalization:
+ * 1. Reject non-string values explicitly
+ * 2. Reject null bytes and control characters
+ * 3. Reject absolute paths (leading / or \) BEFORE stripping
+ * 4. Reject UNC paths
+ * 5. Reject traversal segments (. or ..) in raw input - NOT every name with a dot
+ *
+ * Then normalize:
+ * - Convert separators to forward slash
+ * - Collapse multiple slashes
+ * - Remove trailing slashes (leading already rejected above)
+ * - Check for Windows drive letters after normalization
+ * - Max 255 chars
+ */
+function validateRecordingSubdirInput(value: unknown, fieldName = "recording_subdir"): string | undefined {
+  if (value === undefined || value === null) return undefined;
+
+  // Reject non-string values explicitly - do not coerce
+  if (typeof value !== "string") {
+    throw new BadRequestException(`${fieldName} must be a string`);
+  }
+
+  const str = value;
+
+  // Check for null/control characters before any processing
+  if (/\x00|[\x01-\x1f]/.test(str)) {
+    throw new BadRequestException(`${fieldName} contains invalid characters`);
+  }
+
+  // Raw trimmed input checks
+  const trimmed = str.trim();
+
+  // Reject empty after trim
+  if (trimmed === "") return undefined;
+
+  // Reject absolute paths BEFORE stripping - this catches /etc/passwd
+  if (trimmed.startsWith("/") || trimmed.startsWith("\\")) {
+    throw new BadRequestException(`${fieldName} must be a relative path`);
+  }
+
+  // Reject UNC paths (Windows network paths)
+  if (trimmed.startsWith("\\\\")) {
+    throw new BadRequestException(`${fieldName} must be a relative path`);
+  }
+
+  // Split on both separators to check segments for traversal BEFORE normalization
+  const rawSegments = trimmed.split(/[\/\\]/);
+  for (const seg of rawSegments) {
+    if (seg === ".." || seg === ".") {
+      throw new BadRequestException(`${fieldName} must not contain traversal patterns`);
+    }
+  }
+
+  // Normalize: separators to forward slash, collapse, trim trailing
+  let normalized = trimmed
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/\/$/g, "");
+
+  // Reject empty after normalization
+  if (normalized === "") return undefined;
+
+  // Check for Windows drive letters AFTER normalization
+  if (/^[A-Za-z]:/.test(normalized)) {
+    throw new BadRequestException(`${fieldName} must be a relative path`);
+  }
+
+  // Re-check for traversal segments after normalization (shouldn't happen due to early check)
+  // Only reject actual traversal patterns, not names containing dots like "file.txt"
+  const finalSegments = normalized.split("/");
+  for (const seg of finalSegments) {
+    if (seg === ".." || seg === ".") {
+      throw new BadRequestException(`${fieldName} must not contain traversal patterns`);
+    }
+  }
+
+  // Max length check
+  if (normalized.length > 255) {
+    throw new BadRequestException(`${fieldName} exceeds maximum length of 255 characters`);
+  }
+
+  return normalized;
+}
 
 @Injectable()
 export class StreamerService {
@@ -30,11 +118,49 @@ export class StreamerService {
   }
 
   async createWatchTarget(dto: CreateWatchTargetDto): Promise<WatchTarget> {
-    return await this.repository.createWatchTarget(dto);
+    // Validate and normalize recording_subdir if provided
+    const normalizedSubdir = validateRecordingSubdirInput(dto.recording_subdir, "recording_subdir");
+    const entity = { ...dto, recording_subdir: normalizedSubdir };
+    return await this.repository.createWatchTarget(entity);
   }
 
   async removeWatchTarget(id: string): Promise<void> {
     return await this.repository.removeWatchTarget(id);
+  }
+
+  /**
+   * Update only the recording_subdir field of a watch target.
+   * PATCH semantics: field must be present in payload.
+   * Empty string clears override. Missing field is no-op.
+   */
+  async updateRecordingSubdir(
+    id: string,
+    dto: PatchRecordingSubdirDto,
+  ): Promise<WatchTarget> {
+    // Check if field is present in payload
+    if (!Object.prototype.hasOwnProperty.call(dto, "recording_subdir")) {
+      // Field not present - no-op
+      return await this.repository.updateRecordingSubdir(id, undefined);
+    }
+
+    // Field is present - validate if non-empty
+    const rawValue = (dto as Record<string, unknown>).recording_subdir;
+
+    // Check if it's explicitly invalid (non-string passed)
+    if (typeof rawValue !== "string") {
+      throw new BadRequestException("recording_subdir must be a string");
+    }
+
+    const value = rawValue as string;
+
+    // Empty string -> clear override (pass to repository as-is)
+    if (value === "") {
+      return await this.repository.updateRecordingSubdir(id, "");
+    }
+
+    // Non-empty: validate and normalize
+    const normalized = validateRecordingSubdirInput(value, "recording_subdir");
+    return await this.repository.updateRecordingSubdir(id, normalized);
   }
 
   async findAllStreamer(): Promise<StreamerDto[]> {

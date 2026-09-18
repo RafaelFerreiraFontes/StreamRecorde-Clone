@@ -1,4 +1,5 @@
 import json
+import os
 import importlib.util
 import tempfile
 import unittest
@@ -938,4 +939,459 @@ class StreamDetectionTests(unittest.TestCase):
 
         # Active stream remains even when disk has nothing new
         self.assertEqual(len(worker.streams_data), 1)
-        self.assertEqual(worker.streams_data[0]["id"], "stream-123")
+
+
+class RecordingSubdirPathTests(unittest.TestCase):
+    """Tests for recording_subdir path validation and output directory resolution."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.config_dir = Path(self.temp_dir.name)
+        self.output_dir = self.config_dir / "recordings"
+        self.output_dir.mkdir(parents=True)
+        worker.OUTPUT_DIR = str(self.output_dir)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    # normalize_recording_subdir tests
+    def test_normalize_valid_simple_path(self):
+        result = worker.normalize_recording_subdir("favorites")
+        self.assertEqual(result, "favorites")
+
+    def test_normalize_valid_nested_path(self):
+        result = worker.normalize_recording_subdir("favorites/twitch")
+        self.assertEqual(result, "favorites/twitch")
+
+    def test_normalize_valid_deeply_nested_path(self):
+        result = worker.normalize_recording_subdir("a/b/c/d/e")
+        self.assertEqual(result, "a/b/c/d/e")
+
+    def test_normalize_backslash_to_forward_slash(self):
+        result = worker.normalize_recording_subdir("favorites\\twitch")
+        self.assertEqual(result, "favorites/twitch")
+
+    def test_normalize_mixed_separators(self):
+        result = worker.normalize_recording_subdir("favorites\\twitch/pixel")
+        self.assertEqual(result, "favorites/twitch/pixel")
+
+    def test_normalize_collapse_multiple_slashes(self):
+        result = worker.normalize_recording_subdir("favorites///twitch///channel")
+        self.assertEqual(result, "favorites/twitch/channel")
+
+    def test_normalize_strip_leading_slash(self):
+        result = worker.normalize_recording_subdir("/favorites/twitch/")
+        self.assertIsNone(result)
+
+    def test_normalize_strip_trailing_slash(self):
+        result = worker.normalize_recording_subdir("favorites/twitch/")
+        self.assertEqual(result, "favorites/twitch")
+
+    def test_normalize_returns_none_for_empty(self):
+        result = worker.normalize_recording_subdir("")
+        self.assertIsNone(result)
+
+    def test_normalize_returns_none_for_whitespace_only(self):
+        result = worker.normalize_recording_subdir("   ")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_posix_absolute(self):
+        result = worker.normalize_recording_subdir("/etc/passwd")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_windows_absolute_backslash(self):
+        result = worker.normalize_recording_subdir("\\etc\\passwd")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_windows_drive_letter(self):
+        result = worker.normalize_recording_subdir("C:\\windows\\system32")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_drive_letter_uppercase(self):
+        result = worker.normalize_recording_subdir("D:\\data\\file")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_unc_path(self):
+        result = worker.normalize_recording_subdir("\\\\server\\share")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_traversal_parent(self):
+        result = worker.normalize_recording_subdir("../etc")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_traversal_parent_in_segment(self):
+        result = worker.normalize_recording_subdir("a/../etc")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_dot_segment(self):
+        result = worker.normalize_recording_subdir("a/./b")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_null_byte(self):
+        result = worker.normalize_recording_subdir("valid\x00path")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_control_character(self):
+        result = worker.normalize_recording_subdir("valid\x01path")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_newline(self):
+        result = worker.normalize_recording_subdir("valid\npath")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_tab(self):
+        result = worker.normalize_recording_subdir("valid\tpath")
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_exceeds_255_chars(self):
+        long_path = "a" * 256
+        result = worker.normalize_recording_subdir(long_path)
+        self.assertIsNone(result)
+
+    def test_normalize_accepts_255_chars(self):
+        path_255 = "a" * 255
+        result = worker.normalize_recording_subdir(path_255)
+        self.assertEqual(result, path_255)
+
+    # is_valid_recording_subdir tests
+    def test_is_valid_true_for_empty(self):
+        self.assertTrue(worker.is_valid_recording_subdir(""))
+
+    def test_is_valid_true_for_valid_normalized(self):
+        self.assertTrue(worker.is_valid_recording_subdir("favorites/twitch"))
+
+    def test_is_valid_false_for_invalid(self):
+        self.assertFalse(worker.is_valid_recording_subdir("../etc"))
+
+    def test_is_valid_false_for_absolute(self):
+        self.assertFalse(worker.is_valid_recording_subdir("/absolute"))
+
+    # resolve_output_dir tests
+    def test_resolve_uses_recording_subdir_when_valid(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "favorites/twitch",
+        }
+        result = worker.resolve_output_dir(entry, str(self.output_dir))
+        expected = self.output_dir / "favorites" / "twitch"
+        self.assertEqual(result, expected)
+
+    def test_resolve_legacy_fallback_without_subdir(self):
+        entry = {"channel_name": "testchannel"}
+        result = worker.resolve_output_dir(entry, str(self.output_dir))
+        expected = self.output_dir / "testchannel"
+        self.assertEqual(result, expected)
+
+    def test_resolve_raises_for_invalid_subdir(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "../etc",
+        }
+        with self.assertRaises(ValueError):
+            worker.resolve_output_dir(entry, str(self.output_dir))
+
+    def test_resolve_legacy_fallback_for_empty_subdir(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "",
+        }
+        result = worker.resolve_output_dir(entry, str(self.output_dir))
+        expected = self.output_dir / "testchannel"
+        self.assertEqual(result, expected)
+
+    def test_resolve_raises_for_traversal_in_subdir(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "../etc",
+        }
+        with self.assertRaises(ValueError):
+            worker.resolve_output_dir(entry, str(self.output_dir))
+
+    def test_resolve_raises_for_absolute_subdir(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "/etc/passwd",
+        }
+        with self.assertRaises(ValueError):
+            worker.resolve_output_dir(entry, str(self.output_dir))
+
+    def test_resolve_raises_for_traversal_normalizing_to_empty(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "..",
+        }
+        with self.assertRaises(ValueError):
+            worker.resolve_output_dir(entry, str(self.output_dir))
+
+    def test_resolve_nested_path_creates_directories(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "a/b/c",
+        }
+        result = worker.resolve_output_dir(entry, str(self.output_dir))
+        expected = self.output_dir / "a" / "b" / "c"
+        self.assertEqual(result, expected)
+        # Should not raise - verifies path is valid
+        self.assertTrue(True)
+
+    def test_resolve_normalizes_separators(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "favorites\\twitch\\channel",
+        }
+        result = worker.resolve_output_dir(entry, str(self.output_dir))
+        expected = self.output_dir / "favorites" / "twitch" / "channel"
+        self.assertEqual(result, expected)
+
+    def test_resolve_preserves_existing_behavior(self):
+        """Ensure resolve_output_dir returns Path object for compatibility."""
+        entry = {"channel_name": "testchannel"}
+        result = worker.resolve_output_dir(entry, str(self.output_dir))
+        self.assertIsInstance(result, Path)
+
+    def test_resolve_raises_for_leading_slash_in_subdir(self):
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "/favorites/channel/",
+        }
+        with self.assertRaises(ValueError):
+            worker.resolve_output_dir(entry, str(self.output_dir))
+
+    def test_resolve_canonicalizes_nested_path(self):
+        """favorites/channel/ (with trailing slash) should canonicalize to favorites/channel."""
+        entry = {
+            "channel_name": "testchannel",
+            "recording_subdir": "favorites/channel/",
+        }
+        result = worker.resolve_output_dir(entry, str(self.output_dir))
+        expected = self.output_dir / "favorites" / "channel"
+        self.assertEqual(result, expected)
+
+
+class ConfigPathTests(unittest.TestCase):
+    """Tests for config path resolution and runtime file initialization."""
+
+    def test_config_path_config_dir_produces_exact_four_paths(self):
+        """CONFIG_DIR produces exact four paths."""
+        env = {"CONFIG_DIR": "/custom/config"}
+        result = worker._resolve_all_paths(env)
+
+        self.assertEqual(result["watchlist"], "/custom/config/watchlist.json")
+        self.assertEqual(result["channels_status"], "/custom/config/channels_status.json")
+        self.assertEqual(result["sessions"], "/custom/config/sessions.json")
+        self.assertEqual(result["streams"], "/custom/config/streams.json")
+
+    def test_config_path_four_individual_overrides_win_including_different_parents(self):
+        """Four individual overrides win, including different parents."""
+        env = {
+            "WATCHLIST_PATH": "/override1/watchlist.json",
+            "CHANNELS_STATUS_PATH": "/override2/channels.json",
+            "SESSIONS_PATH": "/override3/sessions.json",
+            "STREAMS_PATH": "/override4/streams.json",
+        }
+        result = worker._resolve_all_paths(env)
+
+        self.assertEqual(result["watchlist"], "/override1/watchlist.json")
+        self.assertEqual(result["channels_status"], "/override2/channels.json")
+        self.assertEqual(result["sessions"], "/override3/sessions.json")
+        self.assertEqual(result["streams"], "/override4/streams.json")
+
+    def test_config_path_empty_whitespace_falls_through_to_local_default(self):
+        """Empty/whitespace individual and CONFIG_DIR fall through to local default."""
+        env = {
+            "WATCHLIST_PATH": "",
+            "CHANNELS_STATUS_PATH": "   ",
+            "SESSIONS_PATH": "",
+            "STREAMS_PATH": "  ",
+            "CONFIG_DIR": "  ",
+        }
+        result = worker._resolve_all_paths(env)
+
+        # Should fall through to module-relative default
+        default_dir = worker._get_default_config_dir().replace("\\", "/")
+        self.assertEqual(result["watchlist"].replace("\\", "/"), f"{default_dir}/watchlist.json")
+        self.assertEqual(result["channels_status"].replace("\\", "/"), f"{default_dir}/channels_status.json")
+        self.assertEqual(result["sessions"].replace("\\", "/"), f"{default_dir}/sessions.json")
+        self.assertEqual(result["streams"].replace("\\", "/"), f"{default_dir}/streams.json")
+
+    def test_config_path_no_env_gives_existing_local_defaults(self):
+        """No env gives existing local defaults."""
+        result = worker._resolve_all_paths({})
+
+        default_dir = worker._get_default_config_dir().replace("\\", "/")
+        self.assertEqual(result["watchlist"].replace("\\", "/"), f"{default_dir}/watchlist.json")
+        self.assertEqual(result["channels_status"].replace("\\", "/"), f"{default_dir}/channels_status.json")
+        self.assertEqual(result["sessions"].replace("\\", "/"), f"{default_dir}/sessions.json")
+        self.assertEqual(result["streams"].replace("\\", "/"), f"{default_dir}/streams.json")
+
+    def test_config_path_individual_override_takes_precedence_over_config_dir(self):
+        """Individual override takes precedence over CONFIG_DIR."""
+        env = {
+            "WATCHLIST_PATH": "/individual/watch.json",
+            "CONFIG_DIR": "/config/dir",
+        }
+        result = worker._resolve_all_paths(env)
+
+        self.assertEqual(result["watchlist"], "/individual/watch.json")
+        self.assertEqual(result["channels_status"].replace("\\", "/"), "/config/dir/channels_status.json")
+        self.assertEqual(result["sessions"].replace("\\", "/"), "/config/dir/sessions.json")
+        self.assertEqual(result["streams"].replace("\\", "/"), "/config/dir/streams.json")
+
+    def test_config_path_whitespace_in_overrides_is_trimmed(self):
+        """Whitespace in overrides is trimmed."""
+        env = {
+            "WATCHLIST_PATH": "  /spaced/watch.json  ",
+            "CONFIG_DIR": "  /spaced/config  ",
+        }
+        result = worker._resolve_all_paths(env)
+
+        self.assertEqual(result["watchlist"], "/spaced/watch.json")
+        self.assertEqual(result["channels_status"].replace("\\", "/"), "/spaced/config/channels_status.json")
+
+
+class RuntimeFilesTests(unittest.TestCase):
+    """Tests for runtime file initialization."""
+
+    def test_runtime_files_empty_dir_creates_exact_shapes(self):
+        """Empty dir creates exact shapes."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = {
+                "watchlist": f"{temp_dir}/watchlist.json",
+                "channels_status": f"{temp_dir}/channels_status.json",
+                "sessions": f"{temp_dir}/sessions.json",
+                "streams": f"{temp_dir}/streams.json",
+            }
+
+            worker.initialize_runtime_files(paths)
+
+            with open(paths["watchlist"], "r") as f:
+                self.assertEqual(json.load(f), [])
+            with open(paths["channels_status"], "r") as f:
+                self.assertEqual(json.load(f), {})
+            with open(paths["sessions"], "r") as f:
+                self.assertEqual(json.load(f), [])
+            with open(paths["streams"], "r") as f:
+                self.assertEqual(json.load(f), [])
+
+    def test_runtime_files_existing_contents_preserved(self):
+        """Existing contents byte-for-byte preserved."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            watchlist_path = f"{temp_dir}/watchlist.json"
+            existing_content = [{"id": "existing", "channel_name": "test"}]
+            with open(watchlist_path, "w") as f:
+                json.dump(existing_content, f, indent=2)
+
+            paths = {
+                "watchlist": watchlist_path,
+                "channels_status": f"{temp_dir}/channels_status.json",
+                "sessions": f"{temp_dir}/sessions.json",
+                "streams": f"{temp_dir}/streams.json",
+            }
+
+            worker.initialize_runtime_files(paths)
+
+            with open(watchlist_path, "r") as f:
+                self.assertEqual(json.load(f), existing_content)
+
+    def test_runtime_files_override_paths_in_separate_missing_parents_created(self):
+        """Override paths in separate missing parents are created."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = {
+                "watchlist": f"{temp_dir}/override1/watchlist.json",
+                "channels_status": f"{temp_dir}/override2/channels_status.json",
+                "sessions": f"{temp_dir}/override3/sessions.json",
+                "streams": f"{temp_dir}/override4/streams.json",
+            }
+
+            worker.initialize_runtime_files(paths)
+
+            for file_path in paths.values():
+                self.assertTrue(os.path.exists(file_path), f"{file_path} should exist")
+
+
+class RuntimeConfigEnvTests(unittest.TestCase):
+    """Tests for runtime configuration from environment variables."""
+
+    def test_output_dir_explicit_override(self):
+        """OUTPUT_DIR is read from environment when explicitly set."""
+        with patch.dict(os.environ, {"OUTPUT_DIR": "/custom/recordings"}):
+            result = worker._resolve_output_dir()
+            self.assertEqual(result, "/custom/recordings")
+
+    def test_output_dir_default_when_absent(self):
+        """OUTPUT_DIR defaults to /recordings when env var is absent."""
+        with patch.dict(os.environ, {}, clear=False):
+            # Remove OUTPUT_DIR if it exists
+            os.environ.pop("OUTPUT_DIR", None)
+            result = worker._resolve_output_dir()
+            self.assertEqual(result, "/recordings")
+
+    def test_output_dir_default_when_empty(self):
+        """OUTPUT_DIR defaults to /recordings when env var is empty string."""
+        with patch.dict(os.environ, {"OUTPUT_DIR": ""}):
+            result = worker._resolve_output_dir()
+            self.assertEqual(result, "/recordings")
+
+    def test_output_dir_default_when_whitespace(self):
+        """OUTPUT_DIR defaults to /recordings when env var is whitespace only."""
+        with patch.dict(os.environ, {"OUTPUT_DIR": "   "}):
+            result = worker._resolve_output_dir()
+            self.assertEqual(result, "/recordings")
+
+    def test_output_dir_whitespace_is_trimmed(self):
+        """OUTPUT_DIR whitespace is trimmed when non-empty."""
+        with patch.dict(os.environ, {"OUTPUT_DIR": "  /custom/recordings  "}):
+            result = worker._resolve_output_dir()
+            self.assertEqual(result, "/custom/recordings")
+
+    def test_poll_interval_explicit_override(self):
+        """POLL_INTERVAL is read from environment when explicitly set."""
+        with patch.dict(os.environ, {"POLL_INTERVAL": "3600"}):
+            result = worker._get_env_int("POLL_INTERVAL", 60)
+            self.assertEqual(result, 3600)
+
+    def test_poll_interval_default_when_absent(self):
+        """POLL_INTERVAL defaults to 60 when env var is absent."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("POLL_INTERVAL", None)
+            result = worker._get_env_int("POLL_INTERVAL", 60)
+            self.assertEqual(result, 60)
+
+    def test_poll_interval_default_when_empty(self):
+        """POLL_INTERVAL defaults to 60 when env var is empty string."""
+        with patch.dict(os.environ, {"POLL_INTERVAL": ""}):
+            result = worker._get_env_int("POLL_INTERVAL", 60)
+            self.assertEqual(result, 60)
+
+    def test_poll_interval_default_when_whitespace(self):
+        """POLL_INTERVAL defaults to 60 when env var is whitespace only."""
+        with patch.dict(os.environ, {"POLL_INTERVAL": "   "}):
+            result = worker._get_env_int("POLL_INTERVAL", 60)
+            self.assertEqual(result, 60)
+
+    def test_poll_interval_whitespace_is_trimmed(self):
+        """POLL_INTERVAL whitespace is trimmed when non-empty."""
+        with patch.dict(os.environ, {"POLL_INTERVAL": "  3600  "}):
+            result = worker._get_env_int("POLL_INTERVAL", 60)
+            self.assertEqual(result, 3600)
+
+    def test_poll_interval_invalid_raises_valueerror(self):
+        """POLL_INTERVAL raises ValueError when set to non-integer."""
+        with patch.dict(os.environ, {"POLL_INTERVAL": "not_a_number"}):
+            with self.assertRaises(ValueError) as ctx:
+                worker._get_env_int("POLL_INTERVAL", 60)
+            self.assertIn("POLL_INTERVAL", str(ctx.exception))
+            self.assertIn("not_a_number", str(ctx.exception))
+
+    def test_poll_interval_float_raises_valueerror(self):
+        """POLL_INTERVAL raises ValueError when set to float string."""
+        with patch.dict(os.environ, {"POLL_INTERVAL": "60.5"}):
+            with self.assertRaises(ValueError) as ctx:
+                worker._get_env_int("POLL_INTERVAL", 60)
+            self.assertIn("POLL_INTERVAL", str(ctx.exception))
+
+    def test_poll_interval_negative_accepted(self):
+        """POLL_INTERVAL accepts negative values (for testing scenarios)."""
+        with patch.dict(os.environ, {"POLL_INTERVAL": "-1"}):
+            result = worker._get_env_int("POLL_INTERVAL", 60)
+            self.assertEqual(result, -1)

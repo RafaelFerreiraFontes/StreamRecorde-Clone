@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from typing import Optional
 
 try:
     from worker.json_adapters import (
@@ -44,15 +45,312 @@ except ModuleNotFoundError:
         WatchTargetJsonAdapter,
     )
 
-CONFIG_PATH = os.environ.get("WATCHLIST_PATH", "/app/config/watchlist.json")
-CHANNELS_STATUS_PATH = os.environ.get(
-    "CHANNELS_STATUS_PATH", "/app/config/channels_status.json"
-)
-SESSIONS_PATH = os.environ.get("SESSIONS_PATH", "/app/config/sessions.json")
-STREAMS_PATH = os.environ.get("STREAMS_PATH", "/app/config/streams.json")
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/recordings")
-POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "60"))  # seconds
+OUTPUT_DIR = "/recordings"
+POLL_INTERVAL = 60  # seconds
 CHECK_TIMEOUT = 20  # seconds for the streamlink probe not to freeze the loop
+
+
+def _get_module_dir():
+    """Get the directory containing this worker module."""
+    return pathlib.Path(__file__).parent.resolve()
+
+
+def _get_default_config_dir():
+    """Default config directory based on module location."""
+    return str(_get_module_dir() / "config")
+
+
+def _is_non_empty(val: Optional[str]) -> bool:
+    """Check if value is non-empty when trimmed."""
+    return val is not None and val.strip() != ""
+
+
+def _get_env_int(name: str, default: int) -> int:
+    """Read an integer environment variable with a default fallback.
+
+    Args:
+        name: Environment variable name.
+        default: Default value when env var is absent, empty, or whitespace.
+
+    Returns:
+        The integer value from env or the default.
+
+    Raises:
+        ValueError: If the env var is set but not a valid integer.
+    """
+    raw = os.environ.get(name)
+    if not _is_non_empty(raw):
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        raise ValueError(
+            f"Environment variable {name} must be an integer, got: {raw!r}"
+        )
+
+
+def _resolve_output_dir() -> str:
+    """Resolve OUTPUT_DIR from environment or default."""
+    raw = os.environ.get("OUTPUT_DIR")
+    return raw.strip() if _is_non_empty(raw) else "/recordings"
+
+
+# Resolve runtime configuration from environment at module load time
+OUTPUT_DIR = _resolve_output_dir()
+POLL_INTERVAL = _get_env_int("POLL_INTERVAL", 60)
+
+
+def _resolve_all_paths(
+    env: Optional[dict] = None,
+) -> dict:
+    """Resolve all four config paths from an explicit env mapping.
+
+    Precedence for each path:
+      1. NON-EMPTY individual env var > NON-EMPTY CONFIG_DIR + filename > module-relative default
+
+    Args:
+        env: Explicit environment variable mapping. Defaults to os.environ.
+
+    Returns:
+        dict with keys: watchlist, channels_status, sessions, streams
+    """
+    if env is None:
+        env = os.environ
+
+    # Extract overrides from env
+    watchlist_override = env.get("WATCHLIST_PATH")
+    channels_status_override = env.get("CHANNELS_STATUS_PATH")
+    sessions_override = env.get("SESSIONS_PATH")
+    streams_override = env.get("STREAMS_PATH")
+    config_dir_override = env.get("CONFIG_DIR")
+
+    # Level 2: non-empty CONFIG_DIR
+    config_dir = _is_non_empty(config_dir_override) and config_dir_override.strip() or None
+
+    # Level 3: module-relative default
+    default_dir = _get_default_config_dir()
+
+    def resolve_single(filename: str, override: Optional[str]) -> str:
+        # Level 1: non-empty individual override wins
+        if _is_non_empty(override):
+            return override.strip()
+        # Level 2: non-empty CONFIG_DIR + filename
+        if config_dir:
+            # Normalize separators for cross-platform consistency
+            normalized_config_dir = config_dir.replace("\\", "/")
+            return normalized_config_dir + "/" + filename
+        # Level 3: module-relative default
+        return str(pathlib.Path(default_dir) / filename)
+
+    return {
+        "watchlist": resolve_single("watchlist.json", watchlist_override),
+        "channels_status": resolve_single("channels_status.json", channels_status_override),
+        "sessions": resolve_single("sessions.json", sessions_override),
+        "streams": resolve_single("streams.json", streams_override),
+    }
+
+
+# Initialize module-level paths using current env
+_initial_paths = _resolve_all_paths()
+CONFIG_PATH = _initial_paths["watchlist"]
+CHANNELS_STATUS_PATH = _initial_paths["channels_status"]
+SESSIONS_PATH = _initial_paths["sessions"]
+STREAMS_PATH = _initial_paths["streams"]
+
+
+def initialize_runtime_files(paths: dict) -> None:
+    """Initialize runtime files from resolved paths.
+
+    Creates each dirname(path) recursively and exclusive-creates missing files
+    with canonical JSON shapes. Never overwrites existing files.
+
+    Args:
+        paths: Pre-resolved config file paths dict with keys: watchlist, channels_status, sessions, streams
+
+    Raises:
+        OSError: If a file cannot be created (parent dir creation failure, etc.)
+    """
+    # Canonical shapes for each file
+    canonical_shapes = {
+        "watchlist": [],
+        "channels_status": {},
+        "sessions": [],
+        "streams": [],
+    }
+
+    for key in ("watchlist", "channels_status", "sessions", "streams"):
+        file_path_str = paths[key]
+        file_path = pathlib.Path(file_path_str)
+        parent_dir = file_path.parent
+
+        # Create parent directory recursively
+        parent_dir.mkdir(parents=True, exist_ok=True)
+
+        # Exclusive-create missing file (skip if already exists)
+        try:
+            with open(file_path, "x", encoding="utf-8") as f:
+                json.dump(canonical_shapes[key], f, indent=2)
+        except FileExistsError:
+            # File already exists - this is fine, skip
+            pass
+
+
+def ensure_runtime_dirs() -> None:
+    """Ensure OUTPUT_DIR and all four config paths are initialized at startup.
+
+    Call this once before entering the main loop.
+
+    Raises:
+        OSError: If OUTPUT_DIR or config files cannot be created
+    """
+    # Initialize OUTPUT_DIR
+    pathlib.Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+    log.info("Output directory ready: %s", OUTPUT_DIR)
+
+    # Get config directory and paths
+    paths = _resolve_all_paths()
+    config_dir = paths["watchlist"].rsplit("/", 1)[0]
+
+    # Initialize all four config files
+    initialize_runtime_files(paths)
+    log.info("Config directory initialized: %s", config_dir)
+    log.info("  watchlist: %s", paths["watchlist"])
+    log.info("  channels_status: %s", paths["channels_status"])
+    log.info("  sessions: %s", paths["sessions"])
+    log.info("  streams: %s", paths["streams"])
+
+
+def normalize_recording_subdir(input_str: str) -> str | None:
+    """
+    Normalize a recording_subdir input value.
+
+    Returns:
+        - Normalized path string for valid input
+        - None for invalid input (reject, do not fallback silently)
+
+    Security rules applied BEFORE normalization:
+    1. Reject null bytes and control characters
+    2. Reject absolute paths (leading / or \\)
+    3. Reject Windows drive letters (^[A-Za-z]:)
+    4. Reject UNC paths (starting with \\\\)
+    5. Reject traversal segments (., ..) in raw input
+
+    Then normalize:
+    - Convert separators to forward slash
+    - Collapse multiple consecutive slashes
+    - Remove leading/trailing slashes
+    - Max length 255
+    """
+    if not input_str:
+        return None
+
+    # Step 1: Reject null bytes and control characters in raw input (0x00-0x1f, 0x7f)
+    for c in input_str:
+        if ord(c) < 32 or ord(c) == 127:
+            return None
+
+    # Step 2: Check raw trimmed input for dangerous patterns
+    trimmed = input_str.strip()
+    if not trimmed:
+        return None
+
+    # Reject absolute paths BEFORE stripping
+    if trimmed.startswith("/") or trimmed.startswith("\\"):
+        return None
+    # Windows drive letter
+    if len(trimmed) >= 2 and trimmed[1] == ":" and trimmed[0].isalpha():
+        return None
+    # UNC path
+    if trimmed.startswith("\\\\"):
+        return None
+
+    # Check for traversal in raw segments
+    segments = trimmed.split("/")
+    for seg in segments:
+        # Also check backslash-split segments
+        for part in seg.split("\\"):
+            if part == ".." or part == ".":
+                return None
+
+    # Step 3: Normalize
+    normalized = trimmed.replace("\\", "/")
+    # Collapse multiple slashes
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    # Remove leading/trailing slashes
+    normalized = normalized.strip("/")
+
+    # Step 4: Final validation
+    if not normalized:
+        return None
+
+    # Check for remaining dangerous patterns after normalization
+    if ".." in normalized or "." in normalized:
+        return None
+
+    # Step 5: Length check
+    if len(normalized) > 255:
+        return None
+
+    return normalized
+
+
+def is_valid_recording_subdir(input_str: str) -> bool:
+    """
+    Validate recording_subdir strictly.
+    Returns True for valid normalized values or empty (legacy fallback).
+    """
+    if not input_str:
+        return True
+    result = normalize_recording_subdir(input_str)
+    return result is not None and result == input_str
+
+
+def resolve_output_dir(entry: dict, output_base: str) -> pathlib.Path:
+    """
+    Resolve the output directory for a recording.
+
+    If entry has a valid non-empty recording_subdir:
+        output_dir = output_base / recording_subdir
+    Otherwise:
+        output_dir = output_base / sanitize(channel_name)
+
+    Security: Validates the resolved path stays within output_base.
+    Raises ValueError for invalid custom paths.
+    """
+    recording_subdir = entry.get("recording_subdir")
+
+    if "recording_subdir" in entry:
+        # Field is present - must have a valid normalized value
+        if recording_subdir:
+            # Non-empty value provided - normalize and validate
+            normalized = normalize_recording_subdir(recording_subdir)
+            if normalized:
+                candidate = pathlib.Path(output_base) / normalized
+                try:
+                    # Resolve to absolute for strict containment check
+                    resolved = candidate.resolve()
+                    base_resolved = pathlib.Path(output_base).resolve()
+                    # Verify strict containment
+                    resolved.relative_to(base_resolved)
+                    return candidate
+                except (ValueError, OSError):
+                    # Not contained or resolution failed - reject explicitly
+                    raise ValueError(
+                        f"Invalid recording_subdir '{recording_subdir}': must be a relative path"
+                    )
+            else:
+                # Value present but failed normalization - raise, do not fallback
+                raise ValueError(
+                    f"Invalid recording_subdir '{recording_subdir}': must be a relative path"
+                )
+        # Empty/whitespace value - use legacy fallback
+
+    # Legacy fallback: use sanitized channel name
+    channel_name = str(entry.get("channel_name") or "unknown-channel")
+    safe_name = sanitize(channel_name)
+    return pathlib.Path(output_base) / safe_name
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -238,7 +536,7 @@ def is_live(url: str) -> bool:
         data = json.loads(result.stdout)
         return bool(data.get("streams"))
     except Exception as e:
-        log.warning("Erro ao checar status de %s: %s", url, e)
+        log.warning("Error checking status of %s: %s", url, e)
         return False
 
 
@@ -256,7 +554,9 @@ def start_recording(entry: dict, stream_id: str | None = None):
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = sanitize(channel_name)
-    out_dir = pathlib.Path(OUTPUT_DIR) / safe_name
+
+    # Resolve output directory: custom subdir or legacy fallback
+    out_dir = resolve_output_dir(entry, OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{safe_name}_{session_id}_{timestamp}.mp4"
 
@@ -273,7 +573,7 @@ def start_recording(entry: dict, stream_id: str | None = None):
         str(out_path),
     ]
 
-    log.info("[%s] Live detectada! Gravando em %s", channel_name, out_path)
+    log.info("[%s] Live detected! Recording to %s", channel_name, out_path)
     process = subprocess.Popen(
         cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
     )
@@ -369,7 +669,7 @@ def monitor_recording(id: str):
         )
 
         if recording_index is None:
-            log.warning("Sessão em aberto não encontrada para o canal %s", id)
+            log.warning("Open session not found for channel %s", id)
             return
 
         channels_status[id]["state"] = "finished" if ok else "error"
@@ -385,7 +685,7 @@ def monitor_recording(id: str):
         save_recordings()
 
     log.info(
-        "[%s] Gravação finalizada (%s) -> %s",
+        "[%s] Recording finished (%s) -> %s",
         info["channel_name"],
         channels_status[id]["state"],
         info["output_file"],
@@ -402,38 +702,38 @@ def poll_loop():
                 reload_channels_status_preserving_active()
         except FileNotFoundError:
             log.warning(
-                "Channels status não encontrado em %s. Aguardando...",
+                "Missing channels_status at %s. Waiting...",
                 CHANNELS_STATUS_PATH,
             )
             with lock:
                 preserve_active_channel_status()
         except Exception as e:
-            log.error("Erro ao ler channels status: %s", e)
+            log.error("Failed to read channels_status: %s", e)
             with lock:
                 preserve_active_channel_status()
 
         try:
             watchlist = load_watchlist()
         except FileNotFoundError:
-            log.warning("Watchlist não encontrada em %s. Aguardando...", CONFIG_PATH)
+            log.warning("Missing watchlist at %s. Waiting...", CONFIG_PATH)
             watchlist = []
         except Exception as e:
-            log.error("Erro ao ler watchlist: %s", e)
+            log.error("Failed to read watchlist: %s", e)
             watchlist = []
 
         try:
             with lock:
                 reload_recordings_preserving_active()
         except FileNotFoundError:
-            log.warning("Sessões não encontradas em %s. Aguardando...", SESSIONS_PATH)
+            log.warning("Missing sessions at %s. Waiting...", SESSIONS_PATH)
         except Exception as e:
-            log.error("Erro ao ler sessões: %s", e)
+            log.error("Failed to read sessions: %s", e)
 
         try:
             with lock:
                 reload_streams_preserving_active()
         except Exception as e:
-            log.error("Erro ao ler streams: %s", e)
+            log.error("Failed to read streams: %s", e)
 
         try:
             watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
@@ -447,7 +747,7 @@ def poll_loop():
             platform = entry.get("platform")
 
             if url is None or channel_name is None or id is None or platform is None:
-                log.warning("Entrada inválida na watchlist: %s", entry)
+                log.warning("Invalid watchlist entry: %s", entry)
                 continue
 
             try:
@@ -463,7 +763,7 @@ def poll_loop():
                         },
                     )
 
-                log.info("[%s] Verificando status...", channel_name)
+                log.info("[%s] Checking status...", channel_name)
 
                 if is_live(url):
                     stream_id = None
@@ -481,7 +781,7 @@ def poll_loop():
                         finalize_stream(id)
                     save_status()
             except Exception as e:
-                log.warning("Erro ao verificar status do canal %s: %s", channel_name, e)
+                log.warning("Error checking channel status %s: %s", channel_name, e)
                 continue
 
             try:
@@ -495,7 +795,7 @@ def poll_loop():
                     watchlist = load_watchlist()
                     continue
             except Exception as e:
-                log.warning("Erro ao verificar watchlist: %s", e)
+                log.warning("Error checking watchlist: %s", e)
                 continue
 
         time.sleep(POLL_INTERVAL)
@@ -522,7 +822,7 @@ def _wait_for_process(proc, timeout_sec=5):
 
 
 def handle_shutdown(signum, frame):
-    log.info("Encerrando worker... finalizando gravações em andamento.")
+    log.info("Shutting down worker... finishing ongoing recordings.")
 
     with lock:
         # Snapshot active processes before terminating
@@ -563,5 +863,7 @@ def handle_shutdown(signum, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_shutdown)
     signal.signal(signal.SIGINT, handle_shutdown)
-    log.info("Worker iniciado. Poll interval: %ss", POLL_INTERVAL)
+    # Initialize runtime directories before entering the main loop
+    ensure_runtime_dirs()
+    log.info("Worker started. Poll interval: %ss", POLL_INTERVAL)
     poll_loop()

@@ -41,6 +41,7 @@ async function proxy(
   const writable =
     resource === "watch-targets" &&
     ((request.method === "POST" && path.length === 1) ||
+      (request.method === "PATCH" && path.length === 2) ||
       (request.method === "DELETE" && path.length === 2));
   if (
     !(request.method === "GET" ? readable : writable) ||
@@ -77,7 +78,7 @@ async function proxy(
       cache: "no-store",
       redirect: "error",
       headers: { "Content-Type": "application/json" },
-      body: request.method === "POST" ? await request.text() : undefined,
+      body: ["POST", "PATCH"].includes(request.method) ? await request.text() : undefined,
       signal: AbortSignal.timeout(10000),
     });
     return new Response(
@@ -102,4 +103,4 @@ async function proxy(
     );
   }
 }
-export { proxy as GET, proxy as POST, proxy as DELETE };
+export { proxy as GET, proxy as POST, proxy as PATCH, proxy as DELETE };

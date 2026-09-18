@@ -13,6 +13,8 @@ export interface WatchTarget {
   quality: string;
   enabled: boolean;
   state: RecordingState;
+  /** Optional relative subdirectory for recordings. */
+  recording_subdir?: string;
 }
 export interface Stream {
   id: string;

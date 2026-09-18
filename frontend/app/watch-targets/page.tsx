@@ -8,29 +8,40 @@ import {
   type WatchTarget,
 } from "@/lib/types";
 import { Badge, Empty, Json, ResourceStatus, Table } from "@/components/ui";
+
+type EditingTarget = { id: string; recording_subdir?: string } | null;
+
 export default function WatchTargets() {
   const { snapshot, afterMutation } = useDashboard();
   const [showForm, setShowForm] = useState(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
+  const [editValue, setEditValue] = useState("");
   const targets = snapshot["watch-targets"].data;
+
   async function create(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
-    const payload = Object.fromEntries(
-      ["creator_id", "channel_name", "platform", "url", "quality"].map((k) => [
-        k,
-        String(values.get(k) || "").trim(),
-      ]),
-    ) as CreateWatchTarget;
+    const payload: Record<string, string> = {};
+    for (const k of ["creator_id", "channel_name", "platform", "url", "quality"]) {
+      const v = String(values.get(k) || "").trim();
+      if (!v) {
+        setError(`${k} is required.`);
+        return;
+      }
+      payload[k] = v;
+    }
+    // Include recording_subdir if provided
+    const subdir = String(values.get("recording_subdir") || "").trim();
+    if (subdir) {
+      payload.recording_subdir = subdir;
+    }
     setError("");
     setMessage("");
-    if (!payload.creator_id || !payload.channel_name) {
-      setError("Creator and channel name must contain text.");
-      return;
-    }
+
     try {
       const url = new URL(payload.url);
       if (
@@ -43,6 +54,7 @@ export default function WatchTargets() {
       setError("Enter a valid HTTP or HTTPS channel URL without credentials.");
       return;
     }
+
     setPending(true);
     try {
       await api<WatchTarget>("/watch-targets", {
@@ -59,6 +71,7 @@ export default function WatchTargets() {
       setPending(false);
     }
   }
+
   async function remove(target: WatchTarget) {
     if (
       !window.confirm(
@@ -81,6 +94,39 @@ export default function WatchTargets() {
       setPending(false);
     }
   }
+
+  function startEdit(target: WatchTarget) {
+    setEditingTarget({ id: target.id, recording_subdir: target.recording_subdir });
+    setEditValue(target.recording_subdir ?? "");
+  }
+
+  function cancelEdit() {
+    setEditingTarget(null);
+    setEditValue("");
+  }
+
+  async function saveEdit() {
+    if (!editingTarget) return;
+    setPending(true);
+    setError("");
+    setMessage("");
+    try {
+      // Empty string clears the override; undefined would be no-op
+      await api(`/watch-targets/${encodeURIComponent(editingTarget.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ recording_subdir: editValue }),
+      });
+      setMessage("Recording folder updated.");
+      setEditingTarget(null);
+      setEditValue("");
+      await afterMutation();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
     <>
       <div className="page-heading">
@@ -168,6 +214,18 @@ export default function WatchTargets() {
                   maxLength={2048}
                 />
               </label>
+              <label className="full">
+                Recording Folder
+                <input
+                  name="recording_subdir"
+                  placeholder="Relative path (e.g. twitch/favorites)"
+                  maxLength={255}
+                />
+                <span className="hint">
+                  Optional. Path relative to the server's recordings root. Leave
+                  empty to use the default (channel name).
+                </span>
+              </label>
             </div>
             <button className="primary" disabled={pending}>
               {pending ? "Saving…" : "Create target"}
@@ -189,8 +247,8 @@ export default function WatchTargets() {
               "Creator",
               "Platform",
               "Quality",
+              "Recording Folder",
               "State",
-              "URL",
               "Actions",
             ]}
           >
@@ -209,10 +267,49 @@ export default function WatchTargets() {
                   <code>{t.quality}</code>
                 </td>
                 <td>
-                  <Badge state={t.state} />
+                  {editingTarget?.id === t.id ? (
+                    <div className="edit-subdir">
+                      <input
+                        type="text"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        placeholder="Relative path"
+                        maxLength={255}
+                        disabled={pending}
+                      />
+                      <button
+                        className="primary small"
+                        onClick={saveEdit}
+                        disabled={pending}
+                      >
+                        Save
+                      </button>
+                      <button
+                        className="secondary small"
+                        onClick={cancelEdit}
+                        disabled={pending}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className={t.recording_subdir ? "path" : "muted"}>
+                        {t.recording_subdir || "—"}
+                      </span>
+                      <button
+                        className="secondary small inline"
+                        onClick={() => startEdit(t)}
+                        disabled={pending}
+                        title="Edit recording folder"
+                      >
+                        Edit
+                      </button>
+                    </>
+                  )}
                 </td>
                 <td>
-                  <code className="path">{t.url}</code>
+                  <Badge state={t.state} />
                 </td>
                 <td>
                   <button

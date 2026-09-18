@@ -36,6 +36,12 @@ export interface WatchTarget {
   quality: string;
   enabled: boolean;
   state: RecordingState;
+  /**
+   * Optional relative subdirectory for recordings.
+   * When set, recordings go to OUTPUT_DIR/recording_subdir.
+   * When absent/empty, recordings go to OUTPUT_DIR/sanitize(channel_name).
+   */
+  recording_subdir?: string;
 }
 
 export interface Stream {

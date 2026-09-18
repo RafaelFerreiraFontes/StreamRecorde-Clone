@@ -6,7 +6,7 @@
  * operations only; it does not synchronize the separate Python worker process.
  */
 
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
@@ -19,6 +19,8 @@ import {
   RuntimeStatusJsonAdapter,
   StreamJsonAdapter,
   WatchTargetJsonAdapter,
+  resolveAllConfigPaths,
+  resolveConfigPath,
 } from "./json-compatibility.adapters";
 
 type WatchlistEntries = Awaited<ReturnType<typeof WatchTargetJsonAdapter.read>>;
@@ -30,51 +32,45 @@ interface SessionWithChannel extends SessionDto {
   channel_name: string | null;
 }
 
-// ─── Caminhos dos arquivos ────────────────────────────────────────────────────
+// ─── Path resolution using shared resolver ────────────────────────────────────
 
-const getConfigDir = (): string =>
-  process.env.CONFIG_DIR ?? path.join(process.cwd(), "..", "worker", "config");
+/**
+ * Resolve all config paths for the repository.
+ * Uses NON-EMPTY individual > NON-EMPTY CONFIG_DIR > local default precedence.
+ */
+function getConfigPaths() {
+  return resolveAllConfigPaths(process.env);
+}
 
-const getWatchlistPath = (): string =>
-  process.env.WATCHLIST_PATH ?? path.join(getConfigDir(), "watchlist.json");
-
-const getChannelsStatusPath = (): string =>
-  process.env.CHANNELS_STATUS_PATH ??
-  path.join(getConfigDir(), "channels_status.json");
-
-const getSessionsPath = (): string =>
-  process.env.SESSIONS_PATH ?? path.join(getConfigDir(), "sessions.json");
-
-const getStreamsPath = (): string =>
-  process.env.STREAMS_PATH ?? path.join(getConfigDir(), "streams.json");
-
-// ─── Repository ──────────────────────────────────────────────────────────────
+// ── Repository I/O helpers using resolved paths ───────────────────────────────
 
 @Injectable()
 export class StreamsRepository {
   /** Serializes read-modify-write operations inside this Node process only. */
   private readonly mutex = new Mutex();
 
-  // ── helpers de I/O ──────────────────────────────────────────────────────────
+  private getPaths() {
+    return getConfigPaths();
+  }
 
   private async readWatchlist(): Promise<WatchlistEntries> {
-    return WatchTargetJsonAdapter.read(getWatchlistPath());
+    return WatchTargetJsonAdapter.read(this.getPaths().watchlist);
   }
 
   private async writeWatchlist(data: WatchlistEntries): Promise<void> {
-    await WatchTargetJsonAdapter.write(getWatchlistPath(), data);
+    await WatchTargetJsonAdapter.write(this.getPaths().watchlist, data);
   }
 
   private async readChannelsStatus(): Promise<RuntimeStatuses> {
-    return RuntimeStatusJsonAdapter.read(getChannelsStatusPath());
+    return RuntimeStatusJsonAdapter.read(this.getPaths().channels_status);
   }
 
   private async readSessions(): Promise<Recording[]> {
-    return RecordingJsonAdapter.read(getSessionsPath());
+    return RecordingJsonAdapter.read(this.getPaths().sessions);
   }
 
   private async readStreams(): Promise<Stream[]> {
-    return StreamJsonAdapter.read(getStreamsPath());
+    return StreamJsonAdapter.read(this.getPaths().streams);
   }
 
   // ── merge helper ────────────────────────────────────────────────────────────
@@ -166,7 +162,7 @@ export class StreamsRepository {
       );
 
       if (!entry) {
-        throw new NotFoundException(`Creator ${creatorId} não encontrado`);
+        throw new NotFoundException(`Creator ${creatorId} not found`);
       }
 
       return this.toCreator(entry);
@@ -226,6 +222,7 @@ export class StreamsRepository {
         quality: dto.quality,
         enabled: true,
         state: "idle",
+        recording_subdir: dto.recording_subdir,
       };
 
       watchlist.push(WatchTargetJsonAdapter.fromDomain(watchTarget));
@@ -249,7 +246,47 @@ export class StreamsRepository {
   }
 
   /**
-   * Retorna todos os streamers da watchlist com o estado atual de cada um.
+   * Update only the recording_subdir field of a watch target.
+   * PATCH semantics: field must be present in payload.
+   * Empty string clears the override (restores legacy fallback).
+   * Returns the updated watch target.
+   *
+   * Note: Invalid values (absolute, traversal, etc.) should be rejected at the
+   * controller/DTO level. Repository handles the delete (undefined) vs clear (empty).
+   */
+  async updateRecordingSubdir(
+    id: string,
+    recordingSubdir: string | undefined,
+  ): Promise<WatchTarget> {
+    return this.mutex.runExclusive(async () => {
+      const [watchlist, status] = await Promise.all([
+        this.readWatchlist(),
+        this.readChannelsStatus(),
+      ]);
+      const index = watchlist.findIndex((entry) => entry.id === id);
+      if (index === -1)
+        throw new NotFoundException(`Watch target ${id} not found`);
+
+      const entry = watchlist[index];
+      // Empty string -> delete the field (clear override)
+      // Undefined -> no-op (field not present in payload)
+      // Non-empty string -> set the normalized value
+      if (recordingSubdir !== undefined) {
+        if (recordingSubdir === "") {
+          // Clear the override - delete the property
+          delete entry.recording_subdir;
+        } else {
+          entry.recording_subdir = recordingSubdir;
+        }
+      }
+      // If undefined, keep existing value (no-op)
+      await this.writeWatchlist(watchlist);
+      return this.toWatchTarget(entry, status);
+    });
+  }
+
+  /**
+   * Returns all streamers from the watchlist with current state of each.
    */
   async findAllStreamer(): Promise<StreamerDto[]> {
     return this.mutex.runExclusive(async () => {
@@ -262,8 +299,8 @@ export class StreamsRepository {
   }
 
   /**
-   * Retorna um streamer pelo id (watchlist + status merged).
-   * Lança NotFoundException se não existir na watchlist.
+   * Returns a streamer by id (watchlist + status merged).
+   * Throws NotFoundException if not found in watchlist.
    */
   async findOneStreamer(id: string): Promise<StreamerDto> {
     return this.mutex.runExclusive(async () => {
@@ -272,13 +309,13 @@ export class StreamsRepository {
         this.readChannelsStatus(),
       ]);
       const entry = watchlist.find((e) => e.id === id);
-      if (!entry) throw new NotFoundException(`Streamer ${id} não encontrado`);
+      if (!entry) throw new NotFoundException(`Streamer ${id} not found`);
       return this.mergeStreamer(entry, status);
     });
   }
 
   /**
-   * Cria uma nova entrada na watchlist (gera uuid v4) e persiste.
+   * Creates a new entry in the watchlist (generates uuid v4) and persists.
    */
   async createStreamer(dto: CreateStreamerDto): Promise<StreamerDto> {
     return this.mutex.runExclusive(async () => {
@@ -304,15 +341,15 @@ export class StreamsRepository {
   }
 
   /**
-   * Remove um streamer da watchlist pelo id e persiste.
-   * Lança NotFoundException se não existir.
+   * Removes a streamer from the watchlist by id and persists.
+   * Throws NotFoundException if not found.
    */
   async removeStreamer(id: string): Promise<void> {
     return this.mutex.runExclusive(async () => {
       const watchlist = await this.readWatchlist();
       const idx = watchlist.findIndex((e) => e.id === id);
       if (idx === -1)
-        throw new NotFoundException(`Streamer ${id} não encontrado`);
+        throw new NotFoundException(`Streamer ${id} not found`);
       watchlist.splice(idx, 1);
       await this.writeWatchlist(watchlist);
     });
@@ -333,7 +370,7 @@ export class StreamsRepository {
       const sessions = await this.readSessions();
       const session = sessions.find((entry) => entry.session_id === sessionId);
       if (!session)
-        throw new NotFoundException(`Recording ${sessionId} não encontrado`);
+        throw new NotFoundException(`Recording ${sessionId} not found`);
       return session;
     });
   }
@@ -353,7 +390,7 @@ export class StreamsRepository {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Retorna todas as sessões de gravação enriquecidas com info do canal.
+   * Returns all recording sessions enriched with channel info.
    */
   async findAllSessions(): Promise<SessionDto[]> {
     const [recordings, status] = await Promise.all([
@@ -364,8 +401,8 @@ export class StreamsRepository {
   }
 
   /**
-   * Retorna uma sessão pelo session_id.
-   * Lança NotFoundException se não existir.
+   * Returns a session by session_id.
+   * Throws NotFoundException if not found.
    */
   async findOneSession(sessionId: string): Promise<SessionDto> {
     const [recording, status] = await Promise.all([
@@ -376,7 +413,7 @@ export class StreamsRepository {
   }
 
   /**
-   * Retorna todas as sessões de um canal específico (channel_id).
+   * Returns all sessions for a specific channel (channel_id).
    */
   async findSessionsByChannel(channelId: string): Promise<SessionDto[]> {
     const [recordings, status] = await Promise.all([
@@ -390,7 +427,7 @@ export class StreamsRepository {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Retorna todos os streams.
+   * Returns all streams.
    */
   async findAllStreams(): Promise<Stream[]> {
     return this.mutex.runExclusive(async () => {
@@ -399,7 +436,7 @@ export class StreamsRepository {
   }
 
   /**
-   * Retorna o stream ativo (não finalizado) para um watch target.
+   * Returns the active (not finalized) stream for a watch target.
    */
   async findActiveStreamByWatchTarget(
     watchTargetId: string,
@@ -415,7 +452,7 @@ export class StreamsRepository {
   }
 
   /**
-   * Retorna todos os streams finalizados para um watch target dentro de uma janela de tempo.
+   * Returns all finalized streams for a watch target within a time window.
    */
   async findStreamsByWatchTarget(
     watchTargetId: string,

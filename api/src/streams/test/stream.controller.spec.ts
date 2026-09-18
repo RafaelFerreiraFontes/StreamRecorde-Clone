@@ -17,9 +17,10 @@ import {
   legacyWatchlist,
 } from "./fixtures/legacy-data";
 
+const originalEnv = { ...process.env };
+
 describe("StreamController", () => {
   let controller: StreamController;
-  const originalEnv = { ...process.env };
 
   beforeEach(async () => {
     const tempDir = await fs.mkdtemp(
@@ -793,5 +794,339 @@ describe("JSON compatibility adapters", () => {
     expect(
       (await fs.readdir(tempDir)).filter((name) => name.endsWith(".tmp")),
     ).toEqual([]);
+  });
+});
+
+describe("recording_subdir path validation", () => {
+  let tempDir: string;
+  let controller: StreamController;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "recording-subdir-"));
+    process.env.CONFIG_DIR = tempDir;
+    process.env.WATCHLIST_PATH = path.join(tempDir, "watchlist.json");
+    process.env.CHANNELS_STATUS_PATH = path.join(tempDir, "channels_status.json");
+    process.env.SESSIONS_PATH = path.join(tempDir, "sessions.json");
+    process.env.STREAMS_PATH = path.join(tempDir, "streams.json");
+    await fs.writeFile(process.env.WATCHLIST_PATH, "[]", "utf-8");
+    await fs.writeFile(process.env.CHANNELS_STATUS_PATH, "{}", "utf-8");
+    await fs.writeFile(process.env.SESSIONS_PATH, "[]", "utf-8");
+    await fs.writeFile(process.env.STREAMS_PATH, "[]", "utf-8");
+
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [StreamController],
+      providers: [
+        StreamsRepository,
+        StreamerService,
+        SessionService,
+        StreamService,
+        RecordingService,
+      ],
+    }).compile();
+
+    controller = module.get<StreamController>(StreamController);
+  });
+
+  afterEach(async () => {
+    process.env = { ...originalEnv };
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("should create watch target with recording_subdir and persist normalized", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+      recording_subdir: "favorites/twitch",
+    });
+
+    expect(target.recording_subdir).toBe("favorites/twitch");
+
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    const persisted = await WatchTargetJsonAdapter.read(watchlistPath);
+    expect(persisted[0].recording_subdir).toBe("favorites/twitch");
+  });
+
+  it("should create watch target with simple nested path", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+      recording_subdir: "a/b/c",
+    });
+
+    expect(target.recording_subdir).toBe("a/b/c");
+  });
+
+  it("should persist watch target without recording_subdir field when absent", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+    });
+
+    expect(target.recording_subdir).toBeUndefined();
+
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    const persisted = await WatchTargetJsonAdapter.read(watchlistPath);
+    expect(persisted[0]).not.toHaveProperty("recording_subdir");
+  });
+
+  it("should reject POSIX absolute path /etc/passwd", async () => {
+    await expect(
+      controller.createWatchTarget({
+        creator_id: "Creator1",
+        channel_name: "channel1",
+        platform: "twitch",
+        url: "https://twitch.tv/channel1",
+        quality: "best",
+        recording_subdir: "/etc/passwd",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should reject traversal ../etc", async () => {
+    await expect(
+      controller.createWatchTarget({
+        creator_id: "Creator1",
+        channel_name: "channel1",
+        platform: "twitch",
+        url: "https://twitch.tv/channel1",
+        quality: "best",
+        recording_subdir: "../etc",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should reject traversal with ./", async () => {
+    await expect(
+      controller.createWatchTarget({
+        creator_id: "Creator1",
+        channel_name: "channel1",
+        platform: "twitch",
+        url: "https://twitch.tv/channel1",
+        quality: "best",
+        recording_subdir: "a/../etc",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should reject Windows drive letter C:\\windows", async () => {
+    await expect(
+      controller.createWatchTarget({
+        creator_id: "Creator1",
+        channel_name: "channel1",
+        platform: "twitch",
+        url: "https://twitch.tv/channel1",
+        quality: "best",
+        recording_subdir: "C:\\windows\\system32",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should reject UNC path", async () => {
+    await expect(
+      controller.createWatchTarget({
+        creator_id: "Creator1",
+        channel_name: "channel1",
+        platform: "twitch",
+        url: "https://twitch.tv/channel1",
+        quality: "best",
+        recording_subdir: "\\\\server\\share",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should reject null byte injection", async () => {
+    await expect(
+      controller.createWatchTarget({
+        creator_id: "Creator1",
+        channel_name: "channel1",
+        platform: "twitch",
+        url: "https://twitch.tv/channel1",
+        quality: "best",
+        recording_subdir: "valid\x00path",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should reject control character", async () => {
+    await expect(
+      controller.createWatchTarget({
+        creator_id: "Creator1",
+        channel_name: "channel1",
+        platform: "twitch",
+        url: "https://twitch.tv/channel1",
+        quality: "best",
+        recording_subdir: "valid\x01path",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should normalize backslashes to forward slashes", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+      recording_subdir: "favorites\\twitch\\pixelcarvel",
+    });
+
+    expect(target.recording_subdir).toBe("favorites/twitch/pixelcarvel");
+  });
+
+  it("should normalize multiple slashes", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+      recording_subdir: "favorites///twitch///channel",
+    });
+
+    expect(target.recording_subdir).toBe("favorites/twitch/channel");
+  });
+
+  it("should strip trailing slashes", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+      recording_subdir: "favorites/twitch/",
+    });
+
+    expect(target.recording_subdir).toBe("favorites/twitch");
+  });
+
+  it("should reject path exceeding 255 characters", async () => {
+    const longPath = "a".repeat(256);
+    await expect(
+      controller.createWatchTarget({
+        creator_id: "Creator1",
+        channel_name: "channel1",
+        platform: "twitch",
+        url: "https://twitch.tv/channel1",
+        quality: "best",
+        recording_subdir: longPath,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("should PATCH recording_subdir with valid nested path", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+    });
+    expect(target.recording_subdir).toBeUndefined();
+
+    const updated = await controller.patchWatchTarget(target.id, {
+      recording_subdir: "new/path",
+    });
+    expect(updated.recording_subdir).toBe("new/path");
+
+    const persisted = await WatchTargetJsonAdapter.read(process.env.WATCHLIST_PATH!);
+    expect(persisted[0].recording_subdir).toBe("new/path");
+  });
+
+  it("should PATCH with empty string to clear recording_subdir", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+      recording_subdir: "existing/path",
+    });
+
+    const updated = await controller.patchWatchTarget(target.id, {
+      recording_subdir: "",
+    });
+    expect(updated.recording_subdir).toBeUndefined();
+
+    const persisted = await WatchTargetJsonAdapter.read(process.env.WATCHLIST_PATH!);
+    expect(persisted[0]).not.toHaveProperty("recording_subdir");
+  });
+
+  it("should reject PATCH with traversal pattern", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+    });
+
+    await expect(
+      controller.patchWatchTarget(target.id, { recording_subdir: "../etc" }),
+    ).rejects.toThrow();
+  });
+
+  it("should reject PATCH with absolute path", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+    });
+
+    await expect(
+      controller.patchWatchTarget(target.id, { recording_subdir: "/absolute" }),
+    ).rejects.toThrow();
+  });
+
+  it("should PATCH non-existent watch target with 404", async () => {
+    await expect(
+      controller.patchWatchTarget("nonexistent-id", { recording_subdir: "path" }),
+    ).rejects.toThrow("not found");
+  });
+
+  it("should preserve existing recording_subdir when PATCH field is omitted", async () => {
+    const target = await controller.createWatchTarget({
+      creator_id: "Creator1",
+      channel_name: "channel1",
+      platform: "twitch",
+      url: "https://twitch.tv/channel1",
+      quality: "best",
+      recording_subdir: "original/path",
+    });
+
+    const updated = await controller.patchWatchTarget(target.id, {});
+    expect(updated.recording_subdir).toBe("original/path");
+  });
+
+  it("should read recording_subdir from existing watchlist", async () => {
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    await fs.writeFile(
+      watchlistPath,
+      JSON.stringify([
+        {
+          id: "existing-1",
+          display_name: "Creator1",
+          channel_name: "channel1",
+          platform: "twitch",
+          url: "https://twitch.tv/channel1",
+          quality: "best",
+          recording_subdir: "read/path",
+        },
+      ]),
+      "utf-8",
+    );
+
+    const target = await controller.getWatchTarget("existing-1");
+    expect(target.recording_subdir).toBe("read/path");
   });
 });
