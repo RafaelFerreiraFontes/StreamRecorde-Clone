@@ -3,5 +3,6 @@ const config: NextConfig = {
   poweredByHeader: false,
   agentRules: false,
   turbopack: { root: __dirname },
+  output: "standalone",
 };
 export default config;

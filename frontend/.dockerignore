@@ -1,0 +1,46 @@
+# Dependencies
+node_modules
+
+# Build outputs
+.next
+
+# Test results and coverage
+test-results
+coverage
+
+# TypeScript build info
+tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Caches
+.cache
+*.tsbuildinfo
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation
+README.md
+*.md
+docs
+
+# OS files
+.DS_Store
+Thumbs.db

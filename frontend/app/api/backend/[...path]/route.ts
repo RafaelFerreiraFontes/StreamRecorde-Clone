@@ -1,5 +1,23 @@
 import { NextRequest } from "next/server";
 export const dynamic = "force-dynamic";
+
+function isSameOrigin(request: NextRequest): boolean {
+  const origin = request.headers.get("origin");
+  const host = request.headers.get("host");
+  // No origin means non-browser/curl request - allow
+  if (!origin) return true;
+  // Origin present but no host - reject
+  if (!host) return false;
+  try {
+    const parsed = new URL(origin);
+    // Origin host must exactly match received host
+    return parsed.host === host;
+  } catch {
+    // Malformed origin - reject
+    return false;
+  }
+}
+
 async function proxy(
   request: NextRequest,
   context: { params: Promise<{ path: string[] }> },
@@ -34,7 +52,7 @@ async function proxy(
   if (
     request.method !== "GET" &&
     request.headers.get("origin") &&
-    request.headers.get("origin") !== request.nextUrl.origin
+    !isSameOrigin(request)
   )
     return Response.json(
       { message: "Cross-origin mutation rejected" },
