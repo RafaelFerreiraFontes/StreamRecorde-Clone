@@ -28,7 +28,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Mapping, Optional
 
 try:
     from worker.json_adapters import (
@@ -79,7 +79,7 @@ def _get_env_int(name: str, default: int) -> int:
         ValueError: If the env var is set but not a valid integer.
     """
     raw = os.environ.get(name)
-    if not _is_non_empty(raw):
+    if raw is None or not _is_non_empty(raw):
         return default
     try:
         return int(raw.strip())
@@ -92,7 +92,7 @@ def _get_env_int(name: str, default: int) -> int:
 def _resolve_output_dir() -> str:
     """Resolve OUTPUT_DIR from environment or default."""
     raw = os.environ.get("OUTPUT_DIR")
-    return raw.strip() if _is_non_empty(raw) else "/recordings"
+    return raw.strip() if raw is not None and _is_non_empty(raw) else "/recordings"
 
 
 # Resolve runtime configuration from environment at module load time
@@ -101,8 +101,8 @@ POLL_INTERVAL = _get_env_int("POLL_INTERVAL", 60)
 
 
 def _resolve_all_paths(
-    env: Optional[dict] = None,
-) -> dict:
+    env: Optional[Mapping[str, str]] = None,
+) -> dict[str, str]:
     """Resolve all four config paths from an explicit env mapping.
 
     Precedence for each path:
@@ -114,25 +114,28 @@ def _resolve_all_paths(
     Returns:
         dict with keys: watchlist, channels_status, sessions, streams
     """
-    if env is None:
-        env = os.environ
+    resolved_env: Mapping[str, str] = os.environ if env is None else env
 
     # Extract overrides from env
-    watchlist_override = env.get("WATCHLIST_PATH")
-    channels_status_override = env.get("CHANNELS_STATUS_PATH")
-    sessions_override = env.get("SESSIONS_PATH")
-    streams_override = env.get("STREAMS_PATH")
-    config_dir_override = env.get("CONFIG_DIR")
+    watchlist_override = resolved_env.get("WATCHLIST_PATH")
+    channels_status_override = resolved_env.get("CHANNELS_STATUS_PATH")
+    sessions_override = resolved_env.get("SESSIONS_PATH")
+    streams_override = resolved_env.get("STREAMS_PATH")
+    config_dir_override = resolved_env.get("CONFIG_DIR")
 
     # Level 2: non-empty CONFIG_DIR
-    config_dir = _is_non_empty(config_dir_override) and config_dir_override.strip() or None
+    config_dir = (
+        config_dir_override.strip()
+        if config_dir_override is not None and _is_non_empty(config_dir_override)
+        else None
+    )
 
     # Level 3: module-relative default
     default_dir = _get_default_config_dir()
 
     def resolve_single(filename: str, override: Optional[str]) -> str:
         # Level 1: non-empty individual override wins
-        if _is_non_empty(override):
+        if override is not None and _is_non_empty(override):
             return override.strip()
         # Level 2: non-empty CONFIG_DIR + filename
         if config_dir:

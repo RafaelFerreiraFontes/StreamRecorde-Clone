@@ -1,0 +1,40 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+    image: streamrecorder-frontend:wave-03.5
+    restart: unless-stopped
+    environment:
+      PORT: "3001"
+      API_BASE_URL: http://api:3000
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: ./api
+    image: streamrecorder-api:wave-03.5
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      CONFIG_DIR: /data
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./runtime-data:/data
+
+  worker:
+    build:
+      context: ./worker
+    image: streamrecorder-worker:wave-03.5
+    restart: unless-stopped
+    init: true
+    environment:
+      CONFIG_DIR: /data
+      OUTPUT_DIR: /recordings
+      POLL_INTERVAL: "60"
+    volumes:
+      - ./runtime-data:/data
+      - ./recordings:/recordings
