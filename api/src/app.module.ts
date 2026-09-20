@@ -1,10 +1,11 @@
 import { Module } from "@nestjs/common";
 import { StreamsModule } from "./streams/streams.module";
+import { HealthModule } from "./health/health.module";
 import { APP_PIPE } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 
 @Module({
-  imports: [StreamsModule],
+  imports: [StreamsModule, HealthModule],
   providers: [
     {
       provide: APP_PIPE,
