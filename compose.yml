@@ -8,7 +8,7 @@ services:
       PORT: "3001"
       API_BASE_URL: http://api:3000
     ports:
-      - "3001:3001"
+      - "${FRONTEND_HOST_PORT:-3001}:3001"
     depends_on:
       - api
     healthcheck:
@@ -27,9 +27,9 @@ services:
       PORT: "3000"
       CONFIG_DIR: /data
     ports:
-      - "3000:3000"
+      - "${API_HOST_PORT:-3000}:3000"
     volumes:
-      - ./runtime-data:/data
+      - ${RUNTIME_DATA_DIR:-./runtime-data}:/data
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -46,7 +46,7 @@ services:
     environment:
       CONFIG_DIR: /data
       OUTPUT_DIR: /recordings
-      POLL_INTERVAL: "60"
+      POLL_INTERVAL: "${WORKER_POLL_INTERVAL:-60}"
     volumes:
-      - ./runtime-data:/data
-      - ./recordings:/recordings
+      - ${RUNTIME_DATA_DIR:-./runtime-data}:/data
+      - ${RECORDINGS_DIR:-./recordings}:/recordings

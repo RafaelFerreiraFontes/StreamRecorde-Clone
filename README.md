@@ -100,6 +100,16 @@ docker compose restart worker
 
 Before stopping or restarting the Worker, verify that no active recording needs to finish. Interrupting the Worker can stop a recording and its child media processes; inspect its logs first.
 
+## Docker Integration Smoke Test
+
+Run the isolated Docker integration smoke test from the repository root:
+
+```sh
+pnpm test:smoke
+```
+
+The harness uses its own temporary runtime-data and recordings directories, the `streamrecorder-smoke` Compose project, and host ports `3100`/`3101`. It cleans up its containers, network, and exact temporary directory even after a failed assertion. It never stops, writes to, or removes the normal Compose stack or its bind-mounted data. The test does not depend on a live stream or access a real platform: it uses the reserved invalid URL `https://example.invalid/smoke`. It does not start FFmpeg or a recording, and does not test media capture. Worker unit tests remain the gate for media-child and process-cleanup behavior. A real-live recording exercise is intentionally a separate optional operational procedure, run only against a controlled channel after reviewing platform and recording requirements.
+
 Stop containers while retaining them, or remove the Compose containers and network:
 
 ```sh
