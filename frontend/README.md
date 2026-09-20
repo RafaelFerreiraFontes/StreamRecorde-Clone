@@ -11,7 +11,7 @@ Next.js App Router, TypeScript, React, Tailwind CSS and native fetch. A shared p
 
 ## Requirements and setup
 
-Use the repository's Node.js requirement (>=25.9.0) and pnpm. No UI framework, authentication, database, queue, or realtime transport is required.
+Use the repository's Node.js requirement (>=25.9.0) and pnpm. No UI framework, authentication, database, queue, or realtime transport is required. For the supported Docker Compose workflow, service lifecycle commands, shared-state behavior, and Windows notes, see the [root development guide](../README.md).
 
 ```sh
 # API terminal (from repository root)
@@ -96,7 +96,7 @@ For safe manual integration tests, start a separate NestJS process with `PORT=31
 3. Delete one target, accept the confirmation, and verify the sibling remains. Cancel another deletion to verify no change.
 4. Inspect request logs, raw JSON and the explicit legacy section.
 5. Stop the test API. Verify errors and retry controls appear, then restart it and confirm automatic recovery.
-6. To test a real Worker manually, explicitly configure all four Worker path variables to the same test directory: `WATCHLIST_PATH`, `CHANNELS_STATUS_PATH`, `STREAMS_PATH`, `SESSIONS_PATH`. `CONFIG_DIR` is an API setting, not a Worker setting. Set `OUTPUT_DIR` to a private test output directory. Start `python worker.py` from `worker/` in a separate terminal.
+6. To test a real Worker manually, set `CONFIG_DIR` to the same test directory, or explicitly configure the higher-priority Worker path overrides: `WATCHLIST_PATH`, `CHANNELS_STATUS_PATH`, `STREAMS_PATH`, and `SESSIONS_PATH`. Set `OUTPUT_DIR` to a private test output directory. Start `python worker.py` from `worker/` in a separate terminal.
 7. Choose an authorized valid channel manually and allow the Worker polling interval. If live, verify state transitions, Stream/Recording rows, timestamps and plain-text output paths appear without reloading. A live transmission is conditional, not guaranteed.
 
 Automated tests must not depend on a real channel. Existing deterministic Worker lifecycle coverage can be run from the repository root with `python -m pytest worker/test_worker.py -q`. Do not point test fixtures at the normal Worker configuration or media directories.
