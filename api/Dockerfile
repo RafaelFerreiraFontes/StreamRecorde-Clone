@@ -30,7 +30,7 @@ COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/package.json ./package.json
 
 # Create config directory for runtime JSON files
-RUN mkdir -p /data && chown node:node /data
+RUN mkdir -p /data && chown node:node /data && chmod 2775 /data
 
 # Switch to non-root user
 USER node

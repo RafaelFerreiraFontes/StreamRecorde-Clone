@@ -1,4 +1,4 @@
-import { open, readFile, rename, unlink, mkdir } from "fs/promises";
+import { open, readFile, readdir, rename, unlink, mkdir, chmod } from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { Recording, RecordingState, Stream, StreamPlatform, WatchTarget } from "./domain.model";
@@ -216,10 +216,26 @@ export async function writeJsonAtomically(filePath: string, value: unknown): Pro
     await handle.sync();
     await handle.close();
     handle = undefined;
-    await rename(tempPath, filePath);
+    // Bounded retry on transient rename errors (EACCES/EBUSY/EPERM)
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await rename(tempPath, filePath);
+        break;
+      } catch (error) {
+        if (!isTransientFileError(error) || attempt === 3) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    // Enforce canonical mode regardless of umask/inheritance
+    await chmod(filePath, 0o644);
   } catch (error) {
     await handle?.close().catch(() => undefined);
-    await unlink(tempPath).catch(() => undefined);
+    // Retry unlink once on transient errors
+    try {
+      await unlink(tempPath);
+    } catch {
+      // Best-effort cleanup; do not mask the initiating write error
+    }
     throw error;
   }
 }
@@ -302,6 +318,57 @@ export class RecordingJsonAdapter {
 export class StreamJsonAdapter {
   static async read(filePath: string): Promise<Stream[]> {
     return readJson(filePath, [], "array");
+  }
+}
+
+// ─── Boot-time helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Remove stale atomic-write temp files from previous crashed runs.
+ * Best-effort: logs failures but never raises.
+ */
+export async function sweepStaleTempFiles(directory: string): Promise<void> {
+  const canonicalNames = ["channels_status", "sessions", "streams", "watchlist"] as const;
+  try {
+    const entries = await readdir(directory);
+    for (const entry of entries) {
+      for (const canonical of canonicalNames) {
+        if (entry.startsWith(`.${canonical}.`) && entry.endsWith(".tmp")) {
+          try {
+            await unlink(`${directory}/${entry}`);
+          } catch {
+            // Best-effort; ignore transient failures
+          }
+        }
+      }
+    }
+  } catch {
+    // Directory read failed; nothing to sweep
+  }
+}
+
+/**
+ * Probe a JSON path's parent using a disposable sibling destination.
+ * The canonical file is read for access validation and never replaced.
+ */
+export async function probeAtomicReplace(
+  filePath: string,
+  atomicWriter: (path: string, value: unknown) => Promise<void> = writeJsonAtomically,
+): Promise<void> {
+  await readFile(filePath, "utf-8");
+  const probePath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${randomUUID()}.probe`,
+  );
+  try {
+    await atomicWriter(probePath, { probe: true });
+    await readFile(probePath, "utf-8");
+  } finally {
+    try {
+      await unlink(probePath);
+    } catch {
+      // Ignore cleanup failures without masking the probe failure.
+    }
   }
 }
 

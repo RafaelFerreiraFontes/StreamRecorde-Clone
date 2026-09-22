@@ -21,7 +21,8 @@ COPY json_adapters.py .
 RUN mkdir -p /recordings /data && \
     groupadd -g 1000 workergrp && \
     useradd -u 1000 -g workergrp workeruser && \
-    chown -R 1000:1000 /recordings /data
+    chown -R 1000:1000 /recordings /data && \
+    chmod 2775 /data
 
 # Set environment variables
 # CONFIG_DIR is the internal stack default; can be overridden at runtime
