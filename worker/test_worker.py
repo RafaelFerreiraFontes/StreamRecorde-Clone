@@ -181,6 +181,66 @@ class ProbeClassificationTests(unittest.TestCase):
             timeout=worker.CHECK_TIMEOUT,
         )
 
+    def test_is_live_real_probe_boundary_classifies_all_safe_payloads(self):
+        url = "https://twitch.tv/example"
+        exact_no_streams = f"No playable streams found on this URL: {url}"
+        cases = (
+            ('{"streams":{"best":{}}}', 0, worker.ProbeState.LIVE, "streams_available"),
+            ('{"streams":{}}', 0, worker.ProbeState.OFFLINE, "empty_streams"),
+            (json.dumps({"error": exact_no_streams}), 1, worker.ProbeState.OFFLINE, "no_playable_streams"),
+            (json.dumps({"error": exact_no_streams}), 0, worker.ProbeState.ERROR, "error_envelope"),
+            ('{"error":"plugin/network failure"}', 1, worker.ProbeState.ERROR, "error_envelope"),
+            (json.dumps({"error": self.ORIGINAL_TWITCH_INCIDENT}), 1, worker.ProbeState.ERROR, "error_envelope"),
+            ('{"streams":{"best":{}}}', 2, worker.ProbeState.ERROR, "nonzero_exit"),
+            ('{', 0, worker.ProbeState.ERROR, "malformed_json"),
+            ('', 0, worker.ProbeState.ERROR, "empty_output"),
+            (' \t\n', 0, worker.ProbeState.ERROR, "empty_output"),
+            ('{}', 0, worker.ProbeState.ERROR, "missing_streams"),
+            ('[]', 0, worker.ProbeState.ERROR, "invalid_root"),
+            ('{"streams":null}', 0, worker.ProbeState.ERROR, "invalid_streams"),
+            ('{"streams":"best"}', 0, worker.ProbeState.ERROR, "invalid_streams"),
+            ('{"streams":42}', 0, worker.ProbeState.ERROR, "invalid_streams"),
+            ('{"streams":false}', 0, worker.ProbeState.ERROR, "invalid_streams"),
+            ('{"streams":[]}', 0, worker.ProbeState.ERROR, "invalid_streams"),
+            ('{"error":"unknown"}', 0, worker.ProbeState.ERROR, "error_envelope"),
+            ('{"error":"unknown","streams":{}}', 0, worker.ProbeState.ERROR, "error_envelope"),
+        )
+
+        for stdout, returncode, state, reason in cases:
+            with self.subTest(stdout=stdout, returncode=returncode):
+                completed = subprocess.CompletedProcess(
+                    ["streamlink"], returncode, stdout=stdout,
+                    stderr="Authorization: Bearer secret-value",
+                )
+                with patch.object(worker.subprocess, "run", return_value=completed) as run:
+                    result = worker.is_live(url)
+                self.assertEqual((result.state, result.reason, result.returncode), (state, reason, returncode))
+                self.assertIsNone(result.stderr_summary)
+                self.assertNotIn("secret-value", repr(result))
+                run.assert_called_once_with(
+                    ["streamlink", "--json", url], capture_output=True,
+                    text=True, timeout=worker.CHECK_TIMEOUT,
+                )
+
+    def test_is_live_process_failures_have_safe_metadata(self):
+        url = "https://twitch.tv/example"
+        for failure in (
+            subprocess.TimeoutExpired("streamlink", worker.CHECK_TIMEOUT),
+            FileNotFoundError("secret-value"), OSError("secret-value"),
+            RuntimeError("secret-value"),
+        ):
+            with self.subTest(failure=type(failure).__name__), patch.object(
+                worker.subprocess, "run", side_effect=failure
+            ):
+                result = worker.is_live(url)
+            self.assertEqual(result.state, worker.ProbeState.ERROR)
+            self.assertNotIn("secret-value", repr(result))
+            self.assertNotIn(url, repr(result))
+            if isinstance(failure, subprocess.TimeoutExpired):
+                self.assertEqual((result.reason, result.timeout_seconds), ("timeout", worker.CHECK_TIMEOUT))
+            else:
+                self.assertEqual((result.reason, result.exception_type), ("process_error", type(failure).__name__))
+
 
 class ProbeObservabilityTests(unittest.TestCase):
     def test_sanitize_diagnostic_redacts_before_truncation_and_normalizes_controls(self):
@@ -189,6 +249,23 @@ class ProbeObservabilityTests(unittest.TestCase):
         self.assertIsNone(worker._sanitize_diagnostic('{"token":"secret-value"}'))
         self.assertIsNone(worker._sanitize_diagnostic("Authorization: Bearer secret-value"))
         self.assertIsNone(worker._sanitize_diagnostic("Cookie: session=secret-value"))
+        self.assertEqual(
+            worker._sanitize_diagnostic("safe\r\nmessage\twith\x00controls"),
+            "safe message with controls",
+        )
+        self.assertEqual(len(worker._sanitize_diagnostic("x" * 400)), worker.DIAGNOSTIC_MAX_LENGTH)
+
+    def test_sanitize_diagnostic_secret_matrix_never_retains_credentials_or_raw_json(self):
+        unsafe_values = (
+            "oauth token=secret", "access token=secret", "refresh token=secret",
+            "Authorization: Basic secret", "Bearer secret", "Cookie: session=secret",
+            "Set-Cookie: session=secret", "signed=secret", "signature=secret",
+            "sig=secret", "key=secret", "https://user:password@example.test/path",
+            "password=secret", "credential=secret", '{"streams":{"best":{}}}',
+        )
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                self.assertIsNone(worker._sanitize_diagnostic(value))
         self.assertEqual(
             worker._sanitize_diagnostic("safe\r\nmessage\twith\x00controls"),
             "safe message with controls",
@@ -241,7 +318,41 @@ class ProbeObservabilityTests(unittest.TestCase):
             self.assertEqual(worker.run_worker(), 1)
         poll_loop.assert_not_called()
 
+    def test_run_worker_runtime_initialization_failure_never_logs_ready_or_polls(self):
+        with patch.object(worker, "_get_streamlink_version", return_value="7.0.0"), patch.object(
+            worker, "ensure_runtime_dirs", side_effect=OSError("denied")
+        ), patch.object(worker, "poll_loop") as poll_loop, self.assertLogs(worker.log, "ERROR") as logs:
+            self.assertEqual(worker.run_worker(), 1)
+        poll_loop.assert_not_called()
+        self.assertNotIn("Worker started", "\n".join(logs.output))
+
+    def test_run_worker_logs_version_and_resolved_alternate_paths_before_polling(self):
+        paths = {
+            "watchlist": "/alternate/watchlist.json",
+            "channels_status": "/alternate/status.json",
+            "sessions": "/alternate/sessions.json",
+            "streams": "/alternate/streams.json",
+        }
+        with patch.object(worker, "_get_streamlink_version", return_value="7.0.0"), patch.object(
+            worker, "ensure_runtime_dirs"
+        ), patch.object(worker, "_resolve_all_paths", return_value=paths), patch.object(
+            worker, "poll_loop"
+        ) as poll_loop, patch.object(worker, "OUTPUT_DIR", "/alternate/output"), self.assertLogs(worker.log, "INFO") as logs:
+            self.assertEqual(worker.run_worker(), 0)
+        poll_loop.assert_called_once_with()
+        output = "\n".join(logs.output)
+        self.assertIn("streamlink_version=7.0.0", output)
+        self.assertIn(paths["watchlist"], output)
+        self.assertIn("/alternate/output", output)
+
     def test_poll_emits_safe_events_for_probe_outcomes_and_invalid_target(self):
+        original_globals = {
+            name: getattr(worker, name) for name in (
+                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
+                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
+                "streams_data", "lock",
+            )
+        }
         temp_dir = tempfile.TemporaryDirectory()
         try:
             config_dir = Path(temp_dir.name)
@@ -277,11 +388,21 @@ class ProbeObservabilityTests(unittest.TestCase):
             self.assertIn("Invalid watch target (watch_target_id=bad_identifier, missing_fields=channel_name,platform)", output)
             self.assertNotIn("secret-value", output)
         finally:
+            for name, value in original_globals.items():
+                setattr(worker, name, value)
             temp_dir.cleanup()
 
 
 class WorkerLifecycleTests(unittest.TestCase):
     def setUp(self):
+        self.original_globals = {
+            name: getattr(worker, name) for name in (
+                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
+                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
+                "streams_data", "lock",
+            )
+        }
+        self.addCleanup(self.restore_worker_globals)
         self.temp_dir = tempfile.TemporaryDirectory()
         config_dir = Path(self.temp_dir.name)
         worker.CHANNELS_STATUS_PATH = str(config_dir / "channels_status.json")
@@ -291,6 +412,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker.channels_status = {}
         worker.recordings = []
         worker.active_recordings = {}
+        worker.streams_data = []
         worker.lock = worker.threading.Lock()
         Path(worker.CHANNELS_STATUS_PATH).write_text("{}", encoding="utf-8")
         Path(worker.SESSIONS_PATH).write_text("[]", encoding="utf-8")
@@ -301,6 +423,10 @@ class WorkerLifecycleTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def restore_worker_globals(self):
+        for name, value in self.original_globals.items():
+            setattr(worker, name, value)
 
     def test_start_recording_persists_recording_immediately(self):
         entry = {
@@ -780,6 +906,21 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertNotIn("secret-value", output)
         self.assertNotIn("https://", output)
 
+    def test_drain_stderr_continues_after_logging_failure(self):
+        proc = FakeProcess(stderr_lines="first line\nsecond line\n")
+        calls = []
+
+        def fail_once(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                raise OSError("logger unavailable")
+
+        with patch.object(worker.log, "info", side_effect=fail_once):
+            worker.drain_stderr(proc, "target-1")
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(proc.stderr.read(), "")
+
     def test_start_recording_does_not_log_started_after_launch_failure(self):
         entry = {
             "id": "channel-1",
@@ -822,6 +963,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(worker.recordings, [])
         self.assertEqual(worker.channels_status["channel-1"]["state"], "idle")
         self.assertEqual(process.returncode, -15)
+        self.assertTrue(process._wait_called)
 
     def test_monitor_retains_terminal_recording_until_persistence_recovers(self):
         output_file = Path(worker.OUTPUT_DIR) / "recording.mp4"
@@ -929,6 +1071,15 @@ class WorkerLifecycleTests(unittest.TestCase):
                 worker._wait_for_process(proc)
                 mock_kill.assert_called_once()
 
+    def test_wait_for_process_reaps_after_kill_fallback(self):
+        proc = FakeProcess()
+        with patch.object(
+            proc, "wait", side_effect=[worker.subprocess.TimeoutExpired("cmd", 5), 0]
+        ) as wait, patch.object(proc, "kill") as kill:
+            worker._wait_for_process(proc)
+        self.assertEqual(wait.call_count, 2)
+        kill.assert_called_once_with()
+
     def test_wait_for_process_handles_already_exited_process(self):
         """_wait_for_process should tolerate already-exited processes."""
         proc = FakeProcess(returncode=0)
@@ -955,6 +1106,14 @@ class WorkerLifecycleTests(unittest.TestCase):
 
 class WatchTargetEnabledTests(unittest.TestCase):
     def setUp(self):
+        self.original_globals = {
+            name: getattr(worker, name) for name in (
+                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
+                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
+                "streams_data", "lock",
+            )
+        }
+        self.addCleanup(self.restore_worker_globals)
         self.temp_dir = tempfile.TemporaryDirectory()
         config_dir = Path(self.temp_dir.name)
         worker.CONFIG_PATH = str(config_dir / "watchlist.json")
@@ -976,6 +1135,10 @@ class WatchTargetEnabledTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def restore_worker_globals(self):
+        for name, value in self.original_globals.items():
+            setattr(worker, name, value)
 
     @staticmethod
     def entry(enabled=True):
@@ -1302,6 +1465,14 @@ if __name__ == "__main__":
 
 class StreamDetectionTests(unittest.TestCase):
     def setUp(self):
+        self.original_globals = {
+            name: getattr(worker, name) for name in (
+                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
+                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
+                "streams_data", "lock",
+            )
+        }
+        self.addCleanup(self.restore_worker_globals)
         self.temp_dir = tempfile.TemporaryDirectory()
         config_dir = Path(self.temp_dir.name)
         worker.CHANNELS_STATUS_PATH = str(config_dir / "channels_status.json")
@@ -1322,6 +1493,10 @@ class StreamDetectionTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def restore_worker_globals(self):
+        for name, value in self.original_globals.items():
+            setattr(worker, name, value)
 
     def poll_once(self, probe_result, process=None):
         with patch.object(worker, "is_live", return_value=probe_result) as is_live_mock, \
@@ -1359,6 +1534,54 @@ class StreamDetectionTests(unittest.TestCase):
         self.assertEqual(worker.streams_data[0]["watch_target_id"], "channel-1")
         self.assertIsNotNone(worker.streams_data[0]["started_at"])
         self.assertIsNone(worker.streams_data[0]["finished_at"])
+
+    def test_real_probe_lifecycle_reuses_stream_after_error_and_finalizes_only_offline(self):
+        entry = {
+            "id": "channel-1", "channel_name": "example", "platform": "twitch",
+            "url": "https://twitch.tv/example", "quality": "best",
+        }
+        self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
+        probe_outputs = iter((
+            subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
+            subprocess.CompletedProcess(["streamlink"], 1, stdout='{"error":"Twitch API failed"}'),
+            subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
+            subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{}}'),
+            subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
+        ))
+        processes = [FakeProcess(returncode=1), FakeProcess(returncode=1), FakeProcess()]
+
+        def poll_once():
+            with patch.object(worker.subprocess, "run", side_effect=lambda *args, **kwargs: next(probe_outputs)), \
+                 patch.object(worker.subprocess, "Popen", side_effect=processes), \
+                 patch.object(worker.threading, "Thread"), \
+                 patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    worker.poll_loop()
+
+        poll_once()
+        first_stream_id = worker.streams_data[0]["id"]
+        worker.monitor_recording("channel-1")
+        self.assertEqual(worker.recordings[0]["state"], "error")
+        self.assertEqual(worker.streams_data[0]["id"], first_stream_id)
+        self.assertIsNone(worker.streams_data[0]["finished_at"])
+
+        poll_once()
+        self.assertEqual(len(worker.streams_data), 1)
+        self.assertEqual(worker.streams_data[0]["id"], first_stream_id)
+        self.assertEqual(len(worker.recordings), 1)
+
+        poll_once()
+        self.assertEqual(worker.active_recordings["channel-1"]["stream_id"], first_stream_id)
+        worker.monitor_recording("channel-1")
+        self.assertEqual(len(worker.recordings), 2)
+
+        poll_once()
+        self.assertEqual(worker.streams_data[0]["state"], "finished")
+        self.assertIsNotNone(worker.streams_data[0]["finished_at"])
+
+        poll_once()
+        self.assertEqual(len(worker.streams_data), 2)
+        self.assertNotEqual(worker.streams_data[1]["id"], first_stream_id)
 
     def test_repeated_positive_polls_reuse_same_stream(self):
         entry = {
@@ -1764,6 +1987,8 @@ class RecordingSubdirPathTests(unittest.TestCase):
     """Tests for recording_subdir path validation and output directory resolution."""
 
     def setUp(self):
+        self.original_output_dir = worker.OUTPUT_DIR
+        self.addCleanup(setattr, worker, "OUTPUT_DIR", self.original_output_dir)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.config_dir = Path(self.temp_dir.name)
         self.output_dir = self.config_dir / "recordings"
@@ -2127,6 +2352,36 @@ class RuntimeFilesTests(unittest.TestCase):
             for file_path in paths.values():
                 self.assertTrue(os.path.exists(file_path), f"{file_path} should exist")
 
+    def test_probe_atomic_replace_preserves_canonical_json_and_cleans_disposable_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "watchlist.json"
+            target.write_text('[{"id":"canonical"}]', encoding="utf-8")
+            worker._probe_atomic_replace(str(target))
+            self.assertEqual(target.read_text(encoding="utf-8"), '[{"id":"canonical"}]')
+            self.assertEqual(list(Path(temp_dir).glob("*.probe")), [])
+
+    def test_probe_atomic_replace_cleans_disposable_file_when_write_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "watchlist.json"
+            target.write_text("[]", encoding="utf-8")
+            import json_adapters
+            with patch.object(json_adapters, "write_json_atomically", side_effect=OSError("write denied")):
+                with self.assertRaisesRegex(OSError, "write denied"):
+                    worker._probe_atomic_replace(str(target))
+            self.assertEqual(target.read_text(encoding="utf-8"), "[]")
+            self.assertEqual(list(Path(temp_dir).glob("*.probe")), [])
+
+    def test_probe_output_dir_cleans_temp_file_after_fsync_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(os, "fsync", side_effect=OSError("sync denied")):
+            with self.assertRaisesRegex(OSError, "sync denied"):
+                worker._probe_output_dir(temp_dir)
+            self.assertEqual(list(Path(temp_dir).glob(".worker-output-probe.*.tmp")), [])
+
+    def test_probe_output_dir_success_creates_no_artifact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            worker._probe_output_dir(temp_dir)
+            self.assertEqual(list(Path(temp_dir).glob(".worker-output-probe.*.tmp")), [])
+
 
 class RuntimeConfigEnvTests(unittest.TestCase):
     """Tests for runtime configuration from environment variables."""
@@ -2430,13 +2685,12 @@ class TestAtomicReplaceFaults(unittest.TestCase):
             "sessions": str(config_dir / "sessions.json"),
             "streams": str(config_dir / "streams.json"),
         }
-        worker.CONFIG_PATH = test_paths["watchlist"]
-        worker.CHANNELS_STATUS_PATH = test_paths["channels_status"]
-        worker.SESSIONS_PATH = test_paths["sessions"]
-        worker.STREAMS_PATH = test_paths["streams"]
-        worker.OUTPUT_DIR = str(config_dir / "recordings")
-
-        with patch.object(worker, "_resolve_all_paths", return_value=test_paths), \
+        with patch.object(worker, "CONFIG_PATH", test_paths["watchlist"]), \
+             patch.object(worker, "CHANNELS_STATUS_PATH", test_paths["channels_status"]), \
+             patch.object(worker, "SESSIONS_PATH", test_paths["sessions"]), \
+             patch.object(worker, "STREAMS_PATH", test_paths["streams"]), \
+             patch.object(worker, "OUTPUT_DIR", str(config_dir / "recordings")), \
+             patch.object(worker, "_resolve_all_paths", return_value=test_paths), \
              patch.object(worker, "_probe_atomic_replace"):
             worker.ensure_runtime_dirs()
 

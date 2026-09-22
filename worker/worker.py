@@ -619,7 +619,7 @@ def _sanitize_diagnostic(value: object) -> str | None:
     unsafe_markers = (
         "authorization", "bearer", "cookie", "set-cookie", "token",
         "access_token", "refresh_token", "signature", "sig=", "key=",
-        "password", "credential",
+        "signed=", "password", "credential",
     )
     if (
         re.search(r"[a-z][a-z0-9+.-]*://", lowered)
@@ -842,15 +842,25 @@ def drain_stderr(process, channel_name):
             line = process.stderr.readline()
             if not line:
                 break
-            summary = _sanitize_diagnostic(line)
-            if summary is None and line.strip():
-                log.info("Streamlink diagnostic suppressed (watch_target_id=%s)", _safe_identifier(channel_name))
-            elif summary:
-                log.info(
-                    "Streamlink diagnostic (watch_target_id=%s, message=%s)",
-                    _safe_identifier(channel_name),
-                    summary,
-                )
+            try:
+                summary = _sanitize_diagnostic(line)
+                if summary is None and line.strip():
+                    log.info("Streamlink diagnostic suppressed (watch_target_id=%s)", _safe_identifier(channel_name))
+                elif summary:
+                    log.info(
+                        "Streamlink diagnostic (watch_target_id=%s, message=%s)",
+                        _safe_identifier(channel_name),
+                        summary,
+                    )
+            except Exception as error:
+                try:
+                    log.warning(
+                        "Streamlink diagnostic handling failed (watch_target_id=%s, exception_type=%s)",
+                        _safe_identifier(channel_name),
+                        type(error).__name__,
+                    )
+                except Exception:
+                    pass
     except Exception as error:
         log.warning(
             "Streamlink stderr drain failed (watch_target_id=%s, exception_type=%s)",
