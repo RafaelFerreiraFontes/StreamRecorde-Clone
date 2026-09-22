@@ -953,6 +953,349 @@ class WorkerLifecycleTests(unittest.TestCase):
             worker._wait_for_process(proc)
 
 
+class WatchTargetEnabledTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        config_dir = Path(self.temp_dir.name)
+        worker.CONFIG_PATH = str(config_dir / "watchlist.json")
+        worker.CHANNELS_STATUS_PATH = str(config_dir / "channels_status.json")
+        worker.SESSIONS_PATH = str(config_dir / "sessions.json")
+        worker.STREAMS_PATH = str(config_dir / "streams.json")
+        for path, value in (
+            (worker.CONFIG_PATH, []),
+            (worker.CHANNELS_STATUS_PATH, {}),
+            (worker.SESSIONS_PATH, []),
+            (worker.STREAMS_PATH, []),
+        ):
+            Path(path).write_text(json.dumps(value), encoding="utf-8")
+        worker.active_recordings = {}
+        worker.channels_status = {}
+        worker.recordings = []
+        worker.streams_data = []
+        worker.lock = worker.threading.Lock()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    @staticmethod
+    def entry(enabled=True):
+        return {
+            "id": "target-1",
+            "channel_name": "creator",
+            "platform": "twitch",
+            "url": "https://twitch.tv/creator",
+            "quality": "best",
+            "enabled": enabled,
+        }
+
+    def poll_once(self):
+        with patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+    def test_disabled_false_entry_has_no_lifecycle_side_effects(self):
+        entry = self.entry(False)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        with patch.object(worker, "is_live") as is_live, patch.object(
+            worker, "create_stream"
+        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
+            worker.subprocess, "Popen"
+        ) as popen:
+            self.poll_once()
+        is_live.assert_not_called()
+        create_stream.assert_not_called()
+        start_recording.assert_not_called()
+        popen.assert_not_called()
+        self.assertNotIn("target-1", worker.channels_status)
+        self.assertEqual(worker.streams_data, [])
+        self.assertEqual(worker.recordings, [])
+
+    def test_invalid_enabled_entries_have_no_lifecycle_side_effects(self):
+        for invalid_enabled in (None, "false", 0, 1, [], {}):
+            with self.subTest(enabled=invalid_enabled):
+                entry = self.entry(invalid_enabled)
+                Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+                with patch.object(worker, "is_live") as is_live, patch.object(
+                    worker, "create_stream"
+                ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
+                    worker.subprocess, "Popen"
+                ) as popen:
+                    self.poll_once()
+                is_live.assert_not_called()
+                create_stream.assert_not_called()
+                start_recording.assert_not_called()
+                popen.assert_not_called()
+                self.assertNotIn("target-1", worker.channels_status)
+                self.assertEqual(worker.streams_data, [])
+                self.assertEqual(worker.recordings, [])
+
+    def test_explicit_true_probes_and_launches_recording(self):
+        entry = self.entry(True)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        with patch.object(
+            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")
+        ) as is_live, patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen, patch.object(
+            worker.threading, "Thread"
+        ), patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+        is_live.assert_called_once_with(entry["url"])
+        popen.assert_called_once()
+        self.assertEqual(len(worker.recordings), 1)
+        self.assertIn("target-1", worker.active_recordings)
+
+    def test_omitted_enabled_remains_legacy_enabled(self):
+        entry = self.entry()
+        del entry["enabled"]
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), patch.object(
+            worker, "start_recording"
+        ) as start_recording:
+            self.poll_once()
+        start_recording.assert_called_once()
+
+    def test_refresh_disable_blocks_before_stream_creation(self):
+        current = self.entry(True)
+        disabled = self.entry(False)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([current]), encoding="utf-8")
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), patch.object(
+            worker, "load_watchlist", side_effect=[[current], [disabled]]
+        ), patch.object(worker, "create_stream") as create_stream, patch.object(
+            worker, "start_recording"
+        ) as start_recording:
+            self.poll_once()
+        create_stream.assert_not_called()
+        start_recording.assert_not_called()
+
+    def test_refresh_removal_invalid_entry_or_url_change_blocks_before_stream_creation(self):
+        current = self.entry(True)
+        refresh_cases = (
+            [],
+            [{**current, "enabled": "false"}],
+            [{**current, "url": "https://twitch.tv/changed"}],
+        )
+        for refreshed in refresh_cases:
+            with self.subTest(refreshed=refreshed):
+                worker.channels_status = {}
+                worker.streams_data = []
+                Path(worker.CONFIG_PATH).write_text(json.dumps([current]), encoding="utf-8")
+                with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), patch.object(
+                    worker, "load_watchlist", side_effect=[[current], refreshed]
+                ), patch.object(worker, "create_stream") as create_stream, patch.object(
+                    worker, "start_recording"
+                ) as start_recording:
+                    self.poll_once()
+                create_stream.assert_not_called()
+                start_recording.assert_not_called()
+
+    def test_disabled_target_does_not_finalize_open_stream_or_stop_active_capture(self):
+        entry = self.entry(False)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        process = MagicMock()
+        worker.streams_data = [{
+            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
+            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+        }]
+        worker.active_recordings["target-1"] = {
+            "process": process, "session_id": "session-1", "stream_id": "stream-1",
+        }
+        with patch.object(worker, "is_live") as is_live, patch.object(worker, "finalize_stream") as finalize_stream:
+            self.poll_once()
+        is_live.assert_not_called()
+        finalize_stream.assert_not_called()
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+        self.assertIn("target-1", worker.active_recordings)
+        self.assertIsNone(worker.streams_data[0]["finished_at"])
+
+    def test_terminal_recording_persists_while_target_is_disabled(self):
+        entry = self.entry(False)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        worker.channels_status["target-1"] = {
+            "channel_name": "creator", "platform": "twitch", "state": "recording",
+        }
+        worker.recordings = [{
+            "session_id": "session-1", "watch_target_id": "target-1",
+            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+            "output_file": "recording.mp4", "state": "recording",
+        }]
+        worker.active_recordings["target-1"] = {
+            "session_id": "session-1",
+            "pending_terminal": {
+                "state": "finished", "finished_at": "2026-01-01T01:00:00",
+                "output_file": "recording.mp4", "returncode": 0,
+            },
+        }
+        with patch.object(worker, "is_live") as is_live:
+            self.poll_once()
+        is_live.assert_not_called()
+        self.assertNotIn("target-1", worker.active_recordings)
+        self.assertEqual(worker.recordings[0]["state"], "finished")
+
+    def test_terminal_error_persists_while_target_is_disabled(self):
+        entry = self.entry(False)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        worker.channels_status["target-1"] = {
+            "channel_name": "creator", "platform": "twitch", "state": "recording",
+        }
+        worker.recordings = [{
+            "session_id": "session-1", "watch_target_id": "target-1",
+            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+            "output_file": "recording.mp4", "state": "recording",
+        }]
+        worker.active_recordings["target-1"] = {
+            "session_id": "session-1",
+            "pending_terminal": {
+                "state": "error", "finished_at": "2026-01-01T01:00:00",
+                "output_file": "recording.mp4", "returncode": 1,
+            },
+        }
+        with patch.object(worker, "is_live") as is_live:
+            self.poll_once()
+        is_live.assert_not_called()
+        self.assertNotIn("target-1", worker.active_recordings)
+        self.assertEqual(worker.recordings[0]["state"], "error")
+        self.assertEqual(worker.recordings[0]["finished_at"], "2026-01-01T01:00:00")
+        self.assertEqual(worker.channels_status["target-1"]["state"], "error")
+
+    def test_disabled_target_does_not_retry_after_terminal_recording(self):
+        entry = self.entry(False)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        open_stream = {
+            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
+            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+        }
+        worker.streams_data = [open_stream]
+        worker.channels_status["target-1"] = {
+            "channel_name": "creator", "platform": "twitch", "state": "recording",
+        }
+        worker.recordings = [{
+            "session_id": "session-1", "watch_target_id": "target-1",
+            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+            "output_file": "recording.mp4", "state": "recording",
+        }]
+        worker.active_recordings["target-1"] = {
+            "session_id": "session-1",
+            "pending_terminal": {
+                "state": "error", "finished_at": "2026-01-01T01:00:00",
+                "output_file": "recording.mp4", "returncode": 1,
+            },
+        }
+        self.poll_once()
+        with patch.object(worker, "is_live") as is_live, patch.object(
+            worker, "start_recording"
+        ) as start_recording, patch.object(worker.subprocess, "Popen") as popen:
+            self.poll_once()
+        is_live.assert_not_called()
+        start_recording.assert_not_called()
+        popen.assert_not_called()
+        self.assertNotIn("target-1", worker.active_recordings)
+        self.assertIsNone(open_stream["finished_at"])
+
+    def test_reenable_resumes_live_capture_using_existing_open_stream(self):
+        disabled = self.entry(False)
+        enabled = self.entry(True)
+        worker.streams_data = [{
+            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
+            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+        }]
+        Path(worker.CONFIG_PATH).write_text(json.dumps([disabled]), encoding="utf-8")
+        self.poll_once()
+        Path(worker.CONFIG_PATH).write_text(json.dumps([enabled]), encoding="utf-8")
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), patch.object(
+            worker, "start_recording"
+        ) as start_recording:
+            self.poll_once()
+        start_recording.assert_called_once_with(enabled, "stream-1")
+
+    def test_reenable_during_active_capture_does_not_duplicate_recording(self):
+        entry = self.entry(True)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        process = MagicMock()
+        worker.active_recordings["target-1"] = {
+            "process": process, "session_id": "session-1", "stream_id": "stream-1",
+        }
+        with patch.object(worker, "is_live") as is_live, patch.object(
+            worker, "start_recording"
+        ) as start_recording, patch.object(worker.subprocess, "Popen") as popen:
+            self.poll_once()
+        is_live.assert_not_called()
+        start_recording.assert_not_called()
+        popen.assert_not_called()
+        self.assertIs(worker.active_recordings["target-1"]["process"], process)
+
+    def test_watchlist_refresh_failure_after_live_blocks_before_stream_creation(self):
+        entry = self.entry(True)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        with patch.object(
+            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")
+        ), patch.object(worker, "load_watchlist", side_effect=[[entry], OSError("unavailable")]), patch.object(
+            worker, "create_stream"
+        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
+            worker.subprocess, "Popen"
+        ) as popen:
+            self.poll_once()
+        create_stream.assert_not_called()
+        start_recording.assert_not_called()
+        popen.assert_not_called()
+        self.assertEqual(worker.streams_data, [])
+
+    def test_reenabled_offline_finalizes_existing_open_stream(self):
+        entry = self.entry(True)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        stream = {
+            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
+            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+        }
+        worker.streams_data = [stream]
+        with patch.object(
+            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")
+        ) as is_live, patch.object(worker.subprocess, "Popen") as popen:
+            self.poll_once()
+        is_live.assert_called_once_with(entry["url"])
+        popen.assert_not_called()
+        self.assertEqual(worker.channels_status["target-1"]["state"], "offline")
+        self.assertEqual(stream["state"], "finished")
+        self.assertIsNotNone(stream["finished_at"])
+
+    def test_reenabled_probe_error_preserves_existing_open_stream_and_status(self):
+        entry = self.entry(True)
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        stream = {
+            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
+            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+        }
+        worker.streams_data = [stream]
+        worker.channels_status["target-1"] = {
+            "channel_name": "creator", "platform": "twitch", "state": "recording",
+        }
+        Path(worker.CHANNELS_STATUS_PATH).write_text(json.dumps(worker.channels_status), encoding="utf-8")
+        with patch.object(
+            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.ERROR, "timeout")
+        ) as is_live, patch.object(worker, "start_recording") as start_recording, patch.object(
+            worker.subprocess, "Popen"
+        ) as popen:
+            self.poll_once()
+        is_live.assert_called_once_with(entry["url"])
+        start_recording.assert_not_called()
+        popen.assert_not_called()
+        self.assertEqual(worker.channels_status["target-1"]["state"], "recording")
+        self.assertEqual(stream["state"], "recording")
+        self.assertIsNone(stream["finished_at"])
+
+    def test_targets_under_one_creator_are_gated_independently(self):
+        disabled = self.entry(False)
+        enabled = {**self.entry(True), "id": "target-2"}
+        Path(worker.CONFIG_PATH).write_text(json.dumps([disabled, enabled]), encoding="utf-8")
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")) as is_live, patch.object(
+            worker, "start_recording"
+        ) as start_recording:
+            self.poll_once()
+        is_live.assert_called_once_with(enabled["url"])
+        start_recording.assert_called_once()
+        self.assertEqual(start_recording.call_args.args[0]["id"], "target-2")
+
+
 if __name__ == "__main__":
     unittest.main()
 

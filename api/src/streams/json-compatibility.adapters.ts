@@ -10,6 +10,7 @@ interface WatchlistEntry {
   platform: string;
   url: string;
   quality: string;
+  enabled?: boolean;
   /** Optional relative recording subdirectory. */
   recording_subdir?: string;
 }
@@ -250,6 +251,9 @@ export class WatchTargetJsonAdapter {
   }
 
   static toDomain(entry: WatchlistEntry, state: RecordingState = "idle"): WatchTarget {
+    if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") {
+      throw new Error("Watch target enabled configuration must be a boolean");
+    }
     const displayName = entry.display_name?.trim() || entry.channel_name || "unknown-creator";
     return {
       id: entry.id,
@@ -258,7 +262,7 @@ export class WatchTargetJsonAdapter {
       platform: (entry.platform as StreamPlatform) || "youtube",
       url: entry.url ?? "",
       quality: entry.quality ?? "best",
-      enabled: true,
+      enabled: entry.enabled ?? true,
       state,
       recording_subdir: entry.recording_subdir,
     };
@@ -272,6 +276,7 @@ export class WatchTargetJsonAdapter {
       platform: target.platform,
       url: target.url,
       quality: target.quality,
+      enabled: target.enabled,
     };
     if (target.recording_subdir) {
       entry.recording_subdir = target.recording_subdir;

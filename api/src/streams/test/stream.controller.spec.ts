@@ -202,7 +202,66 @@ describe("StreamController", () => {
       platform: "twitch",
       url: "https://twitch.tv/new-channel",
       quality: "720p",
+      enabled: true,
     });
+  });
+
+  it("preserves enabled state across reads and recording_subdir PATCH", async () => {
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    await fs.writeFile(
+      watchlistPath,
+      JSON.stringify([{
+        id: "disabled-target",
+        display_name: "Creator",
+        channel_name: "channel",
+        platform: "twitch",
+        url: "https://twitch.tv/channel",
+        quality: "best",
+        enabled: false,
+      }]),
+      "utf-8",
+    );
+
+    await expect(controller.getWatchTarget("disabled-target")).resolves.toMatchObject({
+      enabled: false,
+    });
+    await expect(
+      controller.patchWatchTarget("disabled-target", { recording_subdir: "archive" }),
+    ).resolves.toMatchObject({ enabled: false, recording_subdir: "archive" });
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
+      expect.objectContaining({ enabled: false, recording_subdir: "archive" }),
+    ]);
+  });
+
+  it("preserves explicit disabled state through the WatchTarget adapter round trip", () => {
+    const target = {
+      id: "disabled-target",
+      creator_id: "Creator",
+      channel_name: "channel",
+      platform: "twitch" as const,
+      url: "https://twitch.tv/channel",
+      quality: "best",
+      enabled: false,
+      state: "idle" as const,
+    };
+
+    expect(WatchTargetJsonAdapter.toDomain(WatchTargetJsonAdapter.fromDomain(target)).enabled).toBe(false);
+  });
+
+  it("defaults omitted enabled to true and rejects malformed persisted values", () => {
+    const entry = {
+      id: "target",
+      channel_name: "channel",
+      platform: "twitch",
+      url: "https://twitch.tv/channel",
+      quality: "best",
+    };
+    expect(WatchTargetJsonAdapter.toDomain(entry).enabled).toBe(true);
+    for (const enabled of [null, "false", 0, 1, [], {}]) {
+      expect(() => WatchTargetJsonAdapter.toDomain({ ...entry, enabled } as never)).toThrow(
+        "enabled configuration must be a boolean",
+      );
+    }
   });
 
   it("should delete only the requested watch target", async () => {

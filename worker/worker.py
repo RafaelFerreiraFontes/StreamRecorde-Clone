@@ -446,6 +446,13 @@ def load_watchlist():
     return WatchTargetJsonAdapter.read(CONFIG_PATH)
 
 
+def watch_target_enabled(entry: dict) -> bool | None:
+    """Return the strict enabled state; omitted legacy values default to true."""
+    if "enabled" not in entry:
+        return True
+    return entry["enabled"] if type(entry["enabled"]) is bool else None
+
+
 def load_channels_status():
     return RuntimeStatusJsonAdapter.read(CHANNELS_STATUS_PATH)
 
@@ -996,6 +1003,29 @@ def poll_loop():
             id = entry.get("id")
             platform = entry.get("platform")
 
+            if not isinstance(id, str):
+                log.warning(
+                    "Invalid watch target (watch_target_id=%s, missing_fields=id)",
+                    _safe_identifier(id),
+                )
+                continue
+
+            # Keep active captures and their terminal persistence independent of disable.
+            with lock:
+                if id in active_recordings:
+                    continue
+
+            enabled = watch_target_enabled(entry)
+            if enabled is None:
+                log.warning(
+                    "Invalid watch target enabled configuration (watch_target_id=%s)",
+                    _safe_identifier(id),
+                )
+                continue
+            if not enabled:
+                # Disabled targets retain open Streams: missed observations cannot prove an end.
+                continue
+
             missing_fields = tuple(
                 field for field, value in (
                     ("url", url),
@@ -1014,8 +1044,6 @@ def poll_loop():
 
             try:
                 with lock:
-                    if id in active_recordings:
-                        continue
                     channels_status.setdefault(
                         id,
                         {
@@ -1037,6 +1065,37 @@ def poll_loop():
                         probe_result.stderr_summary or "absent",
                     )
                     log.info("Live detected! (watch_target_id=%s)", safe_target_id)
+
+                    # Re-read before mutating Stream state so a configuration change during
+                    # the probe cannot start an unapproved or unprobed target.
+                    try:
+                        refreshed_watchlist = load_watchlist()
+                    except Exception as error:
+                        log.warning(
+                            "Watch target refresh failed (watch_target_id=%s, exception_type=%s)",
+                            safe_target_id,
+                            type(error).__name__,
+                        )
+                        continue
+                    refreshed_entry = next(
+                        (candidate for candidate in refreshed_watchlist if candidate.get("id") == id),
+                        None,
+                    )
+                    if refreshed_entry is None:
+                        log.warning("Watch target refresh missing (watch_target_id=%s)", safe_target_id)
+                        continue
+                    refreshed_enabled = watch_target_enabled(refreshed_entry)
+                    refreshed_missing = any(
+                        refreshed_entry.get(field) is None
+                        for field in ("url", "channel_name", "id", "platform")
+                    )
+                    if refreshed_enabled is not True or refreshed_missing:
+                        log.warning("Watch target refresh blocked launch (watch_target_id=%s)", safe_target_id)
+                        continue
+                    if refreshed_entry["url"] != url:
+                        log.warning("Watch target URL changed during probe (watch_target_id=%s)", safe_target_id)
+                        continue
+
                     stream_id = None
                     with lock:
                         active_stream = find_active_stream(id)
@@ -1045,7 +1104,7 @@ def poll_loop():
                         else:
                             new_stream = create_stream(id)
                             stream_id = new_stream["id"]
-                    start_recording(entry, stream_id)
+                    start_recording(refreshed_entry, stream_id)
                 elif probe_result.state is ProbeState.OFFLINE:
                     log.info(
                         "Probe: OFFLINE (watch_target_id=%s, returncode=%s, diagnostic=%s)",
