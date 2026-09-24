@@ -8,9 +8,13 @@ import {
 } from "./streams.service";
 import { StreamController } from "./streams.controller";
 
+import { RecordingsFilesystemService } from "./recordings-filesystem.service";
+import { RecordingsFilesystemController } from "./recordings-filesystem.controller";
+
 @Module({
-  controllers: [StreamController],
+  controllers: [RecordingsFilesystemController, StreamController],
   providers: [
+    RecordingsFilesystemService,
     StreamsRepository,
     StreamerService,
     SessionService,
