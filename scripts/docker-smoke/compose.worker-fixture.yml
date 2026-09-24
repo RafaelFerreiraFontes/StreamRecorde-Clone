@@ -29,7 +29,7 @@ services:
         read_only: true
 
   inspector:
-    image: streamrecorder-worker:wave-03.5
+    image: streamrecorder-worker:wave-04.5
     command: ["sh", "-c", "while true; do sleep 3600; done"]
     user: "1000:1000"
     volumes:

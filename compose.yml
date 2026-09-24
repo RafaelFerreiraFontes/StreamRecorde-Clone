@@ -2,7 +2,7 @@ services:
   frontend:
     build:
       context: ./frontend
-    image: streamrecorder-frontend:wave-03.5
+    image: streamrecorder-frontend:wave-04.5
     restart: unless-stopped
     environment:
       PORT: "3001"
@@ -21,7 +21,7 @@ services:
   api:
     build:
       context: ./api
-    image: streamrecorder-api:wave-03.5
+    image: streamrecorder-api:wave-04.5
     restart: unless-stopped
     environment:
       PORT: "3000"
@@ -42,7 +42,7 @@ services:
   worker:
     build:
       context: ./worker
-    image: streamrecorder-worker:wave-03.5
+    image: streamrecorder-worker:wave-04.5
     restart: unless-stopped
     init: true
     environment:
