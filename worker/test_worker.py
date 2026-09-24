@@ -1018,6 +1018,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         with self.assertLogs(worker.log, "INFO") as logs:
             worker.drain_stderr(proc, "target-1")
 
+        assert proc.stderr is not None
         self.assertEqual(proc.stderr.read(), "")
         output = "\n".join(logs.output)
         self.assertIn("diagnostic suppressed", output)
@@ -1038,6 +1039,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             worker.drain_stderr(proc, "target-1")
 
         self.assertEqual(len(calls), 2)
+        assert proc.stderr is not None
         self.assertEqual(proc.stderr.read(), "")
 
     def test_start_recording_does_not_log_started_after_launch_failure(self):

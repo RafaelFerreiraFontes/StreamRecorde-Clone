@@ -100,6 +100,23 @@ docker compose restart worker
 
 Before stopping or restarting the Worker, verify that no active recording needs to finish. Interrupting the Worker can stop a recording and its child media processes; inspect its logs first.
 
+## Worker Operations
+
+The Worker image uses Python 3.12, FFmpeg, and the exact `streamlink==8.6.1` pin. `docker compose restart worker` only restarts the existing container; use `docker compose up -d --build worker` after changing the Worker source, Dockerfile, or dependencies so Compose rebuilds the image and recreates the service.
+
+Keep these boundaries separate: a running Worker container proves only its process is alive; healthy API/frontend containers prove their respective HTTP health endpoints respond; a successful Streamlink probe proves the target could be classified; a successful capture requires media output and later inspection. They are not interchangeable health signals.
+
+For an authorized, controlled test channel only, use this bounded diagnostic sequence:
+
+```sh
+AUTHORIZED_CONTROLLED_STREAM_URL='https://platform.example/authorized-test-channel'
+docker compose exec worker streamlink --version
+docker compose exec worker streamlink --loglevel debug --json "$AUTHORIZED_CONTROLLED_STREAM_URL"
+docker compose logs --tail=100 worker
+```
+
+Do not publish private stream URLs, credentials, recordings, or raw debug output. See the detailed [Worker operations runbook](worker/README.md#operations-runbook).
+
 ## Docker Integration Smoke Test
 
 Run the isolated Docker integration smoke test from the repository root:
