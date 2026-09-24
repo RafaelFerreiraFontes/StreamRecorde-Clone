@@ -56,12 +56,12 @@ GET /recordings
 GET /recordings?watchTargetId=<id>
 ```
 
-Diagnostics only: `GET /streamer` and `GET /session`. Individual entity GET routes are supported by the proxy but not currently needed by these collection views. No legacy types enter the main domain model. The proxy supports the API's `PATCH /watch-targets/:id` recording-subdirectory update, but the current UI does not present edit, enable, or disable controls.
+Diagnostics only: `GET /streamer` and `GET /session`. Individual entity GET routes are supported by the proxy but not currently needed by these collection views. No legacy types enter the main domain model. The proxy supports the API's `PATCH /watch-targets/:id` recording-subdirectory update, and presents folder editing and an Enabled switch.
 
 ## Current limitations
 
 - Creator identity is derived from display name. The selected/new name is submitted as `creator_id` and translated at the legacy boundary; no Creator mutation exists.
-- `enabled` is enforced by the Worker, but the current UI has no toggle or general update control.
+- `enabled` is enforced by the Worker, and can be changed using the row-level Enabled switch.
 - There is no Worker heartbeat. API success cannot prove the Worker process is alive, and persisted recording state can be stale.
 - Worker polling defaults to 60 seconds plus probe time; faster browser refreshes do not speed up detection. No WebSocket or SSE is used.
 - Recording `stream_id` is not persisted by the current legacy adapter and is shown as “Not persisted”.
@@ -113,3 +113,29 @@ pnpm test:integration
 The integration test creates two disposable targets at example.invalid, checks grouping, filtering and deletion, verifies proxy restrictions, and cleans up only its own targets. Keep the Worker stopped for this test. It does not use real channels or edit runtime files directly.
 
 Implementation evidence includes deterministic Worker coverage (161 tests) and the root `pnpm test:smoke` Docker Gates A-D: classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. The smoke uses deterministic fake Streamlink; it does not validate a real platform, network, captured media, or playable MP4. Browser automation timed out repeatedly, so visual rendering, responsive layout and browser-driven create/delete/polling interactions still require the manual workflow above.
+
+
+## Wave 04.5 recording storage controls
+
+Watch Targets has an Enabled switch between Recording Folder and State. Saving
+disables that row's switch, displays progress, reconciles the dashboard on success,
+and restores the previous value with error feedback on failure. Existing Wave 04
+Worker behavior skips new probes for disabled targets and lets active captures
+finish; this wave does not change that behavior.
+
+Recordings offers Browse location by recording ID. The shared modal displays
+Available, File not found or Directory unavailable without breaking history.
+It navigates server storage with breadcrumbs; it does not open desktop Explorer,
+serve media, or use file URLs.
+
+Creation and inline Recording Folder editing retain manual text input and add
+Browse. The same modal shows directories only and returns a relative path.
+Select current directory confirms; Cancel/Escape closes without changing the
+field. Empty root selection means no override and retains the existing
+channel-name fallback. Missing, loading, empty and API error states are explicit.
+No directory creation is offered, so API storage access stays read-only.
+
+The browser knows only logical relative paths. RECORDINGS_ROOT belongs to the API;
+Compose maps it to the Worker's recordings volume. Client-side folder/file inputs
+and showDirectoryPicker are deliberately not used. Browsing is bounded to 1,000
+immediate entries, hides dot entries and excludes symlinks.

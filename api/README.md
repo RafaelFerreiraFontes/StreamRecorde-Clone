@@ -742,3 +742,10 @@ Essa integração entre API e Worker é uma arquitetura transitória do MVP base
 ## Resumo executivo
 
 A API atual é uma camada de observação, domínio e compatibilidade em torno do MVP de monitoramento e gravação. Ela expõe o modelo atual de Creator/WatchTarget/Stream/Recording, preserva compatibility com o conjunto legacy e serve como integração entre o código de domínio e a gestão de arquivos JSON do Worker.
+# Wave 04.5 usability
+
+`PATCH /watch-targets/:id` accepts strict boolean `enabled` and/or `recording_subdir`; omitted fields stay unchanged. Legacy entries without `enabled` default to `true`, and explicit `false` survives reload. The existing Worker behavior is unchanged: disabled targets skip new probes while active captures continue.
+
+`GET /recordings/filesystem?path=<relative-path>` lists safe immediate entries under `RECORDINGS_ROOT`. `GET /recordings/:id/location` resolves a stored recording by ID and reports `available`, `file_not_found`, or `directory_unavailable`. The API returns metadata only, never file contents or host paths. Compose mounts the Worker recordings directory read-only at `/recordings` for the API and sets `RECORDINGS_ROOT=/recordings`.
+
+The frontend provides an Enabled row switch, a recording location browser, and a shared server-side directory picker for WatchTarget recording folders. Folder values remain relative paths; manual entry is supported. Absolute paths, traversal, malformed separators, control characters, hidden entries, and symlink/junction traversal are rejected. The browser does not invoke desktop file managers or client filesystem APIs.
