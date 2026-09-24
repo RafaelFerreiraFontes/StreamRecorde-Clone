@@ -16,7 +16,7 @@ import {
 } from "./streams.service";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { SessionDto } from "./dto/session.dto";
-import { CreateWatchTargetDto, PatchRecordingSubdirDto } from "./dto/watch-target.dto";
+import { CreateWatchTargetDto, PatchWatchTargetDto } from "./dto/watch-target.dto";
 import { RecordingQueryDto } from "./dto/recording-query.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 
@@ -65,15 +65,15 @@ export class StreamController {
   }
 
   /**
-   * PATCH /watch-targets/:id - Update only the recording_subdir field.
-   * Payload must include recording_subdir (empty string clears, undefined is no-op).
+   * PATCH /watch-targets/:id - Update enabled and/or recording_subdir.
+   * Omitted fields are unchanged; an empty recording_subdir clears its override.
    */
   @Patch("/watch-targets/:id")
   patchWatchTarget(
     @Param("id") id: string,
-    @Body() dto: PatchRecordingSubdirDto,
+    @Body() dto: PatchWatchTargetDto,
   ): Promise<WatchTarget> {
-    return this.streamerService.updateRecordingSubdir(id, dto);
+    return this.streamerService.updateWatchTarget(id, dto);
   }
 
   @Get("/streams")

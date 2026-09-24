@@ -246,7 +246,7 @@ export class StreamsRepository {
   }
 
   /**
-   * Update only the recording_subdir field of a watch target.
+   * Update allowed WatchTarget configuration fields in one atomic write.
    * PATCH semantics: field must be present in payload.
    * Empty string clears the override (restores legacy fallback).
    * Returns the updated watch target.
@@ -254,9 +254,10 @@ export class StreamsRepository {
    * Note: Invalid values (absolute, traversal, etc.) should be rejected at the
    * controller/DTO level. Repository handles the delete (undefined) vs clear (empty).
    */
-  async updateRecordingSubdir(
+  async updateWatchTarget(
     id: string,
     recordingSubdir: string | undefined,
+    enabled?: boolean,
   ): Promise<WatchTarget> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
@@ -279,6 +280,7 @@ export class StreamsRepository {
           entry.recording_subdir = recordingSubdir;
         }
       }
+      if (enabled !== undefined) entry.enabled = enabled;
       // If undefined, keep existing value (no-op)
       await this.writeWatchlist(watchlist);
       return this.toWatchTarget(entry, status);

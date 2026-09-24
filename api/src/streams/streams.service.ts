@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { StreamsRepository } from "./streams.repository";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
-import { CreateWatchTargetDto, PatchRecordingSubdirDto } from "./dto/watch-target.dto";
+import { CreateWatchTargetDto, PatchWatchTargetDto } from "./dto/watch-target.dto";
 import { SessionDto } from "./dto/session.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 
@@ -128,39 +128,22 @@ export class StreamerService {
     return await this.repository.removeWatchTarget(id);
   }
 
-  /**
-   * Update only the recording_subdir field of a watch target.
-   * PATCH semantics: field must be present in payload.
-   * Empty string clears override. Missing field is no-op.
-   */
-  async updateRecordingSubdir(
-    id: string,
-    dto: PatchRecordingSubdirDto,
-  ): Promise<WatchTarget> {
-    // Check if field is present in payload
-    if (!Object.prototype.hasOwnProperty.call(dto, "recording_subdir")) {
-      // Field not present - no-op
-      return await this.repository.updateRecordingSubdir(id, undefined);
+  async updateWatchTarget(id: string, dto: PatchWatchTargetDto): Promise<WatchTarget> {
+    if (!dto || typeof dto !== "object" || Array.isArray(dto) ||
+        Object.keys(dto).some(key => !["enabled", "recording_subdir"].includes(key))) {
+      throw new BadRequestException("Unsupported WatchTarget configuration");
     }
-
-    // Field is present - validate if non-empty
-    const rawValue = (dto as Record<string, unknown>).recording_subdir;
-
-    // Check if it's explicitly invalid (non-string passed)
-    if (typeof rawValue !== "string") {
-      throw new BadRequestException("recording_subdir must be a string");
+    if ("enabled" in dto && typeof dto.enabled !== "boolean") {
+      throw new BadRequestException("enabled must be a boolean");
     }
-
-    const value = rawValue as string;
-
-    // Empty string -> clear override (pass to repository as-is)
-    if (value === "") {
-      return await this.repository.updateRecordingSubdir(id, "");
+    let subdir: string | undefined;
+    if ("recording_subdir" in dto) {
+      if (typeof dto.recording_subdir !== "string") {
+        throw new BadRequestException("recording_subdir must be a string");
+      }
+      subdir = validateRecordingSubdirInput(dto.recording_subdir) ?? "";
     }
-
-    // Non-empty: validate and normalize
-    const normalized = validateRecordingSubdirInput(value, "recording_subdir");
-    return await this.repository.updateRecordingSubdir(id, normalized);
+    return this.repository.updateWatchTarget(id, subdir, dto.enabled);
   }
 
   async findAllStreamer(): Promise<StreamerDto[]> {

@@ -1,4 +1,4 @@
-import { IsIn, IsString, IsUrl, IsOptional } from "class-validator";
+import { IsIn, IsString, IsUrl, IsOptional, IsBoolean, ValidateIf } from "class-validator";
 import { Transform } from "class-transformer";
 import { normalizeTextInput } from "../sanitize";
 
@@ -50,7 +50,12 @@ export class CreateWatchTargetDto {
   recording_subdir?: string;
 }
 
-export class PatchRecordingSubdirDto {
+export class PatchWatchTargetDto {
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ValidateIf((_object, value) => value !== undefined)
   @IsString({ message: "recording_subdir must be a string" })
   recording_subdir?: string;
 }
