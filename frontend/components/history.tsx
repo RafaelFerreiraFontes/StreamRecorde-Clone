@@ -1,4 +1,5 @@
 ﻿"use client";
+import { RecordingBrowser } from "./recording-browser";
 import { useEffect, useState } from "react";
 import { useDashboard } from "./provider";
 import { Badge, Empty, Json, ResourceStatus, Table } from "./ui";
@@ -7,6 +8,7 @@ import { timestamp, duration } from "@/lib/format";
 import { states, type Recording } from "@/lib/types";
 export function History({ kind }: { kind: "streams" | "recordings" }) {
   const { snapshot } = useDashboard();
+  const [locationId, setLocationId] = useState<string>();
   const [target, setTarget] = useState("");
   const [state, setState] = useState("");
   const [filtered, setFiltered] = useState<{
@@ -159,6 +161,10 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
                     <code className="path">
                       {(row as Recording).output_file || "—"}
                     </code>
+                    <button type="button" className="secondary small"
+                      onClick={() => setLocationId((row as Recording).session_id)}>
+                      Browse location
+                    </button>
                   </td>
                 )}
               </tr>
@@ -177,6 +183,7 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
         {recordings &&
           " Stream IDs may not be persisted. Output paths are local Worker filesystem information only."}
       </p>
+      {locationId && <RecordingBrowser recordingId={locationId} onClose={() => setLocationId(undefined)} />}
       {data && <Json data={data} />}
     </>
   );

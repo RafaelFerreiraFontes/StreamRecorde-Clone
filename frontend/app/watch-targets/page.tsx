@@ -1,18 +1,67 @@
 ﻿"use client";
+import { RecordingBrowser } from "@/components/recording-browser";
 import { useState } from "react";
 import { useDashboard } from "@/components/provider";
 import { api } from "@/lib/api";
 import {
   qualities,
-  type CreateWatchTarget,
   type WatchTarget,
 } from "@/lib/types";
 import { Badge, Empty, Json, ResourceStatus, Table } from "@/components/ui";
 
 type EditingTarget = { id: string; recording_subdir?: string } | null;
 
+export function WatchTargetEnabledSwitch({
+  target,
+  pending,
+  afterMutation,
+  onError,
+}: {
+  target: WatchTarget;
+  pending: boolean;
+  afterMutation: () => Promise<void>;
+  onError: (error: string) => void;
+}) {
+  const [saving, setSaving] = useState<boolean>();
+  const enabled = saving ?? target.enabled;
+
+  async function toggleEnabled() {
+    const nextEnabled = !target.enabled;
+    setSaving(nextEnabled);
+    onError("");
+    try {
+      await api<WatchTarget>(`/watch-targets/${encodeURIComponent(target.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: nextEnabled }),
+      });
+      await afterMutation();
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setSaving(undefined);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label={`Enabled for ${target.channel_name} (${target.id})`}
+      aria-checked={enabled}
+      aria-busy={saving !== undefined}
+      disabled={pending || saving !== undefined}
+      className="secondary small"
+      onClick={() => void toggleEnabled()}
+    >
+      {saving !== undefined ? "Saving..." : target.enabled ? "Enabled" : "Disabled"}
+    </button>
+  );
+}
+
 export default function WatchTargets() {
   const { snapshot, afterMutation } = useDashboard();
+  const [picker, setPicker] = useState<"create" | "edit" | null>(null);
+  const [createFolder, setCreateFolder] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
@@ -63,6 +112,7 @@ export default function WatchTargets() {
       });
       setMessage("Watch target created.");
       form.reset();
+      setCreateFolder("");
       setShowForm(false);
       await afterMutation();
     } catch (e) {
@@ -216,11 +266,14 @@ export default function WatchTargets() {
               </label>
               <label className="full">
                 Recording Folder
-                <input
+                <div className="folder-input"><input
+                  value={createFolder}
+                  onChange={event => setCreateFolder(event.target.value)}
                   name="recording_subdir"
                   placeholder="Relative path (e.g. twitch/favorites)"
                   maxLength={255}
                 />
+                <button type="button" className="secondary" aria-label="Browse recording folders" onClick={() => setPicker("create")} disabled={pending}>Browse</button></div>
                 <span className="hint">
                   Optional. Path relative to the server's recordings root. Leave
                   empty to use the default (channel name).
@@ -248,6 +301,7 @@ export default function WatchTargets() {
               "Platform",
               "Quality",
               "Recording Folder",
+              "Enabled",
               "State",
               "Actions",
             ]}
@@ -269,7 +323,8 @@ export default function WatchTargets() {
                 <td>
                   {editingTarget?.id === t.id ? (
                     <div className="edit-subdir">
-                      <input
+                      <div className="folder-input"><input
+                        aria-label="Recording folder"
                         type="text"
                         value={editValue}
                         onChange={(e) => setEditValue(e.target.value)}
@@ -277,6 +332,7 @@ export default function WatchTargets() {
                         maxLength={255}
                         disabled={pending}
                       />
+                      <button type="button" className="secondary small" aria-label="Browse recording folders" onClick={() => setPicker("edit")} disabled={pending}>Browse</button></div>
                       <button
                         className="primary small"
                         onClick={saveEdit}
@@ -302,11 +358,20 @@ export default function WatchTargets() {
                         onClick={() => startEdit(t)}
                         disabled={pending}
                         title="Edit recording folder"
+                        aria-label="Edit recording folder"
                       >
                         Edit
                       </button>
                     </>
                   )}
+                </td>
+                <td>
+                  <WatchTargetEnabledSwitch
+                    target={t}
+                    pending={pending}
+                    afterMutation={afterMutation}
+                    onError={setError}
+                  />
                 </td>
                 <td>
                   <Badge state={t.state} />
@@ -330,9 +395,15 @@ export default function WatchTargets() {
         ) : null}
       </section>
       <p className="note">
-        The enabled field is informational and is not a Worker execution gate.
-        Monitoring cannot currently be paused through this API.
+        Enabled is saved per target. The existing Worker skips new probes for disabled
+        targets; active recordings continue. Changes take effect when configuration
+        is re-read. This wave does not change Worker execution behavior.
       </p>
+      {picker && <RecordingBrowser
+        initialPath={picker === "edit" ? editValue : undefined}
+        onClose={() => setPicker(null)}
+        onSelect={picker === "create" ? setCreateFolder : setEditValue}
+      />}
       {targets && <Json data={targets} />}
     </>
   );

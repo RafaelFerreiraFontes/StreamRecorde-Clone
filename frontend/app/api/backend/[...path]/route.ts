@@ -36,8 +36,8 @@ async function proxy(
     (path.length === 1 ||
       (path.length === 2 && !!id) ||
       (path.length === 3 &&
-        resource === "creators" &&
-        child === "watch-targets"));
+        ((resource === "creators" && child === "watch-targets") ||
+         (resource === "recordings" && child === "location"))));
   const writable =
     resource === "watch-targets" &&
     ((request.method === "POST" && path.length === 1) ||
@@ -73,6 +73,9 @@ async function proxy(
         "watchTargetId",
         request.nextUrl.searchParams.get("watchTargetId")!,
       );
+    if (resource === "recordings" && id === "filesystem" && path.length === 2) {
+      url.searchParams.set("path", request.nextUrl.searchParams.get("path") ?? "");
+    }
     const response = await fetch(url, {
       method: request.method,
       cache: "no-store",

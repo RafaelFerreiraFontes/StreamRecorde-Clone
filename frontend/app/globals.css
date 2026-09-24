@@ -665,3 +665,15 @@ footer {
     font-size: 12px;
   }
 }
+
+/* Shared server recording browser */
+.recording-browser { margin: auto; width: min(640px, 92vw); max-height: 85vh; overflow: auto; border: 1px solid #ccd5cf; border-radius: 12px; padding: 24px; color: #20382d; background: #fff; }
+.recording-browser::backdrop { background: rgb(10 25 18 / 45%); }
+.folder-input, .folder-breadcrumbs, .folder-actions { display: flex; gap: 8px; align-items: center; }
+.folder-input input { min-width: 0; flex: 1; }
+.folder-breadcrumbs { flex-direction: row; flex-wrap: wrap; }
+.folder-actions { justify-content: flex-end; margin-top: 20px; }
+.folder-entries { list-style: none; padding: 0; max-height: 40vh; overflow: auto; }
+.folder-entries li { padding: 6px 0; overflow-wrap: anywhere; }
+.selected-file { font-weight: 700; }
+[role="switch"][aria-checked="true"] { background: #e0eee4; color: #24553b; }
