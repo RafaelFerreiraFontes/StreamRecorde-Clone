@@ -202,7 +202,66 @@ describe("StreamController", () => {
       platform: "twitch",
       url: "https://twitch.tv/new-channel",
       quality: "720p",
+      enabled: true,
     });
+  });
+
+  it("preserves enabled state across reads and recording_subdir PATCH", async () => {
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    await fs.writeFile(
+      watchlistPath,
+      JSON.stringify([{
+        id: "disabled-target",
+        display_name: "Creator",
+        channel_name: "channel",
+        platform: "twitch",
+        url: "https://twitch.tv/channel",
+        quality: "best",
+        enabled: false,
+      }]),
+      "utf-8",
+    );
+
+    await expect(controller.getWatchTarget("disabled-target")).resolves.toMatchObject({
+      enabled: false,
+    });
+    await expect(
+      controller.patchWatchTarget("disabled-target", { recording_subdir: "archive" }),
+    ).resolves.toMatchObject({ enabled: false, recording_subdir: "archive" });
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
+      expect.objectContaining({ enabled: false, recording_subdir: "archive" }),
+    ]);
+  });
+
+  it("preserves explicit disabled state through the WatchTarget adapter round trip", () => {
+    const target = {
+      id: "disabled-target",
+      creator_id: "Creator",
+      channel_name: "channel",
+      platform: "twitch" as const,
+      url: "https://twitch.tv/channel",
+      quality: "best",
+      enabled: false,
+      state: "idle" as const,
+    };
+
+    expect(WatchTargetJsonAdapter.toDomain(WatchTargetJsonAdapter.fromDomain(target)).enabled).toBe(false);
+  });
+
+  it("defaults omitted enabled to true and rejects malformed persisted values", () => {
+    const entry = {
+      id: "target",
+      channel_name: "channel",
+      platform: "twitch",
+      url: "https://twitch.tv/channel",
+      quality: "best",
+    };
+    expect(WatchTargetJsonAdapter.toDomain(entry).enabled).toBe(true);
+    for (const enabled of [null, "false", 0, 1, [], {}]) {
+      expect(() => WatchTargetJsonAdapter.toDomain({ ...entry, enabled } as never)).toThrow(
+        "enabled configuration must be a boolean",
+      );
+    }
   });
 
   it("should delete only the requested watch target", async () => {
@@ -1128,5 +1187,153 @@ describe("recording_subdir path validation", () => {
 
     const target = await controller.getWatchTarget("existing-1");
     expect(target.recording_subdir).toBe("read/path");
+  });
+});
+
+describe("AtomicReplaceFaults", () => {
+  const { writeJsonAtomically, sweepStaleTempFiles, probeAtomicReplace } = require("../json-compatibility.adapters");
+  const fsPromises = require("fs/promises") as typeof import("fs/promises");
+
+  it("writeJsonAtomically sets mode to 0o644 after successful write", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "atomic-test-"));
+    const targetPath = path.join(tempDir, "test.json");
+    await fs.writeFile(targetPath, JSON.stringify({ old: true }), "utf-8");
+
+    await writeJsonAtomically(targetPath, { new: true });
+
+    const stat = await fs.stat(targetPath);
+    const mode = stat.mode & 0o777;
+    if (process.platform !== "win32") {
+      expect(mode).toBe(0o644);
+    }
+
+    await fs.rm(tempDir, { recursive: true });
+  });
+
+  it("writeJsonAtomically retries on transient rename errors", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "atomic-retry-"));
+    const targetPath = path.join(tempDir, "test.json");
+
+    let renameAttempts = 0;
+    const originalRename = fsPromises.rename;
+    jest.spyOn(fsPromises, "rename").mockImplementation(async (src, dst) => {
+      renameAttempts++;
+      if (renameAttempts <= 2) {
+        const err = new Error("Transient lock") as NodeJS.ErrnoException;
+        err.code = "EBUSY";
+        throw err;
+      }
+      return originalRename(src, dst);
+    });
+
+    try {
+      await writeJsonAtomically(targetPath, { retried: true });
+      const content = await fs.readFile(targetPath, "utf-8");
+      expect(JSON.parse(content)).toEqual({ retried: true });
+      expect(renameAttempts).toBe(3);
+    } finally {
+      jest.restoreAllMocks();
+      await fs.rm(tempDir, { recursive: true });
+    }
+  });
+
+  it("writeJsonAtomically re-throws after 3 transient rename failures", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "atomic-fail-"));
+    const targetPath = path.join(tempDir, "test.json");
+
+    jest.spyOn(fsPromises, "rename").mockRejectedValue({
+      code: "EACCES",
+      message: "Permission denied",
+    } as NodeJS.ErrnoException);
+
+    try {
+      await expect(writeJsonAtomically(targetPath, { value: 1 })).rejects.toMatchObject({
+        code: "EACCES",
+      });
+    } finally {
+      jest.restoreAllMocks();
+      await fs.rm(tempDir, { recursive: true });
+    }
+  });
+
+  it("writeJsonAtomically cleans up temp file on error", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "atomic-cleanup-"));
+    const targetPath = path.join(tempDir, "test.json");
+    await fs.writeFile(targetPath, JSON.stringify({ original: true }), "utf-8");
+
+    const originalOpen = fsPromises.open;
+    jest.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      jest.spyOn(handle, "writeFile").mockRejectedValue(new Error("Write failed"));
+      return handle;
+    });
+
+    try {
+      await expect(writeJsonAtomically(targetPath, { new: true })).rejects.toThrow("Write failed");
+      // Temp file should be cleaned up
+      const tempFiles = await fs.readdir(tempDir);
+      const tmpFiles = tempFiles.filter((f) => f.endsWith(".tmp"));
+      expect(tmpFiles).toHaveLength(0);
+      // Original should be untouched
+      const content = await fs.readFile(targetPath, "utf-8");
+      expect(JSON.parse(content)).toEqual({ original: true });
+    } finally {
+      jest.restoreAllMocks();
+      await fs.rm(tempDir, { recursive: true });
+    }
+  });
+
+  it("sweepStaleTempFiles removes stale temp files", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "sweep-test-"));
+    // Create stale temp files
+    await fs.writeFile(path.join(tempDir, ".channels_status.json.abc123.tmp"), "{}", "utf-8");
+    await fs.writeFile(path.join(tempDir, ".sessions.json.def456.tmp"), "[]", "utf-8");
+    await fs.writeFile(path.join(tempDir, "legitimate.json"), "{}", "utf-8"); // Should NOT be removed
+
+    await sweepStaleTempFiles(tempDir);
+
+    const files = await fs.readdir(tempDir);
+    expect(files).not.toContain(".channels_status.json.abc123.tmp");
+    expect(files).not.toContain(".sessions.json.def456.tmp");
+    expect(files).toContain("legitimate.json");
+
+    await fs.rm(tempDir, { recursive: true });
+  });
+
+  it("sweepStaleTempFiles handles non-existent directory gracefully", async () => {
+    const nonExistent = path.join(os.tmpdir(), "does-not-exist-" + Date.now());
+    // Should not throw
+    await expect(sweepStaleTempFiles(nonExistent)).resolves.toBeUndefined();
+  });
+
+  it("probeAtomicReplace preserves canonical JSON and cleans up its sibling probe", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "probe-test-"));
+    const targetPath = path.join(tempDir, "probe.json");
+    const canonicalContent = JSON.stringify({ existing: true });
+    await fs.writeFile(targetPath, canonicalContent, "utf-8");
+
+    await probeAtomicReplace(targetPath);
+
+    expect(await fs.readFile(targetPath, "utf-8")).toBe(canonicalContent);
+    expect((await fs.readdir(tempDir)).filter((entry) => entry.endsWith(".probe"))).toHaveLength(0);
+
+    await fs.rm(tempDir, { recursive: true });
+  });
+
+  it("probeAtomicReplace throws on write failure", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "probe-fail-"));
+    const targetPath = path.join(tempDir, "probe.json");
+    await fs.writeFile(targetPath, JSON.stringify({ existing: true }), "utf-8");
+
+    const accessError = new Error("Permission denied") as NodeJS.ErrnoException;
+    accessError.code = "EACCES";
+    try {
+      await expect(
+        probeAtomicReplace(targetPath, async () => { throw accessError; }),
+      ).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      jest.restoreAllMocks();
+      await fs.rm(tempDir, { recursive: true });
+    }
   });
 });

@@ -12,6 +12,21 @@ JsonValue = TypeVar("JsonValue")
 
 _READ_ATTEMPTS = 3
 
+# ─── Internal helpers ───────────────────────────────────────────────────────────
+
+def _replace_with_retry(src: str, dst: str, attempts: int = 3) -> None:
+    """Replace src with dst, retrying on transient PermissionError."""
+    last_error: OSError | None = None
+    for _ in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as e:
+            last_error = e
+            time.sleep(0.025)
+    if last_error is not None:
+        raise last_error
+
 
 def _read_json(
     path: str, empty_value: JsonValue, expected_type: type[JsonValue]
@@ -45,7 +60,9 @@ def write_json_atomically(path, value):
             json.dump(value, file_handle, ensure_ascii=False, indent=2, default=str)
             file_handle.flush()
             os.fsync(file_handle.fileno())
-        os.replace(temporary_path, path)
+        _replace_with_retry(temporary_path, path)
+        # Enforce canonical mode regardless of umask/inheritance
+        os.chmod(path, 0o644)
         temporary_path = None
     finally:
         if file_descriptor is not None:
@@ -53,6 +70,9 @@ def write_json_atomically(path, value):
         if temporary_path:
             try:
                 os.unlink(temporary_path)
+            except PermissionError:
+                # Best-effort cleanup; do not mask outer exception
+                pass
             except FileNotFoundError:
                 pass
 

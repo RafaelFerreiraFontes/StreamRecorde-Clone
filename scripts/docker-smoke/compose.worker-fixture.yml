@@ -1,0 +1,52 @@
+services:
+  api:
+    volumes:
+      - type: volume
+        source: smoke-runtime
+        target: /data
+
+  worker:
+    entrypoint: ["/bin/sh", "/smoke-fixture/worker-entrypoint.sh"]
+    environment:
+      PATH: /tmp/streamrecorder-smoke-bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      POLL_INTERVAL: "5"
+      SMOKE_FIXTURE_SCENARIOS: /smoke-state/scenarios.json
+      SMOKE_FIXTURE_STATE_DIR: /smoke-state
+      SMOKE_FIXTURE_EVENTS_DIR: /smoke-state/events
+    volumes:
+      - type: volume
+        source: smoke-runtime
+        target: /data
+      - type: volume
+        source: smoke-recordings
+        target: /recordings
+      - type: volume
+        source: smoke-state
+        target: /smoke-state
+      - type: bind
+        source: ${SMOKE_FIXTURE_DIR}
+        target: /smoke-fixture
+        read_only: true
+
+  inspector:
+    image: streamrecorder-worker:wave-03.5
+    command: ["sh", "-c", "while true; do sleep 3600; done"]
+    user: "1000:1000"
+    volumes:
+      - type: volume
+        source: smoke-runtime
+        target: /data
+      - type: volume
+        source: smoke-recordings
+        target: /recordings
+      - type: volume
+        source: smoke-state
+        target: /smoke-state
+
+volumes:
+  smoke-runtime:
+    name: ${SMOKE_RUNTIME_VOLUME}
+  smoke-recordings:
+    name: ${SMOKE_RECORDINGS_VOLUME}
+  smoke-state:
+    name: ${SMOKE_STATE_VOLUME}

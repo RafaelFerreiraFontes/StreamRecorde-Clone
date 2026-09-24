@@ -25,9 +25,13 @@ import pathlib
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import re
 from datetime import datetime
+from dataclasses import dataclass
+from enum import Enum
 from typing import Mapping, Optional
 
 try:
@@ -48,6 +52,8 @@ except ModuleNotFoundError:
 OUTPUT_DIR = "/recordings"
 POLL_INTERVAL = 60  # seconds
 CHECK_TIMEOUT = 20  # seconds for the streamlink probe not to freeze the loop
+DIAGNOSTIC_MAX_LENGTH = 256
+STREAMLINK_VERSION_TIMEOUT = 5
 
 
 def _get_module_dir():
@@ -208,19 +214,79 @@ def ensure_runtime_dirs() -> None:
     """
     # Initialize OUTPUT_DIR
     pathlib.Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-    log.info("Output directory ready: %s", OUTPUT_DIR)
 
     # Get config directory and paths
     paths = _resolve_all_paths()
-    config_dir = paths["watchlist"].rsplit("/", 1)[0]
 
-    # Initialize all four config files
+    # ─── Stale temp sweep ───────────────────────────────────────────────────
+    # Remove any lingering atomic-write temp files from previous crashed runs.
+    directories = {pathlib.Path(value).parent for value in paths.values()}
+    canonical_names = ("channels_status", "sessions", "streams", "watchlist")
+    for directory in directories:
+        for canonical in canonical_names:
+            for stale in directory.glob(f".{canonical}.*.tmp"):
+                try:
+                    stale.unlink()
+                    log.info("Removed stale temp file: %s", stale)
+                except OSError as e:
+                    log.warning("Failed to remove stale temp file %s: %s", stale, e)
+
+    # ─── Initialize runtime files ───────────────────────────────────────────
     initialize_runtime_files(paths)
-    log.info("Config directory initialized: %s", config_dir)
-    log.info("  watchlist: %s", paths["watchlist"])
-    log.info("  channels_status: %s", paths["channels_status"])
-    log.info("  sessions: %s", paths["sessions"])
-    log.info("  streams: %s", paths["streams"])
+
+    # ─── Runtime capability probes ──────────────────────────────────────────
+    for file_path in dict.fromkeys(paths.values()):
+        _probe_atomic_replace(file_path)
+    _probe_output_dir(OUTPUT_DIR)
+
+
+def _probe_atomic_replace(path: str) -> None:
+    """Verify a JSON path's parent using a disposable sibling destination."""
+    # Import locally to avoid top-level import cycle
+    try:
+        from worker.json_adapters import write_json_atomically
+    except ModuleNotFoundError:
+        from json_adapters import write_json_atomically
+
+    target = pathlib.Path(path)
+    with open(target, "r", encoding="utf-8") as file_handle:
+        json.load(file_handle)
+    probe_path = target.with_name(f".{target.name}.{uuid.uuid4().hex}.probe")
+    try:
+        write_json_atomically(str(probe_path), {"probe": True})
+        with open(probe_path, "r", encoding="utf-8") as file_handle:
+            json.load(file_handle)
+    finally:
+        try:
+            probe_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _probe_output_dir(output_dir: str) -> None:
+    """Verify the Worker can create, sync, read, and remove media files."""
+    file_descriptor = None
+    probe_path = None
+    try:
+        file_descriptor, probe_path = tempfile.mkstemp(
+            prefix=".worker-output-probe.", suffix=".tmp", dir=output_dir
+        )
+        with os.fdopen(file_descriptor, "wb") as file_handle:
+            file_descriptor = None
+            file_handle.write(b"probe")
+            file_handle.flush()
+            os.fsync(file_handle.fileno())
+        with open(probe_path, "rb") as file_handle:
+            if file_handle.read() != b"probe":
+                raise OSError("Worker output probe read verification failed")
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        if probe_path is not None:
+            try:
+                os.unlink(probe_path)
+            except FileNotFoundError:
+                pass
 
 
 def normalize_recording_subdir(input_str: str) -> str | None:
@@ -374,10 +440,18 @@ streams_data = (
     []
 )  # Array<Stream> - actual detected live broadcast occurrences
 lock = threading.Lock()
+shutdown_event = threading.Event()
 
 
 def load_watchlist():
     return WatchTargetJsonAdapter.read(CONFIG_PATH)
+
+
+def watch_target_enabled(entry: dict) -> bool | None:
+    """Return the strict enabled state; omitted legacy values default to true."""
+    if "enabled" not in entry:
+        return True
+    return entry["enabled"] if type(entry["enabled"]) is bool else None
 
 
 def load_channels_status():
@@ -523,10 +597,99 @@ def sanitize(s: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in s)
 
 
-def is_live(url: str) -> bool:
-    """Uses Streamlink as a probe: if it finds available streams
-    for the URL, considers the live online. Works for Twitch/YouTube/
-    Kick without needing API credentials."""
+def _safe_identifier(value: object) -> str:
+    """Return a bounded identifier suitable for structured log fields."""
+    normalized = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value))
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in normalized
+    )[:DIAGNOSTIC_MAX_LENGTH] or "unknown"
+
+
+def _sanitize_diagnostic(value: object) -> str | None:
+    """Return a bounded single-line diagnostic or suppress unsafe arbitrary text."""
+    if value is None:
+        return None
+    raw = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+    normalized = re.sub(r"[\x00-\x1f\x7f]+", " ", raw)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    unsafe_markers = (
+        "authorization", "bearer", "cookie", "set-cookie", "token",
+        "access_token", "refresh_token", "signature", "sig=", "key=",
+        "signed=", "password", "credential",
+    )
+    if (
+        re.search(r"[a-z][a-z0-9+.-]*://", lowered)
+        or any(marker in lowered for marker in unsafe_markers)
+        or normalized.startswith(("{", "["))
+    ):
+        return None
+    return normalized[:DIAGNOSTIC_MAX_LENGTH]
+
+
+class ProbeState(Enum):
+    LIVE = "live"
+    OFFLINE = "offline"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    state: ProbeState
+    reason: str
+    returncode: int | None = None
+    exception_type: str | None = None
+    stderr_summary: str | None = None
+    timeout_seconds: int | None = None
+
+
+def classify_probe_result(
+    invoked_url: str, returncode: int, stdout: str | None
+) -> ProbeResult:
+    """Classify Streamlink's JSON probe response without retaining diagnostics."""
+    if not isinstance(stdout, str) or not stdout.strip():
+        return ProbeResult(ProbeState.ERROR, "empty_output", returncode)
+
+    try:
+        data = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError):
+        return ProbeResult(ProbeState.ERROR, "malformed_json", returncode)
+
+    if not isinstance(data, dict):
+        return ProbeResult(ProbeState.ERROR, "invalid_root", returncode)
+
+    if "error" in data:
+        expected_no_streams_error = (
+            f"No playable streams found on this URL: {invoked_url}"
+        )
+        if (
+            returncode == 1
+            and set(data) == {"error"}
+            and data["error"] == expected_no_streams_error
+        ):
+            return ProbeResult(ProbeState.OFFLINE, "no_playable_streams", returncode)
+        return ProbeResult(ProbeState.ERROR, "error_envelope", returncode)
+
+    if returncode != 0:
+        return ProbeResult(ProbeState.ERROR, "nonzero_exit", returncode)
+
+    if "streams" not in data:
+        return ProbeResult(ProbeState.ERROR, "missing_streams", returncode)
+
+    streams = data["streams"]
+    if not isinstance(streams, Mapping):
+        return ProbeResult(ProbeState.ERROR, "invalid_streams", returncode)
+    if not streams:
+        return ProbeResult(ProbeState.OFFLINE, "empty_streams", returncode)
+    return ProbeResult(ProbeState.LIVE, "streams_available", returncode)
+
+
+def is_live(url: str) -> ProbeResult:
+    """Use Streamlink to safely classify a target's current availability."""
     try:
         result = subprocess.run(
             ["streamlink", "--json", url],
@@ -534,13 +697,27 @@ def is_live(url: str) -> bool:
             text=True,
             timeout=CHECK_TIMEOUT,
         )
-        if result.returncode != 0 or not result.stdout.strip():
-            return False
-        data = json.loads(result.stdout)
-        return bool(data.get("streams"))
-    except Exception as e:
-        log.warning("Error checking status of %s: %s", url, e)
-        return False
+        classified = classify_probe_result(url, result.returncode, result.stdout)
+        return ProbeResult(
+            classified.state,
+            classified.reason,
+            classified.returncode,
+            stderr_summary=_sanitize_diagnostic(result.stderr),
+        )
+    except subprocess.TimeoutExpired as error:
+        return ProbeResult(
+            ProbeState.ERROR,
+            "timeout",
+            exception_type=type(error).__name__,
+            stderr_summary=_sanitize_diagnostic(error.stderr),
+            timeout_seconds=CHECK_TIMEOUT,
+        )
+    except Exception as error:
+        return ProbeResult(
+            ProbeState.ERROR,
+            "process_error",
+            exception_type=type(error).__name__,
+        )
 
 
 def start_recording(entry: dict, stream_id: str | None = None):
@@ -576,26 +753,22 @@ def start_recording(entry: dict, stream_id: str | None = None):
         str(out_path),
     ]
 
-    log.info("[%s] Live detected! Recording to %s", channel_name, out_path)
-    process = subprocess.Popen(
-        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
-    )
+    try:
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+        )
+    except Exception as error:
+        log.error(
+            "Recording launch failed (watch_target_id=%s, exception_type=%s)",
+            _safe_identifier(watch_target_id),
+            type(error).__name__,
+        )
+        raise
 
     started_at = datetime.now().isoformat()
     with lock:
-        active_recordings[watch_target_id] = {
-            "process": process,
-            "output_file": str(out_path),
-            "started_at": started_at,
-            "channel_name": channel_name,
-            "platform": platform,
-            "url": url,
-            "session_id": session_id,
-            "stream_id": stream_id,
-        }
-
+        prior_state = channels_status[watch_target_id].get("state")
         channels_status[watch_target_id]["state"] = "recording"
-
         recording_entry = {
             "session_id": session_id,
             "watch_target_id": watch_target_id,
@@ -607,13 +780,55 @@ def start_recording(entry: dict, stream_id: str | None = None):
         if stream_id:
             recording_entry["stream_id"] = stream_id
         recordings.append(recording_entry)
+        try:
+            save_status()
+            save_recordings()
+        except Exception as error:
+            recordings.remove(recording_entry)
+            channels_status[watch_target_id]["state"] = prior_state
+            _stop_launched_process(process)
+            try:
+                save_status()
+            except Exception:
+                pass
+            log.error(
+                "Recording persistence failed (watch_target_id=%s, session_id=%s, "
+                "exception_type=%s)",
+                _safe_identifier(watch_target_id),
+                _safe_identifier(session_id),
+                type(error).__name__,
+            )
+            raise
+        active_recordings[watch_target_id] = {
+            "process": process,
+            "output_file": str(out_path),
+            "started_at": started_at,
+            "channel_name": channel_name,
+            "platform": platform,
+            "url": url,
+            "session_id": session_id,
+            "stream_id": stream_id,
+        }
 
-        save_status()
-        save_recordings()
+    log.info(
+        "Recording started (watch_target_id=%s, session_id=%s, stream_id=%s)",
+        _safe_identifier(watch_target_id),
+        _safe_identifier(session_id),
+        _safe_identifier(stream_id),
+    )
 
     threading.Thread(
         target=monitor_recording, args=(watch_target_id,), daemon=True
     ).start()
+
+
+def _stop_launched_process(process) -> None:
+    """Terminate and reap a child when its recording cannot be persisted."""
+    try:
+        process.terminate()
+    except (OSError, AttributeError):
+        pass
+    _wait_for_process(process)
 
 
 def drain_stderr(process, channel_name):
@@ -628,11 +843,80 @@ def drain_stderr(process, channel_name):
             line = process.stderr.readline()
             if not line:
                 break
-            stripped = line.rstrip("\r\n")
-            if stripped:
-                log.info("[%s] [streamlink] %s", channel_name, stripped)
-    except Exception:
-        pass  # Process may have ended; stderr is closed
+            try:
+                summary = _sanitize_diagnostic(line)
+                if summary is None and line.strip():
+                    log.info("Streamlink diagnostic suppressed (watch_target_id=%s)", _safe_identifier(channel_name))
+                elif summary:
+                    log.info(
+                        "Streamlink diagnostic (watch_target_id=%s, message=%s)",
+                        _safe_identifier(channel_name),
+                        summary,
+                    )
+            except Exception as error:
+                try:
+                    log.warning(
+                        "Streamlink diagnostic handling failed (watch_target_id=%s, exception_type=%s)",
+                        _safe_identifier(channel_name),
+                        type(error).__name__,
+                    )
+                except Exception:
+                    pass
+    except Exception as error:
+        log.warning(
+            "Streamlink stderr drain failed (watch_target_id=%s, exception_type=%s)",
+            _safe_identifier(channel_name),
+            type(error).__name__,
+        )
+
+
+def _persist_terminal_recording(id: str) -> bool:
+    """Persist a completed child only after both status files accept its terminal state."""
+    info = active_recordings.get(id)
+    if not info:
+        return True
+    terminal = info.get("pending_terminal")
+    if not terminal:
+        return False
+
+    recording_index = next(
+        (i for i, recording in enumerate(recordings)
+         if recording["session_id"] == info["session_id"]),
+        None,
+    )
+    if recording_index is None:
+        log.warning("Open session not found for channel %s", id)
+        return False
+
+    prior_status = channels_status[id].get("state")
+    recording = recordings[recording_index]
+    prior_recording = dict(recording)
+    channels_status[id]["state"] = terminal["state"]
+    recording.update({
+        "state": terminal["state"],
+        "finished_at": terminal["finished_at"],
+        "output_file": terminal["output_file"],
+    })
+    try:
+        save_status()
+        save_recordings()
+    except Exception as error:
+        channels_status[id]["state"] = prior_status
+        recording.clear()
+        recording.update(prior_recording)
+        log.error(
+            "Terminal recording persistence failed (watch_target_id=%s, session_id=%s, exception_type=%s)",
+            _safe_identifier(id), _safe_identifier(info["session_id"]), type(error).__name__,
+        )
+        return False
+
+    active_recordings.pop(id, None)
+    log.info(
+        "Recording finished (outcome=%s, watch_target_id=%s, returncode=%s)",
+        "completed" if terminal["state"] == "finished" else "error",
+        _safe_identifier(id), terminal["returncode"],
+    )
+    return True
 
 
 def monitor_recording(id: str):
@@ -647,7 +931,7 @@ def monitor_recording(id: str):
     proc.wait()
 
     with lock:
-        info = active_recordings.pop(id, None)
+        info = active_recordings.get(id)
 
         if not info:
             return
@@ -655,50 +939,33 @@ def monitor_recording(id: str):
         finished_at = datetime.now().isoformat()
 
         output_file = info["output_file"]
+        shutdown_interrupted = info.get("shutdown_requested", False)
 
         ok = (
-            proc.returncode == 0
+            not shutdown_interrupted
+            and proc.returncode == 0
             and os.path.exists(output_file)
             and os.path.getsize(output_file) > 0
         )
 
-        recording_index = next(
-            (
-                i
-                for i, recording in enumerate(recordings)
-                if recording["session_id"] == info["session_id"]
-            ),
-            None,
-        )
-
-        if recording_index is None:
-            log.warning("Open session not found for channel %s", id)
-            return
-
-        channels_status[id]["state"] = "finished" if ok else "error"
-
-        recordings[recording_index]["state"] = "finished" if ok else "error"
-
-        recordings[recording_index]["finished_at"] = finished_at
-
-        recordings[recording_index]["output_file"] = output_file
-
-        save_status()
-
-        save_recordings()
-
-    log.info(
-        "[%s] Recording finished (%s) -> %s",
-        info["channel_name"],
-        channels_status[id]["state"],
-        info["output_file"],
-    )
+        info["pending_terminal"] = {
+            "state": "finished" if ok else "error",
+            "finished_at": finished_at,
+            "output_file": output_file,
+            "returncode": proc.returncode if proc.returncode is not None else "absent",
+        }
+        _persist_terminal_recording(id)
 
 
 def poll_loop():
     global active_recordings, channels_status, recordings, streams_data, lock
 
-    while True:
+    while not shutdown_event.is_set():
+        with lock:
+            for channel_id in list(active_recordings):
+                if active_recordings[channel_id].get("pending_terminal"):
+                    _persist_terminal_recording(channel_id)
+
         # load channels_status, watchlist and sessions
         try:
             with lock:
@@ -710,8 +977,8 @@ def poll_loop():
             )
             with lock:
                 preserve_active_channel_status()
-        except Exception as e:
-            log.error("Failed to read channels_status: %s", e)
+        except Exception as error:
+            log.error("Failed to read channels_status (exception_type=%s)", type(error).__name__)
             with lock:
                 preserve_active_channel_status()
 
@@ -720,8 +987,8 @@ def poll_loop():
         except FileNotFoundError:
             log.warning("Missing watchlist at %s. Waiting...", CONFIG_PATH)
             watchlist = []
-        except Exception as e:
-            log.error("Failed to read watchlist: %s", e)
+        except Exception as error:
+            log.error("Failed to read watchlist (exception_type=%s)", type(error).__name__)
             watchlist = []
 
         try:
@@ -729,14 +996,14 @@ def poll_loop():
                 reload_recordings_preserving_active()
         except FileNotFoundError:
             log.warning("Missing sessions at %s. Waiting...", SESSIONS_PATH)
-        except Exception as e:
-            log.error("Failed to read sessions: %s", e)
+        except Exception as error:
+            log.error("Failed to read sessions (exception_type=%s)", type(error).__name__)
 
         try:
             with lock:
                 reload_streams_preserving_active()
-        except Exception as e:
-            log.error("Failed to read streams: %s", e)
+        except Exception as error:
+            log.error("Failed to read streams (exception_type=%s)", type(error).__name__)
 
         try:
             watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
@@ -744,19 +1011,60 @@ def poll_loop():
             watchlist_lastmodified = None
 
         for entry in watchlist:
+            if shutdown_event.is_set():
+                break
+
             url = entry.get("url")
             channel_name = entry.get("channel_name")
             id = entry.get("id")
             platform = entry.get("platform")
 
-            if url is None or channel_name is None or id is None or platform is None:
-                log.warning("Invalid watchlist entry: %s", entry)
+            if not isinstance(id, str):
+                log.warning(
+                    "Invalid watch target (watch_target_id=%s, missing_fields=id)",
+                    _safe_identifier(id),
+                )
+                continue
+
+            # Keep active captures and their terminal persistence independent of disable.
+            with lock:
+                if id in active_recordings:
+                    continue
+
+            enabled = watch_target_enabled(entry)
+            if enabled is None:
+                log.warning(
+                    "Invalid watch target enabled configuration (watch_target_id=%s)",
+                    _safe_identifier(id),
+                )
+                continue
+            if not enabled:
+                # Disabled targets retain open Streams: missed observations cannot prove an end.
+                continue
+
+            if (
+                not isinstance(url, str)
+                or not isinstance(channel_name, str)
+                or not isinstance(id, str)
+                or not isinstance(platform, str)
+            ):
+                invalid_fields = tuple(
+                    field for field, value in (
+                        ("url", url),
+                        ("channel_name", channel_name),
+                        ("id", id),
+                        ("platform", platform),
+                    ) if not isinstance(value, str)
+                )
+                log.warning(
+                    "Invalid watch target (watch_target_id=%s, missing_fields=%s)",
+                    _safe_identifier(id),
+                    ",".join(invalid_fields),
+                )
                 continue
 
             try:
                 with lock:
-                    if id in active_recordings:
-                        continue
                     channels_status.setdefault(
                         id,
                         {
@@ -766,9 +1074,51 @@ def poll_loop():
                         },
                     )
 
-                log.info("[%s] Checking status...", channel_name)
+                safe_target_id = _safe_identifier(id)
+                log.info("Checking status... (watch_target_id=%s)", safe_target_id)
 
-                if is_live(url):
+                probe_result = is_live(url)
+                if shutdown_event.is_set():
+                    break
+                if probe_result.state is ProbeState.LIVE:
+                    log.info(
+                        "Probe: LIVE (watch_target_id=%s, returncode=%s, diagnostic=%s)",
+                        safe_target_id,
+                        probe_result.returncode if probe_result.returncode is not None else "absent",
+                        probe_result.stderr_summary or "absent",
+                    )
+                    log.info("Live detected! (watch_target_id=%s)", safe_target_id)
+
+                    # Re-read before mutating Stream state so a configuration change during
+                    # the probe cannot start an unapproved or unprobed target.
+                    try:
+                        refreshed_watchlist = load_watchlist()
+                    except Exception as error:
+                        log.warning(
+                            "Watch target refresh failed (watch_target_id=%s, exception_type=%s)",
+                            safe_target_id,
+                            type(error).__name__,
+                        )
+                        continue
+                    refreshed_entry = next(
+                        (candidate for candidate in refreshed_watchlist if candidate.get("id") == id),
+                        None,
+                    )
+                    if refreshed_entry is None:
+                        log.warning("Watch target refresh missing (watch_target_id=%s)", safe_target_id)
+                        continue
+                    refreshed_enabled = watch_target_enabled(refreshed_entry)
+                    refreshed_missing = any(
+                        refreshed_entry.get(field) is None
+                        for field in ("url", "channel_name", "id", "platform")
+                    )
+                    if refreshed_enabled is not True or refreshed_missing:
+                        log.warning("Watch target refresh blocked launch (watch_target_id=%s)", safe_target_id)
+                        continue
+                    if refreshed_entry["url"] != url:
+                        log.warning("Watch target URL changed during probe (watch_target_id=%s)", safe_target_id)
+                        continue
+
                     stream_id = None
                     with lock:
                         active_stream = find_active_stream(id)
@@ -777,14 +1127,41 @@ def poll_loop():
                         else:
                             new_stream = create_stream(id)
                             stream_id = new_stream["id"]
-                    start_recording(entry, stream_id)
-                else:
+                    start_recording(refreshed_entry, stream_id)
+                elif probe_result.state is ProbeState.OFFLINE:
+                    log.info(
+                        "Probe: OFFLINE (watch_target_id=%s, returncode=%s, diagnostic=%s)",
+                        safe_target_id,
+                        probe_result.returncode if probe_result.returncode is not None else "absent",
+                        probe_result.stderr_summary or "absent",
+                    )
                     with lock:
                         channels_status[id]["state"] = "offline"
                         finalize_stream(id)
                     save_status()
-            except Exception as e:
-                log.warning("Error checking channel status %s: %s", channel_name, e)
+                elif probe_result.state is ProbeState.ERROR:
+                    returncode = (
+                        probe_result.returncode
+                        if probe_result.returncode is not None
+                        else "absent"
+                    )
+                    exception_type = probe_result.exception_type or "absent"
+                    log.warning(
+                        "Probe: ERROR (watch_target_id=%s, category=%s, returncode=%s, "
+                        "exception_type=%s, timeout_seconds=%s, diagnostic=%s)",
+                        safe_target_id,
+                        probe_result.reason,
+                        returncode,
+                        exception_type,
+                        probe_result.timeout_seconds if probe_result.timeout_seconds is not None else "absent",
+                        probe_result.stderr_summary or "absent",
+                    )
+            except Exception as error:
+                log.warning(
+                    "Checking status failed (watch_target_id=%s, exception_type=%s)",
+                    _safe_identifier(id),
+                    type(error).__name__,
+                )
                 continue
 
             try:
@@ -797,11 +1174,11 @@ def poll_loop():
 
                     watchlist = load_watchlist()
                     continue
-            except Exception as e:
-                log.warning("Error checking watchlist: %s", e)
+            except Exception as error:
+                log.warning("Watchlist check failed (exception_type=%s)", type(error).__name__)
                 continue
 
-        time.sleep(POLL_INTERVAL)
+        shutdown_event.wait(POLL_INTERVAL)
 
 
 def _wait_for_process(proc, timeout_sec=5):
@@ -825,8 +1202,11 @@ def _wait_for_process(proc, timeout_sec=5):
 
 
 def handle_shutdown(signum, frame):
-    log.info("Shutting down worker... finishing ongoing recordings.")
+    shutdown_event.set()
 
+
+def shutdown_worker():
+    log.info("Shutting down worker... finishing ongoing recordings.")
     with lock:
         # Snapshot active processes before terminating
         active_procs = [
@@ -838,6 +1218,7 @@ def handle_shutdown(signum, frame):
 
         for channel_id, info in active_procs:
             proc = info["process"]
+            info["shutdown_requested"] = True
             try:
                 proc.terminate()
             except OSError:
@@ -845,7 +1226,6 @@ def handle_shutdown(signum, frame):
                     "Process for channel %s already exited during terminate; skipping.",
                     channel_id,
                 )
-                continue
             channels_status[channel_id]["state"] = "error"
             for recording in recordings:
                 if recording["session_id"] == info["session_id"]:
@@ -860,13 +1240,78 @@ def handle_shutdown(signum, frame):
     for channel_id, info in active_procs:
         _wait_for_process(info["process"])
 
-    sys.exit(0)
+
+def _get_streamlink_version() -> str | None:
+    """Return the installed Streamlink version or log an actionable safe failure."""
+    try:
+        result = subprocess.run(
+            ["streamlink", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=STREAMLINK_VERSION_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as error:
+        log.error(
+            "Worker startup failed (category=streamlink_version_timeout, timeout_seconds=%s, exception_type=%s)",
+            STREAMLINK_VERSION_TIMEOUT,
+            type(error).__name__,
+        )
+        return None
+    except Exception as error:
+        log.error(
+            "Worker startup failed (category=streamlink_version_process_error, exception_type=%s)",
+            type(error).__name__,
+        )
+        return None
+    raw_version = result.stdout
+    version = _sanitize_diagnostic(raw_version)
+    if (
+        result.returncode != 0
+        or not isinstance(raw_version, str)
+        or len(raw_version.strip().splitlines()) != 1
+        or version is None
+    ):
+        log.error(
+            "Worker startup failed (category=streamlink_version_invalid, returncode=%s, diagnostic=%s)",
+            result.returncode if result.returncode is not None else "absent",
+            _sanitize_diagnostic(result.stderr) or "absent",
+        )
+        return None
+    return version
+
+
+def run_worker() -> int:
+    """Initialize the Worker and enter the polling loop after dependency validation."""
+    version = _get_streamlink_version()
+    if version is None:
+        return 1
+    try:
+        ensure_runtime_dirs()
+    except Exception as error:
+        log.error("Worker startup failed (category=runtime_initialization, exception_type=%s)", type(error).__name__)
+        return 1
+    paths = _resolve_all_paths()
+    config_dir = str(pathlib.Path(paths["watchlist"]).parent)
+    log.info(
+        "Worker started (streamlink_version=%s, poll_interval=%s, config_dir=%s, "
+        "watchlist_path=%s, channels_status_path=%s, sessions_path=%s, streams_path=%s, output_dir=%s)",
+        version,
+        POLL_INTERVAL,
+        config_dir,
+        paths["watchlist"],
+        paths["channels_status"],
+        paths["sessions"],
+        paths["streams"],
+        OUTPUT_DIR,
+    )
+    try:
+        poll_loop()
+    finally:
+        shutdown_worker()
+    return 0
 
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_shutdown)
     signal.signal(signal.SIGINT, handle_shutdown)
-    # Initialize runtime directories before entering the main loop
-    ensure_runtime_dirs()
-    log.info("Worker started. Poll interval: %ss", POLL_INTERVAL)
-    poll_loop()
+    sys.exit(run_worker())

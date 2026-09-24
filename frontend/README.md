@@ -32,7 +32,7 @@ Open http://localhost:3001. NestJS defaults to port 3000. The Worker is optional
 API_BASE_URL=http://localhost:3000
 ```
 
-`API_BASE_URL` is server-only. The proxy reads it at request time; restart development after environment-file changes. Never prefix it with `NEXT_PUBLIC_`. The proxy allowlists current routes and GET/POST/DELETE operations, forwards JSON bodies and the Recording filter, preserves upstream HTTP errors, disables caching and times out upstream calls after 10 seconds. It rejects cross-origin mutations and does not proxy cookies, credentials, filesystem resources, or arbitrary destinations. No backend CORS changes are needed. This unauthenticated console is intended for a trusted local development environment.
+`API_BASE_URL` is server-only. The proxy reads it at request time; restart development after environment-file changes. Never prefix it with `NEXT_PUBLIC_`. The proxy allowlists current routes and GET/POST/DELETE/PATCH operations, forwards JSON bodies and the Recording filter, preserves upstream HTTP errors, disables caching and times out upstream calls after 10 seconds. It rejects cross-origin mutations and does not proxy cookies, credentials, filesystem resources, or arbitrary destinations. No backend CORS changes are needed. This unauthenticated console is intended for a trusted local development environment.
 
 ## Pages and API coverage
 
@@ -56,12 +56,12 @@ GET /recordings
 GET /recordings?watchTargetId=<id>
 ```
 
-Diagnostics only: `GET /streamer` and `GET /session`. Individual entity GET routes are supported by the proxy but not currently needed by these collection views. No legacy types enter the main domain model. There is no update endpoint, so no edit/enable/disable control is presented.
+Diagnostics only: `GET /streamer` and `GET /session`. Individual entity GET routes are supported by the proxy but not currently needed by these collection views. No legacy types enter the main domain model. The proxy supports the API's `PATCH /watch-targets/:id` recording-subdirectory update, but the current UI does not present edit, enable, or disable controls.
 
 ## Current limitations
 
 - Creator identity is derived from display name. The selected/new name is submitted as `creator_id` and translated at the legacy boundary; no Creator mutation exists.
-- `enabled` is not an operational Worker gate.
+- `enabled` is enforced by the Worker, but the current UI has no toggle or general update control.
 - There is no Worker heartbeat. API success cannot prove the Worker process is alive, and persisted recording state can be stale.
 - Worker polling defaults to 60 seconds plus probe time; faster browser refreshes do not speed up detection. No WebSocket or SSE is used.
 - Recording `stream_id` is not persisted by the current legacy adapter and is shown as “Not persisted”.
@@ -112,4 +112,4 @@ pnpm test:integration
 
 The integration test creates two disposable targets at example.invalid, checks grouping, filtering and deletion, verifies proxy restrictions, and cleans up only its own targets. Keep the Worker stopped for this test. It does not use real channels or edit runtime files directly.
 
-Implementation verification: installation, production build, TypeScript check, client tests, HTTP integration flow and the existing 25 Worker tests passed. A disposable harness also exercised real Worker poll/start/finalize functions with media probing/processes mocked, then verified states through NestJS and the Next.js proxy. No media was captured. Browser automation timed out repeatedly, so visual rendering, responsive layout and browser-driven create/delete/polling interactions still require the manual workflow above.
+Implementation evidence includes deterministic Worker coverage (161 tests) and the root `pnpm test:smoke` Docker Gates A-D: classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. The smoke uses deterministic fake Streamlink; it does not validate a real platform, network, captured media, or playable MP4. Browser automation timed out repeatedly, so visual rendering, responsive layout and browser-driven create/delete/polling interactions still require the manual workflow above.

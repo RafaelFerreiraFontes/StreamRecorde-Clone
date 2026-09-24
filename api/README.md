@@ -180,6 +180,7 @@ Purpose:
 - `GET /watch-targets`
 - `GET /watch-targets/:id`
 - `POST /watch-targets`
+- `PATCH /watch-targets/:id` (updates `recording_subdir`; an empty string clears it)
 - `DELETE /watch-targets/:id`
 
 Purpose:
@@ -259,6 +260,8 @@ What exists today:
 - retries are limited and explicit during JSON reads.
 
 Important observation: this layer is compatible with the current MVP, but it does not replace a more robust multi-process coordination solution in future phases.
+
+Wave 04.7 smoke evidence covers two supported `POST`/`GET`/`DELETE` API-to-Worker cycles against the same isolated named `/data` volume. Atomic-replace compatibility is validated, but this is not a transaction or distributed-lock guarantee.
 
 ## Configuration File Paths
 
@@ -351,6 +354,8 @@ The tests cover:
 - atomic write and JSON reads;
 - absence of `channel_id` in domain payloads.
 
+The current suite has 68 tests. Run `pnpm test` and `pnpm exec tsc --noEmit`; the repository-level `pnpm test:smoke` adds the isolated API/Worker cross-writer evidence.
+
 There are no tests for frontend, auth, cloud upload, Redis, PostgreSQL, external queue, or SSE in this layer.
 
 ## Known Limitations
@@ -360,7 +365,7 @@ Known limitations verified in the current code:
 - persistence still depends on local JSON files;
 - `Creator.id` is derived from `display_name` and is not yet an independent persistent identity;
 - `Recording.stream_id` is not persisted in the legacy `sessions.json`;
-- `WatchTarget.enabled` exists in the model but does not yet act as a real execution gate;
+- `WatchTarget.enabled` is enforced by the Worker; the API exposes the persisted value but has no general update route beyond `recording_subdir`;
 - there is no authentication;
 - there is no PostgreSQL;
 - there is no external Redis queue;
@@ -550,6 +555,7 @@ Propósito:
 - `GET /watch-targets`
 - `GET /watch-targets/:id`
 - `POST /watch-targets`
+- `PATCH /watch-targets/:id` (atualiza `recording_subdir`; string vazia o limpa)
 - `DELETE /watch-targets/:id`
 
 Propósito:
@@ -630,6 +636,8 @@ O que existe atualmente:
 
 Observação importante: esta camada é compatível com o MVP atual, mas não substitui uma solução de coordenação multi-processo mais robusta em fases futuras.
 
+As evidências do smoke da Wave 04.7 cobrem dois ciclos suportados de `POST`/`GET`/`DELETE` entre API e Worker contra o mesmo volume nomeado isolado em `/data`. A compatibilidade com replace atômico foi validada, mas isso não é garantia de transação ou lock distribuído.
+
 ## Execução local
 
 Os scripts reais disponíveis em `api/package.json` são:
@@ -675,6 +683,8 @@ Os testes cobrem:
 - atomic write e leitura de JSON;
 - ausência de `channel_id` em payloads do domínio.
 
+A suíte atual tem 68 testes. Execute `pnpm test` e `pnpm exec tsc --noEmit`; o `pnpm test:smoke` na raiz acrescenta a evidência isolada de escrita cruzada entre API e Worker.
+
 Não há testes de frontend, auth, upload cloud, Redis, PostgreSQL, fila externa ou SSE nesta camada.
 
 ## Limitações conhecidas
@@ -684,7 +694,7 @@ Limitações conhecidas e verificadas no código atual:
 - persistência ainda depende de JSON local;
 - `Creator.id` é derivado de `display_name` e ainda não é uma identidade persistente independente;
 - `Recording.stream_id` não é persistido no legacy `sessions.json`;
-- `WatchTarget.enabled` existe no modelo, mas ainda não funciona como gate real de execução;
+- `WatchTarget.enabled` é aplicado pelo Worker; a API expõe o valor persistido, mas não possui rota geral de atualização além de `recording_subdir`;
 - não há autenticação;
 - não há PostgreSQL;
 - não há Redis/queue externa;
