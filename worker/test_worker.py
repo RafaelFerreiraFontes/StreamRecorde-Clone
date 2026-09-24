@@ -337,9 +337,10 @@ class ProbeObservabilityTests(unittest.TestCase):
             worker, "ensure_runtime_dirs"
         ), patch.object(worker, "_resolve_all_paths", return_value=paths), patch.object(
             worker, "poll_loop"
-        ) as poll_loop, patch.object(worker, "OUTPUT_DIR", "/alternate/output"), self.assertLogs(worker.log, "INFO") as logs:
+        ) as poll_loop, patch.object(worker, "shutdown_worker") as shutdown_worker, patch.object(worker, "OUTPUT_DIR", "/alternate/output"), self.assertLogs(worker.log, "INFO") as logs:
             self.assertEqual(worker.run_worker(), 0)
         poll_loop.assert_called_once_with()
+        shutdown_worker.assert_called_once_with()
         output = "\n".join(logs.output)
         self.assertIn("streamlink_version=7.0.0", output)
         self.assertIn(paths["watchlist"], output)
@@ -350,7 +351,7 @@ class ProbeObservabilityTests(unittest.TestCase):
             name: getattr(worker, name) for name in (
                 "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
                 "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
-                "streams_data", "lock",
+                "streams_data", "lock", "shutdown_event",
             )
         }
         temp_dir = tempfile.TemporaryDirectory()
@@ -376,7 +377,7 @@ class ProbeObservabilityTests(unittest.TestCase):
             ))
             with patch.object(worker, "is_live", side_effect=lambda _: next(results)), patch.object(
                 worker, "start_recording"
-            ), patch.object(worker.time, "sleep", side_effect=[None, None, KeyboardInterrupt]), self.assertLogs(worker.log, "INFO") as logs:
+            ), patch.object(worker.shutdown_event, "wait", side_effect=[None, None, KeyboardInterrupt]), self.assertLogs(worker.log, "INFO") as logs:
                 with self.assertRaises(KeyboardInterrupt):
                     worker.poll_loop()
             output = "\n".join(logs.output)
@@ -399,7 +400,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             name: getattr(worker, name) for name in (
                 "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
                 "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
-                "streams_data", "lock",
+                "streams_data", "lock", "shutdown_event",
             )
         }
         self.addCleanup(self.restore_worker_globals)
@@ -414,6 +415,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker.active_recordings = {}
         worker.streams_data = []
         worker.lock = worker.threading.Lock()
+        worker.shutdown_event = worker.threading.Event()
         Path(worker.CHANNELS_STATUS_PATH).write_text("{}", encoding="utf-8")
         Path(worker.SESSIONS_PATH).write_text("[]", encoding="utf-8")
         Path(worker.STREAMS_PATH).write_text("[]", encoding="utf-8")
@@ -666,7 +668,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams"),
         ), patch.object(
             worker.subprocess, "Popen"
-        ) as popen, patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+        ) as popen, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
 
@@ -684,8 +686,8 @@ class WorkerLifecycleTests(unittest.TestCase):
             raise KeyboardInterrupt
 
         with patch.object(
-            worker.time,
-            "sleep",
+            worker.shutdown_event,
+            "wait",
             side_effect=recreate_watchlist_then_stop,
         ) as sleep:
             with self.assertRaises(KeyboardInterrupt):
@@ -785,8 +787,8 @@ class WorkerLifecycleTests(unittest.TestCase):
             }
         }
 
-        with self.assertRaises(SystemExit):
-            worker.handle_shutdown(None, None)
+        worker.handle_shutdown(None, None)
+        worker.shutdown_worker()
 
         self.assertEqual(process.returncode, -15)
         self.assertEqual(worker.recordings[0]["state"], "error")
@@ -796,17 +798,16 @@ class WorkerLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(persisted_sessions[0]["state"], "error")
 
-    def test_shutdown_with_no_active_recordings_exits_cleanly(self):
-        """Shutdown handler should exit cleanly when no active recordings exist."""
+    def test_shutdown_with_no_active_recordings_persists_cleanly(self):
+        """Shutdown cleanup should persist cleanly when no recordings are active."""
         worker.active_recordings = {}
         worker.channels_status = {}
         worker.recordings = []
 
         with patch.object(worker, "save_status"), \
              patch.object(worker, "save_recordings"):
-            with self.assertRaises(SystemExit) as ctx:
-                worker.handle_shutdown(None, None)
-            self.assertEqual(ctx.exception.code, 0)
+            worker.handle_shutdown(None, None)
+            worker.shutdown_worker()
 
     def test_shutdown_with_already_exited_process_tolerates_gracefully(self):
         """Shutdown should tolerate processes that have already exited."""
@@ -839,8 +840,126 @@ class WorkerLifecycleTests(unittest.TestCase):
 
         with patch.object(worker, "save_status"), \
              patch.object(worker, "save_recordings"):
-            with self.assertRaises(SystemExit):
+            worker.handle_shutdown(None, None)
+            worker.shutdown_worker()
+
+    def test_shutdown_persists_error_and_reaps_when_terminate_reports_exited_process(self):
+        session = {
+            "session_id": "session-1",
+            "channel_id": "channel-1",
+            "started_at": "2026-09-05T00:00:00",
+            "finished_at": None,
+            "output_file": "recording.mp4",
+            "state": "recording",
+        }
+        process = MagicMock()
+        process.terminate.side_effect = OSError("already exited")
+        worker.recordings = [worker.deserialize_session(session)]
+        worker.channels_status = {
+            "channel-1": {
+                "channel_name": "example",
+                "platform": "twitch",
+                "state": "recording",
+            }
+        }
+        worker.active_recordings = {
+            "channel-1": {
+                "session_id": "session-1",
+                "process": process,
+                "channel_name": "example",
+                "platform": "twitch",
+            }
+        }
+
+        with patch.object(worker, "_wait_for_process") as wait_for_process:
+            worker.shutdown_worker()
+
+        self.assertTrue(worker.active_recordings["channel-1"]["shutdown_requested"])
+        self.assertEqual(worker.channels_status["channel-1"]["state"], "error")
+        self.assertEqual(worker.recordings[0]["state"], "error")
+        self.assertIsNotNone(worker.recordings[0]["finished_at"])
+        persisted_status = json.loads(Path(worker.CHANNELS_STATUS_PATH).read_text(encoding="utf-8"))
+        persisted_sessions = json.loads(Path(worker.SESSIONS_PATH).read_text(encoding="utf-8"))
+        self.assertEqual(persisted_status["channel-1"]["state"], "error")
+        self.assertEqual(persisted_sessions[0]["state"], "error")
+        self.assertIsNotNone(persisted_sessions[0]["finished_at"])
+        wait_for_process.assert_called_once_with(process)
+
+    def test_shutdown_handler_returns_when_lock_is_held(self):
+        process = MagicMock()
+        worker.active_recordings = {"channel-1": {"process": process}}
+        set_event = worker.shutdown_event.set
+
+        def set_shutdown_event():
+            self.assertTrue(worker.lock.locked())
+            set_event()
+
+        with patch.object(worker.shutdown_event, "set", side_effect=set_shutdown_event) as set_event_mock, \
+             patch.object(worker.log, "info") as info, \
+             patch.object(worker.log, "warning") as warning, \
+             patch.object(worker.log, "error") as error, \
+             patch.object(worker, "save_status") as save_status, \
+             patch.object(worker, "save_recordings") as save_recordings, \
+             patch.object(worker, "_wait_for_process") as wait_for_process:
+            with worker.lock:
                 worker.handle_shutdown(None, None)
+
+        self.assertTrue(worker.shutdown_event.is_set())
+        set_event_mock.assert_called_once_with()
+        info.assert_not_called()
+        warning.assert_not_called()
+        error.assert_not_called()
+        save_status.assert_not_called()
+        save_recordings.assert_not_called()
+        wait_for_process.assert_not_called()
+        process.terminate.assert_not_called()
+        process.wait.assert_not_called()
+
+    def test_run_worker_calls_shutdown_once_after_poll_loop_exits(self):
+        with patch.object(worker, "_get_streamlink_version", return_value="7.0.0"), patch.object(
+            worker, "ensure_runtime_dirs"
+        ), patch.object(worker, "poll_loop"), patch.object(worker, "shutdown_worker") as shutdown_worker:
+            self.assertEqual(worker.run_worker(), 0)
+
+        shutdown_worker.assert_called_once_with()
+
+    def test_poll_loop_wait_is_interruptible_by_shutdown_event(self):
+        def request_shutdown(_timeout):
+            worker.shutdown_event.set()
+            return True
+
+        with patch.object(worker.shutdown_event, "wait", side_effect=request_shutdown) as wait:
+            worker.poll_loop()
+
+        wait.assert_called_once_with(worker.POLL_INTERVAL)
+
+    def test_shutdown_during_probe_does_not_mutate_recording_lifecycle(self):
+        entry = {
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
+        }
+        self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
+
+        def live_then_shutdown(_url):
+            worker.shutdown_event.set()
+            return worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")
+
+        with patch.object(worker, "is_live", side_effect=live_then_shutdown) as is_live, patch.object(
+            worker, "create_stream"
+        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
+            worker.subprocess, "Popen"
+        ) as popen:
+            worker.poll_loop()
+
+        is_live.assert_called_once_with(entry["url"])
+        create_stream.assert_not_called()
+        start_recording.assert_not_called()
+        popen.assert_not_called()
+        self.assertEqual(worker.streams_data, [])
+        self.assertEqual(worker.recordings, [])
 
     def test_drain_stderr_logs_non_empty_lines(self):
         """Drain stderr should log non-empty stderr lines."""
@@ -993,6 +1112,27 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertNotIn("channel-1", worker.active_recordings)
         self.assertEqual(worker.recordings[0]["state"], "finished")
 
+    def test_monitor_preserves_shutdown_interruption_as_error_when_child_exits_zero(self):
+        output_file = Path(worker.OUTPUT_DIR) / "shutdown-recording.mp4"
+        output_file.parent.mkdir(parents=True)
+        output_file.write_bytes(b"recorded")
+        worker.channels_status = {"channel-1": {"state": "recording"}}
+        worker.recordings = [{
+            "session_id": "session-1", "watch_target_id": "channel-1",
+            "started_at": "2026-09-05T00:00:00", "finished_at": None,
+            "output_file": str(output_file), "state": "recording",
+        }]
+        worker.active_recordings = {"channel-1": {
+            "process": FakeProcess(returncode=0), "output_file": str(output_file),
+            "channel_name": "example", "session_id": "session-1",
+            "shutdown_requested": True,
+        }}
+
+        worker.monitor_recording("channel-1")
+
+        self.assertEqual(worker.recordings[0]["state"], "error")
+        self.assertEqual(worker.channels_status["channel-1"]["state"], "error")
+
     def test_recording_start_and_completion_events_are_safe_and_accurate(self):
         entry = {
             "id": "channel-1",
@@ -1132,6 +1272,7 @@ class WatchTargetEnabledTests(unittest.TestCase):
         worker.recordings = []
         worker.streams_data = []
         worker.lock = worker.threading.Lock()
+        worker.shutdown_event = worker.threading.Event()
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -1152,7 +1293,7 @@ class WatchTargetEnabledTests(unittest.TestCase):
         }
 
     def poll_once(self):
-        with patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+        with patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
 
@@ -1199,7 +1340,7 @@ class WatchTargetEnabledTests(unittest.TestCase):
             worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")
         ) as is_live, patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen, patch.object(
             worker.threading, "Thread"
-        ), patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+        ), patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
         is_live.assert_called_once_with(entry["url"])
@@ -1469,7 +1610,7 @@ class StreamDetectionTests(unittest.TestCase):
             name: getattr(worker, name) for name in (
                 "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
                 "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
-                "streams_data", "lock",
+                "streams_data", "lock", "shutdown_event",
             )
         }
         self.addCleanup(self.restore_worker_globals)
@@ -1484,6 +1625,7 @@ class StreamDetectionTests(unittest.TestCase):
         worker.active_recordings = {}
         worker.streams_data = []
         worker.lock = worker.threading.Lock()
+        worker.shutdown_event = worker.threading.Event()
         Path(worker.CHANNELS_STATUS_PATH).write_text("{}", encoding="utf-8")
         Path(worker.SESSIONS_PATH).write_text("[]", encoding="utf-8")
         Path(worker.STREAMS_PATH).write_text("[]", encoding="utf-8")
@@ -1502,7 +1644,7 @@ class StreamDetectionTests(unittest.TestCase):
         with patch.object(worker, "is_live", return_value=probe_result) as is_live_mock, \
              patch.object(worker.subprocess, "Popen", return_value=process or FakeProcess()) as popen_mock, \
              patch.object(worker.threading, "Thread"), \
-             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
         return is_live_mock, popen_mock
@@ -1525,7 +1667,7 @@ class StreamDetectionTests(unittest.TestCase):
         with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
-             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
@@ -1554,7 +1696,7 @@ class StreamDetectionTests(unittest.TestCase):
             with patch.object(worker.subprocess, "run", side_effect=lambda *args, **kwargs: next(probe_outputs)), \
                  patch.object(worker.subprocess, "Popen", side_effect=processes), \
                  patch.object(worker.threading, "Thread"), \
-                 patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+                 patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
                 with self.assertRaises(KeyboardInterrupt):
                     worker.poll_loop()
 
@@ -1615,7 +1757,7 @@ class StreamDetectionTests(unittest.TestCase):
         with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")) as is_live_mock, \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
-             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
@@ -1650,7 +1792,7 @@ class StreamDetectionTests(unittest.TestCase):
         worker.streams_data.append(existing_stream)
 
         with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")), \
-             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
 
@@ -1686,7 +1828,7 @@ class StreamDetectionTests(unittest.TestCase):
         }
 
         with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")), \
-             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
 
@@ -1804,7 +1946,7 @@ class StreamDetectionTests(unittest.TestCase):
             worker, "finalize_stream"
         ) as finalize_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
             worker, "save_status"
-        ) as save_status, patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt), self.assertLogs(
+        ) as save_status, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt), self.assertLogs(
             worker.log,
             level="WARNING",
         ) as logs:
@@ -1841,7 +1983,7 @@ class StreamDetectionTests(unittest.TestCase):
             worker, "finalize_stream"
         ) as finalize_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
             worker, "save_status"
-        ) as save_status, patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt), self.assertLogs(
+        ) as save_status, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt), self.assertLogs(
             worker.log,
             level="WARNING",
         ) as logs:
@@ -1883,7 +2025,7 @@ class StreamDetectionTests(unittest.TestCase):
         with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
-             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
@@ -1911,7 +2053,7 @@ class StreamDetectionTests(unittest.TestCase):
         with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
-             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
@@ -1939,7 +2081,7 @@ class StreamDetectionTests(unittest.TestCase):
         with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
-             patch.object(worker.time, "sleep", side_effect=KeyboardInterrupt):
+             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()

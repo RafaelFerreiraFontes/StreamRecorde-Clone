@@ -440,6 +440,7 @@ streams_data = (
     []
 )  # Array<Stream> - actual detected live broadcast occurrences
 lock = threading.Lock()
+shutdown_event = threading.Event()
 
 
 def load_watchlist():
@@ -938,9 +939,11 @@ def monitor_recording(id: str):
         finished_at = datetime.now().isoformat()
 
         output_file = info["output_file"]
+        shutdown_interrupted = info.get("shutdown_requested", False)
 
         ok = (
-            proc.returncode == 0
+            not shutdown_interrupted
+            and proc.returncode == 0
             and os.path.exists(output_file)
             and os.path.getsize(output_file) > 0
         )
@@ -957,7 +960,7 @@ def monitor_recording(id: str):
 def poll_loop():
     global active_recordings, channels_status, recordings, streams_data, lock
 
-    while True:
+    while not shutdown_event.is_set():
         with lock:
             for channel_id in list(active_recordings):
                 if active_recordings[channel_id].get("pending_terminal"):
@@ -1008,6 +1011,9 @@ def poll_loop():
             watchlist_lastmodified = None
 
         for entry in watchlist:
+            if shutdown_event.is_set():
+                break
+
             url = entry.get("url")
             channel_name = entry.get("channel_name")
             id = entry.get("id")
@@ -1067,6 +1073,8 @@ def poll_loop():
                 log.info("Checking status... (watch_target_id=%s)", safe_target_id)
 
                 probe_result = is_live(url)
+                if shutdown_event.is_set():
+                    break
                 if probe_result.state is ProbeState.LIVE:
                     log.info(
                         "Probe: LIVE (watch_target_id=%s, returncode=%s, diagnostic=%s)",
@@ -1165,7 +1173,7 @@ def poll_loop():
                 log.warning("Watchlist check failed (exception_type=%s)", type(error).__name__)
                 continue
 
-        time.sleep(POLL_INTERVAL)
+        shutdown_event.wait(POLL_INTERVAL)
 
 
 def _wait_for_process(proc, timeout_sec=5):
@@ -1189,8 +1197,11 @@ def _wait_for_process(proc, timeout_sec=5):
 
 
 def handle_shutdown(signum, frame):
-    log.info("Shutting down worker... finishing ongoing recordings.")
+    shutdown_event.set()
 
+
+def shutdown_worker():
+    log.info("Shutting down worker... finishing ongoing recordings.")
     with lock:
         # Snapshot active processes before terminating
         active_procs = [
@@ -1202,6 +1213,7 @@ def handle_shutdown(signum, frame):
 
         for channel_id, info in active_procs:
             proc = info["process"]
+            info["shutdown_requested"] = True
             try:
                 proc.terminate()
             except OSError:
@@ -1209,7 +1221,6 @@ def handle_shutdown(signum, frame):
                     "Process for channel %s already exited during terminate; skipping.",
                     channel_id,
                 )
-                continue
             channels_status[channel_id]["state"] = "error"
             for recording in recordings:
                 if recording["session_id"] == info["session_id"]:
@@ -1223,8 +1234,6 @@ def handle_shutdown(signum, frame):
     # Wait for all processes outside the lock to avoid deadlocks
     for channel_id, info in active_procs:
         _wait_for_process(info["process"])
-
-    sys.exit(0)
 
 
 def _get_streamlink_version() -> str | None:
@@ -1290,7 +1299,10 @@ def run_worker() -> int:
         paths["streams"],
         OUTPUT_DIR,
     )
-    poll_loop()
+    try:
+        poll_loop()
+    finally:
+        shutdown_worker()
     return 0
 
 
