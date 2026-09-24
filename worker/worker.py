@@ -1042,19 +1042,24 @@ def poll_loop():
                 # Disabled targets retain open Streams: missed observations cannot prove an end.
                 continue
 
-            missing_fields = tuple(
-                field for field, value in (
-                    ("url", url),
-                    ("channel_name", channel_name),
-                    ("id", id),
-                    ("platform", platform),
-                ) if value is None
-            )
-            if missing_fields:
+            if (
+                not isinstance(url, str)
+                or not isinstance(channel_name, str)
+                or not isinstance(id, str)
+                or not isinstance(platform, str)
+            ):
+                invalid_fields = tuple(
+                    field for field, value in (
+                        ("url", url),
+                        ("channel_name", channel_name),
+                        ("id", id),
+                        ("platform", platform),
+                    ) if not isinstance(value, str)
+                )
                 log.warning(
                     "Invalid watch target (watch_target_id=%s, missing_fields=%s)",
                     _safe_identifier(id),
-                    ",".join(missing_fields),
+                    ",".join(invalid_fields),
                 )
                 continue
 

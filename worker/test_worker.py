@@ -30,7 +30,7 @@ class FakeProcess:
     def __init__(self, returncode=0, stderr_lines=None):
         self.returncode = returncode
         self._stderr = io.StringIO(stderr_lines or "")
-        self.stderr = self._stderr
+        self.stderr: io.StringIO | None = self._stderr
         self._wait_called = False
 
     def wait(self, timeout=None):
@@ -1282,7 +1282,7 @@ class WatchTargetEnabledTests(unittest.TestCase):
             setattr(worker, name, value)
 
     @staticmethod
-    def entry(enabled=True):
+    def entry(enabled: object = True) -> dict[str, object]:
         return {
             "id": "target-1",
             "channel_name": "creator",

@@ -8,3 +8,16 @@ worker/__pycache__/
 .github/
 *.tsbuildinfo
 runtime-data/
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+coverage/
+.coverage
+htmlcov/
+*.log
+.env.*
+!.env.example
+!**/.env.example
+.DS_Store
+Thumbs.db

@@ -108,7 +108,9 @@ Run the isolated Docker integration smoke test from the repository root:
 pnpm test:smoke
 ```
 
-The harness uses its own temporary runtime-data and recordings directories, the `streamrecorder-smoke` Compose project, and host ports `3100`/`3101`. It cleans up its containers, network, and exact temporary directory even after a failed assertion. It never stops, writes to, or removes the normal Compose stack or its bind-mounted data. The test does not depend on a live stream or access a real platform: it uses the reserved invalid URL `https://example.invalid/smoke`. It does not start FFmpeg or a recording, and does not test media capture. Worker unit tests remain the gate for media-child and process-cleanup behavior. A real-live recording exercise is intentionally a separate optional operational procedure, run only against a controlled channel after reviewing platform and recording requirements.
+The harness uses a unique isolated Compose project, three Linux named mutable volumes, and one read-only fixture bind copied into `/tmp`. It has no host-port dependency. It runs the real Worker `poll_loop` with deterministic fake Streamlink behavior and checks Gates A-D: probe classification, lifecycle, persistence denial/recovery, API/Worker cross-writer behavior, active-child SIGTERM termination/reaping, and log-secret safety. Cleanup owns and removes only the exact smoke project resources.
+
+The smoke scenarios make no Twitch, YouTube, or Kick calls; image builds may still download dependencies. Fake output is not proof of a playable MP4 or real media capture, so a controlled, authorized live-recording exercise remains a separate operational check.
 
 Stop containers while retaining them, or remove the Compose containers and network:
 
@@ -176,6 +178,18 @@ On PowerShell:
 $env:CONFIG_DIR = '..\runtime-data'
 $env:OUTPUT_DIR = '..\recordings'
 python worker.py
+```
+
+## Validation
+
+Run the current focused validation from the relevant component directories:
+
+```sh
+(cd worker && python -m unittest test_worker)
+(cd worker && python -m pytest test_worker.py -q)
+python -m py_compile worker/worker.py worker/json_adapters.py worker/test_worker.py
+(cd api && pnpm test --runInBand && pnpm exec tsc --noEmit)
+pnpm test:smoke
 ```
 
 ## Supported Hybrid Workflow

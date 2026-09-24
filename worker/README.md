@@ -59,6 +59,7 @@ The Worker is currently responsible for:
 
 - loading `watchlist.json`;
 - checking monitored WatchTargets;
+- enforcing `enabled`: disabled or invalid entries perform no probe or capture, while active captures and pending terminal persistence remain independent;
 - detecting online streams;
 - keeping `active_recordings` in memory;
 - creating a `Stream` for a new broadcast;
@@ -110,6 +111,8 @@ later broadcast
 ```
 
 This behavior is the real model implemented by the current worker and not a future assumption.
+
+`ProbeResult` classifies Streamlink responses as `LIVE`, `OFFLINE`, or `ERROR`. LIVE creates or reuses an open Stream; OFFLINE finalizes it; ERROR records bounded, safe diagnostics without treating an uncertain probe as an end. Terminal recording persistence is retried while pending. Shutdown sets a cooperative event, then the normal flow terminates and reaps active children and persists their error terminal state.
 
 ## Current Structure
 
@@ -290,7 +293,8 @@ python worker.py
 Run tests:
 
 ```bash
-python -m pytest worker/test_worker.py
+python -m unittest test_worker
+python -m pytest test_worker.py -q
 ```
 
 External dependencies referenced by the current code and runtime:
@@ -316,6 +320,8 @@ The current `worker/test_worker.py` suite covers real scenarios from the current
 - atomic write;
 - invalid JSON;
 - legacy compatibility for `sessions.json`.
+
+The current deterministic suite has 161 tests. The repository-level `pnpm test:smoke` runs Docker smoke Gates A-D for classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. It uses deterministic fake Streamlink and does not validate a real platform, network, or playable MP4.
 
 These tests are deterministic and local and do not depend on internet access or live channels.
 
@@ -371,7 +377,7 @@ The current integration is a local MVP architecture based on shared JSON files a
 
 ## Executive Summary
 
-The current Python Worker is the operational layer of the MVP. It observes WatchTargets, detects live streams, creates/reuses `Stream`, creates `Recording`, executes Streamlink/FFmpeg, persists state, and maintains compatibility with the legacy JSON formats. The model is functional, local, and compatible with the Wave 02 state, but it remains subject to the limitations of the current MVP: local JSON persistence, no queue, no database, and no final cloud integration.
+The current Python Worker is the operational layer of the MVP. It observes enabled WatchTargets, classifies probes safely, creates/reuses `Stream`, creates `Recording`, cooperatively shuts down and reaps media children, persists state, and maintains compatibility with legacy JSON formats. The model is functional and local, but remains subject to the MVP limitations: JSON persistence, no queue, no database, and no final cloud integration.
 
 ---
 
@@ -391,6 +397,7 @@ O Worker atualmente é responsável por:
 
 - carregar `watchlist.json`;
 - verificar WatchTargets monitorados;
+- aplicar `enabled`: entradas desabilitadas ou inválidas não executam probe nem captura, enquanto capturas ativas e persistência terminal pendente permanecem independentes;
 - detectar streams online;
 - manter `active_recordings` em memória;
 - criar um `Stream` para um novo broadcast;
@@ -442,6 +449,8 @@ later broadcast
 ```
 
 Esse comportamento é o modelo real implementado pelo worker atual e não uma hipótese futura.
+
+`ProbeResult` classifica respostas do Streamlink como `LIVE`, `OFFLINE` ou `ERROR`. LIVE cria ou reutiliza uma Stream aberta; OFFLINE a finaliza; ERROR registra diagnósticos seguros e limitados sem tratar um probe incerto como fim. A persistência terminal de Recording é repetida enquanto pendente. O shutdown define um evento cooperativo e o fluxo normal termina e coleta os processos filhos ativos, persistindo o estado terminal de erro.
 
 ## Estrutura do Worker
 
@@ -557,7 +566,8 @@ python worker.py
 Executar testes:
 
 ```bash
-python -m pytest worker/test_worker.py
+python -m unittest test_worker
+python -m pytest test_worker.py -q
 ```
 
 Dependências externas mencionadas pelo código e runtime atual:
@@ -583,6 +593,8 @@ A suite atual `worker/test_worker.py` cobre cenários reais do estado atual do W
 - atomic write;
 - invalid JSON;
 - compatibilidade legacy de `sessions.json`.
+
+A suíte determinística atual tem 161 testes. O `pnpm test:smoke` na raiz executa os Gates A-D do smoke Docker para classificação, lifecycle, negação/recuperação de persistência, ciclos de escrita cruzada API/Worker, SIGTERM/coleta de filhos ativos e logs sem segredos. Ele usa Streamlink falso determinístico e não valida plataforma, rede ou MP4 reproduzível reais.
 
 Esses testes são deterministicamente locais e não dependem de internet ou de canais em live.
 
@@ -638,4 +650,4 @@ A integração atual é uma arquitetura de MVP baseada em arquivos JSON comparti
 
 ## Resumo executivo
 
-O Worker Python atual é a camada operacional do MVP. Ele observa WatchTargets, detecta live, cria/reutiliza `Stream`, cria `Recording`, executa Streamlink/FFmpeg, persiste estados e mantém a compatibilidade com os formatos legado do JSON. O modelo é funcional, local e completamente compatível com o estado da Wave 02, mas ainda sujeito às limitações do MVP atual: JSON local, sem fila, sem banco e sem cloud final.
+O Worker Python atual é a camada operacional do MVP. Ele observa WatchTargets habilitados, classifica probes com segurança, cria/reutiliza `Stream`, cria `Recording`, executa shutdown cooperativo e coleta processos filhos de mídia, persiste estados e mantém compatibilidade com formatos JSON legados. O modelo é funcional e local, mas ainda sujeito às limitações do MVP: persistência JSON, sem fila, sem banco e sem cloud final.
