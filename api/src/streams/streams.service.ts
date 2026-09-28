@@ -1,7 +1,11 @@
 import { Injectable, BadRequestException } from "@nestjs/common";
 import { StreamsRepository } from "./streams.repository";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
-import { CreateWatchTargetDto, PatchWatchTargetDto } from "./dto/watch-target.dto";
+import {
+  CreateWatchTargetDto,
+  PatchWatchTargetDto,
+  WATCH_TARGET_QUALITIES,
+} from "./dto/watch-target.dto";
 import { SessionDto } from "./dto/session.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 
@@ -130,7 +134,7 @@ export class StreamerService {
 
   async updateWatchTarget(id: string, dto: PatchWatchTargetDto): Promise<WatchTarget> {
     if (!dto || typeof dto !== "object" || Array.isArray(dto) ||
-        Object.keys(dto).some(key => !["enabled", "recording_subdir"].includes(key))) {
+        Object.keys(dto).some(key => !["enabled", "recording_subdir", "quality"].includes(key))) {
       throw new BadRequestException("Unsupported WatchTarget configuration");
     }
     if ("enabled" in dto && typeof dto.enabled !== "boolean") {
@@ -143,7 +147,16 @@ export class StreamerService {
       }
       subdir = validateRecordingSubdirInput(dto.recording_subdir) ?? "";
     }
-    return this.repository.updateWatchTarget(id, subdir, dto.enabled);
+    if ("quality" in dto && dto.quality !== undefined) {
+      if (typeof dto.quality !== "string" || !WATCH_TARGET_QUALITIES.includes(dto.quality as any)) {
+        throw new BadRequestException("quality must be a supported Streamlink quality value");
+      }
+    }
+    return this.repository.updateWatchTarget(id, {
+      recordingSubdir: subdir,
+      enabled: dto.enabled,
+      quality: dto.quality,
+    });
   }
 
   async findAllStreamer(): Promise<StreamerDto[]> {

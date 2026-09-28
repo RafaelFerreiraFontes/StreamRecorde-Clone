@@ -58,6 +58,57 @@ export function WatchTargetEnabledSwitch({
   );
 }
 
+export function WatchTargetQualitySelect({
+  target,
+  pending,
+  afterMutation,
+  onError,
+}: {
+  target: WatchTarget;
+  pending: boolean;
+  afterMutation: () => Promise<void>;
+  onError: (error: string) => void;
+}) {
+  const [savingQuality, setSavingQuality] = useState<string | undefined>();
+  const currentQuality = savingQuality ?? target.quality;
+
+  async function changeQuality(nextQuality: string) {
+    setSavingQuality(nextQuality);
+    onError("");
+    try {
+      await api<WatchTarget>(`/watch-targets/${encodeURIComponent(target.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ quality: nextQuality }),
+      });
+      await afterMutation();
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setSavingQuality(undefined);
+    }
+  }
+
+  const qualityOptions = qualities.includes(currentQuality as any)
+    ? qualities
+    : [currentQuality, ...qualities];
+
+  return (
+    <select
+      aria-label={`Quality for ${target.channel_name} (${target.id})`}
+      aria-busy={savingQuality !== undefined}
+      disabled={pending || savingQuality !== undefined}
+      value={currentQuality}
+      onChange={(e) => void changeQuality(e.target.value)}
+    >
+      {qualityOptions.map((q) => (
+        <option key={q} value={q}>
+          {q}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export default function WatchTargets() {
   const { snapshot, afterMutation } = useDashboard();
   const [picker, setPicker] = useState<"create" | "edit" | null>(null);
@@ -318,7 +369,12 @@ export default function WatchTargets() {
                 </td>
                 <td>{t.platform}</td>
                 <td>
-                  <code>{t.quality}</code>
+                  <WatchTargetQualitySelect
+                    target={t}
+                    pending={pending}
+                    afterMutation={afterMutation}
+                    onError={setError}
+                  />
                 </td>
                 <td>
                   {editingTarget?.id === t.id ? (
