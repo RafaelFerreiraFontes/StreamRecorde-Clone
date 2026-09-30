@@ -141,7 +141,7 @@ describe("Wave 04.5 HTTP and persistence", () => {
       .expect(400);
     await request(server)
       .patch("/watch-targets/target")
-      .send({ quality: "worst" })
+      .send({ quality: "unsupported-quality" })
       .expect(400);
     expect(
       JSON.parse(

@@ -1,4 +1,7 @@
 import { Test, TestingModule } from "@nestjs/testing";
+import { BadRequestException } from "@nestjs/common";
+import { plainToInstance } from "class-transformer";
+import { validate } from "class-validator";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
@@ -11,6 +14,7 @@ import {
 } from "../streams.service";
 import { StreamsRepository } from "../streams.repository";
 import { WatchTargetJsonAdapter } from "../json-compatibility.adapters";
+import { PatchWatchTargetDto } from "../dto/watch-target.dto";
 import {
   legacyChannelStatus,
   legacySessions,
@@ -607,6 +611,72 @@ describe("StreamController", () => {
     await controller.getSessionByChannel("channel-id");
 
     expect(findSessionsByChannel).toHaveBeenCalledWith("channel-id");
+  });
+
+  it("PATCH quality only changes quality and preserves enabled, recording_subdir, url, and sibling entries", async () => {
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    const watchlist = [
+      { id: "first", display_name: "Creator", channel_name: "first", platform: "twitch", url: "https://twitch.tv/first", quality: "best", enabled: false, recording_subdir: "archive" },
+      { id: "second", display_name: "Creator", channel_name: "second", platform: "twitch", url: "https://twitch.tv/second", quality: "480p", enabled: true },
+    ];
+    await fs.writeFile(watchlistPath, JSON.stringify(watchlist), "utf-8");
+
+    await expect(controller.patchWatchTarget("first", { quality: "720p" })).resolves.toMatchObject({ quality: "720p" });
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
+      { ...watchlist[0], quality: "720p" },
+      watchlist[1],
+    ]);
+  });
+
+  it("PATCH quality persists to watchlist.json via adapter round trip", async () => {
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    await controller.patchWatchTarget("1", { quality: "1080p60" });
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toContainEqual(
+      expect.objectContaining({ id: "1", quality: "1080p60" }),
+    );
+  });
+
+  it("PATCH quality 160p is accepted", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "160p" })).resolves.toMatchObject({ quality: "160p" });
+  });
+
+  it("PATCH omitting quality leaves existing quality unchanged", async () => {
+    await controller.patchWatchTarget("1", { enabled: false });
+    await expect(controller.getWatchTarget("1")).resolves.toMatchObject({ quality: "1080p", enabled: false });
+  });
+
+  it("PATCH quality combined with enabled works", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "720p", enabled: false })).resolves.toMatchObject({ quality: "720p", enabled: false });
+  });
+
+  it("PATCH rejects unsupported quality value", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "invalid-quality" })).rejects.toThrow(BadRequestException);
+  });
+
+  it("PATCH rejects empty string quality", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "" })).rejects.toThrow(BadRequestException);
+  });
+
+  it("PATCH rejects unknown key alongside quality", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "720p", unknownField: "x" } as never)).rejects.toThrow(BadRequestException);
+  });
+
+  it("WatchTargetJsonAdapter round trip preserves custom quality value", () => {
+    const entry = { id: "custom", channel_name: "channel", platform: "twitch", url: "https://twitch.tv/channel", quality: "custom-variant" };
+    expect(WatchTargetJsonAdapter.fromDomain(WatchTargetJsonAdapter.toDomain(entry))).toMatchObject({ quality: "custom-variant" });
+  });
+});
+
+describe("PatchWatchTargetDto quality validation", () => {
+  it("normalizes supported string values and rejects empty or non-string values", async () => {
+    const normalized = plainToInstance(PatchWatchTargetDto, { quality: " 720P " });
+    expect(normalized.quality).toBe("720p");
+    await expect(validate(normalized)).resolves.toHaveLength(0);
+
+    for (const quality of ["", 720, null]) {
+      const dto = plainToInstance(PatchWatchTargetDto, { quality });
+      await expect(validate(dto)).resolves.not.toHaveLength(0);
+    }
   });
 });
 

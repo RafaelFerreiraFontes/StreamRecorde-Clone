@@ -25,7 +25,7 @@ const { cleanup, fireEvent, render, screen, waitFor } =
   await import("@testing-library/react");
 const { RecordingBrowser } = await import("../components/recording-browser");
 const { DashboardProvider } = await import("../components/provider");
-const { default: WatchTargets, WatchTargetEnabledSwitch } =
+const { default: WatchTargets, WatchTargetEnabledSwitch, WatchTargetQualitySelect } =
   await import("../app/watch-targets/page");
 
 const target = {
@@ -195,4 +195,102 @@ test("watch target edit keeps manual entry and saves picker selections through t
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("quality select renders current quality as selected value and has accessible label", () => {
+  render(<WatchTargetQualitySelect target={target} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+  const select = screen.getByRole("combobox", { name: /Quality for Channel/ }) as HTMLSelectElement;
+  assert.equal(select.value, "best");
+});
+
+test("quality select sends PATCH with correct body and URL", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, "/api/backend/watch-targets/target-1");
+    assert.equal(init?.method, "PATCH");
+    assert.deepEqual(JSON.parse(String(init?.body)), { quality: "720p60" });
+    return Response.json({ ...target, quality: "720p60" });
+  };
+  try {
+    render(<WatchTargetQualitySelect target={target} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "720p60" } });
+    await waitFor(() => assert.equal((screen.getByRole("combobox") as HTMLSelectElement).getAttribute("aria-busy"), "false"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("quality select shows aria-busy and disabled while saving", async () => {
+  let resolveRequest!: (value: Response) => void;
+  const request = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => request;
+  try {
+    render(<WatchTargetQualitySelect target={target} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "720p" } });
+    assert.equal(select.getAttribute("aria-busy"), "true");
+    assert.equal(select.disabled, true);
+    resolveRequest(Response.json({ ...target, quality: "720p" }));
+    await waitFor(() => assert.equal(select.getAttribute("aria-busy"), "false"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("quality select calls afterMutation on success and reconciles to server value", async () => {
+  const originalFetch = globalThis.fetch;
+  let refreshes = 0;
+  globalThis.fetch = async () => Response.json({ ...target, quality: "720p" });
+  try {
+    render(<WatchTargetQualitySelect target={target} pending={false} afterMutation={async () => { refreshes += 1; }} onError={() => {}} />);
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "720p" } });
+    await waitFor(() => assert.equal(refreshes, 1));
+    await waitFor(() => assert.equal(select.value, "best"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("quality select calls onError and restores original quality on API failure", async () => {
+  const originalFetch = globalThis.fetch;
+  const errors: string[] = [];
+  globalThis.fetch = async () => Response.json({ message: "nope" }, { status: 500 });
+  try {
+    render(<WatchTargetQualitySelect target={target} pending={false} afterMutation={async () => {}} onError={(error) => errors.push(error)} />);
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "720p" } });
+    await waitFor(() => assert.match(errors.at(-1) ?? "", /HTTP 500/));
+    assert.equal(select.value, "best");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("quality select preserves custom quality value not in standard list", () => {
+  render(<WatchTargetQualitySelect target={{ ...target, quality: "custom-variant" }} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+  const select = screen.getByRole("combobox") as HTMLSelectElement;
+  assert.equal(select.value, "custom-variant");
+  assert.ok(Array.from(select.options).some((option) => option.value === "custom-variant"));
+});
+
+test("quality select allows switching from custom to standard quality", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    assert.deepEqual(JSON.parse(String(init?.body)), { quality: "720p" });
+    return Response.json({ ...target, quality: "720p" });
+  };
+  try {
+    render(<WatchTargetQualitySelect target={{ ...target, quality: "custom-variant" }} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "720p" } });
+    await waitFor(() => assert.equal((screen.getByRole("combobox") as HTMLSelectElement).getAttribute("aria-busy"), "false"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("160p is present in quality select options", () => {
+  render(<WatchTargetQualitySelect target={target} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+  assert.ok(Array.from((screen.getByRole("combobox") as HTMLSelectElement).options).some((option) => option.value === "160p"));
 });
