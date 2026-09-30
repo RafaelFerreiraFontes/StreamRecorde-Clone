@@ -1672,6 +1672,11 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
         self.assertEqual(command[command.index("-o") - 1], "720p60")
         is_live.assert_called_once_with(entry["url"])
         self.assertEqual(entry["quality"], "1080p60")
+        persisted_entry = json.loads(Path(worker.CONFIG_PATH).read_text(encoding="utf-8"))[0]
+        self.assertEqual(persisted_entry["quality"], "1080p60")
+        self.assertEqual(worker.streams_data[0]["watch_target_id"], entry["id"])
+        self.assertEqual(worker.recordings[0]["watch_target_id"], entry["id"])
+        self.assertEqual(worker.recordings[0]["stream_id"], worker.streams_data[0]["id"])
 
     def test_live_single_variant_reaches_streamlink(self):
         entry = self.entry("1080p")
@@ -1691,18 +1696,37 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
     def test_live_no_selectable_variant_skips_recording(self):
         entry = self.entry()
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        status = {
+            entry["id"]: {
+                "channel_name": entry["channel_name"],
+                "platform": entry["platform"],
+                "state": "idle",
+            }
+        }
+        Path(worker.CHANNELS_STATUS_PATH).write_text(json.dumps(status), encoding="utf-8")
         probe_result = worker.ProbeResult(
             worker.ProbeState.LIVE, "streams_available", streams={}
         )
 
         with patch.object(worker, "is_live", return_value=probe_result), patch.object(
-            worker.subprocess, "Popen"
-        ) as popen, patch.object(worker, "finalize_stream") as finalize_stream:
+            worker, "create_stream"
+        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
+            worker, "finalize_stream"
+        ) as finalize_stream:
             self.poll_once()
 
-        popen.assert_not_called()
+        create_stream.assert_not_called()
+        start_recording.assert_not_called()
         finalize_stream.assert_not_called()
         self.assertEqual(worker.streams_data, [])
+        self.assertEqual(worker.recordings, [])
+        self.assertEqual(worker.active_recordings, {})
+        self.assertEqual(worker.channels_status, status)
+        self.assertEqual(json.loads(Path(worker.STREAMS_PATH).read_text(encoding="utf-8")), [])
+        self.assertEqual(json.loads(Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")), [])
+        self.assertEqual(
+            json.loads(Path(worker.CHANNELS_STATUS_PATH).read_text(encoding="utf-8")), status
+        )
 
     def test_live_refresh_race_uses_refreshed_quality(self):
         initial = self.entry("1080p")

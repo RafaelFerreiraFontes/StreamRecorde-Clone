@@ -50,13 +50,14 @@ GET /creators
 GET /creators/:id/watch-targets
 GET /watch-targets
 POST /watch-targets
+PATCH /watch-targets/:id
 DELETE /watch-targets/:id
 GET /streams
 GET /recordings
 GET /recordings?watchTargetId=<id>
 ```
 
-Diagnostics only: `GET /streamer` and `GET /session`. Individual entity GET routes are supported by the proxy but not currently needed by these collection views. No legacy types enter the main domain model. The proxy supports the API's `PATCH /watch-targets/:id` recording-subdirectory update, and presents folder editing and an Enabled switch.
+Diagnostics only: `GET /streamer` and `GET /session`. Individual entity GET routes are supported by the proxy but not currently needed by these collection views. No legacy types enter the main domain model. WatchTarget rows provide an Enabled switch, Quality selector, recording-folder editor/browser, URL editor, and Open Stream for validated HTTP(S) URLs. Each edit uses `PATCH /watch-targets/:id`. Open Stream is ordinary external browser navigation, not proxying, playback, or a public recording URL.
 
 ## Current limitations
 
@@ -112,7 +113,7 @@ pnpm test:integration
 
 The integration test creates two disposable targets at example.invalid, checks grouping, filtering and deletion, verifies proxy restrictions, and cleans up only its own targets. Keep the Worker stopped for this test. It does not use real channels or edit runtime files directly.
 
-Implementation evidence includes deterministic Worker coverage (161 tests) and the root `pnpm test:smoke` Docker Gates A-D: classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. The smoke uses deterministic fake Streamlink; it does not validate a real platform, network, captured media, or playable MP4. Browser automation timed out repeatedly, so visual rendering, responsive layout and browser-driven create/delete/polling interactions still require the manual workflow above.
+Implementation evidence includes deterministic Worker coverage (180 tests) and the root `pnpm test:smoke` Docker Gates A-D: classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. The smoke uses deterministic fake Streamlink; it does not validate a real platform, network, captured media, or playable MP4. Browser automation timed out repeatedly, so visual rendering, responsive layout and browser-driven create/delete/polling interactions still require the manual workflow above.
 
 
 ## Wave 04.5 recording storage controls

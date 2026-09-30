@@ -197,6 +197,61 @@ test("watch target edit keeps manual entry and saves picker selections through t
   }
 });
 
+test("WatchTarget row keeps enabled, quality, folder, URL, and safe stream navigation controls after sequential edits", async () => {
+  const originalFetch = globalThis.fetch;
+  const patches: unknown[] = [];
+  let persistedTarget = { ...target };
+  globalThis.fetch = async (url, init) => {
+    const pathname = new URL(String(url), "http://localhost").pathname;
+    if (init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body));
+      patches.push(body);
+      persistedTarget = { ...persistedTarget, ...body };
+      return Response.json(persistedTarget);
+    }
+    if (pathname.endsWith("/watch-targets")) return Response.json([persistedTarget]);
+    if (pathname.endsWith("/creators")) return Response.json([{ id: "creator-1", display_name: "Creator" }]);
+    return Response.json([]);
+  };
+  try {
+    render(<DashboardProvider><WatchTargets /></DashboardProvider>);
+    const enabled = await screen.findByRole("switch", { name: /Enabled for Channel/ });
+    const quality = screen.getByRole("combobox", { name: /Quality for Channel/ });
+    const folder = screen.getByRole("button", { name: "Edit recording folder" });
+    const urlEditor = screen.getByRole("button", { name: /Edit URL for Channel/ });
+    const streamLink = screen.getByRole("link", { name: /Open stream for Channel/ });
+    assert.equal(enabled.getAttribute("aria-checked"), "true");
+    assert.equal((quality as HTMLSelectElement).value, "best");
+    assert.ok(folder);
+    assert.ok(urlEditor);
+    assert.equal(streamLink.getAttribute("target"), "_blank");
+    assert.equal(streamLink.getAttribute("rel"), "noopener noreferrer");
+
+    fireEvent.change(quality, { target: { value: "1080p60" } });
+    await waitFor(() => assert.deepEqual(patches, [{ quality: "1080p60" }]));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Edit URL for Channel/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "URL for Channel" }), {
+      target: { value: "https://www.twitch.tv/updated" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => assert.deepEqual(patches, [
+      { quality: "1080p60" },
+      { url: "https://www.twitch.tv/updated" },
+    ]));
+    await waitFor(() => assert.equal(
+      screen.getByRole("link", { name: /Open stream for Channel/ }).getAttribute("href"),
+      "https://www.twitch.tv/updated",
+    ));
+    assert.equal(screen.getByRole("switch", { name: /Enabled for Channel/ }).getAttribute("aria-checked"), "true");
+    assert.equal((screen.getByRole("combobox", { name: /Quality for Channel/ }) as HTMLSelectElement).value, "1080p60");
+    assert.ok(screen.getByRole("button", { name: "Edit recording folder" }));
+    assert.ok(screen.getByRole("button", { name: /Edit URL for Channel/ }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("WatchTargetEnabledSwitch handles error and reverts optimistic state", async () => {
   let resolveRequest!: (value: Response) => void;
   const request = new Promise<Response>((resolve) => { resolveRequest = resolve; });

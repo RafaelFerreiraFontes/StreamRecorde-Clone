@@ -127,7 +127,7 @@ describe("Wave 04.5 HTTP and persistence", () => {
     }
   });
 
-  it("updates both fields together; rejects invalid payloads without partial writes", async () => {
+  it("updates combined fields atomically and preserves omitted fields and siblings", async () => {
     const server = app.getHttpServer();
     for (const enabled of [null, 0, 1, "false", [], {}]) {
       await request(server)
@@ -150,13 +150,46 @@ describe("Wave 04.5 HTTP and persistence", () => {
     ).toEqual(target);
     const updated = await request(server)
       .patch("/watch-targets/target")
-      .send({ enabled: false, recording_subdir: "new/folder" })
+      .send({
+        enabled: false,
+        recording_subdir: "new/folder",
+        quality: "1080p60",
+        url: "https://www.twitch.tv/updated",
+      })
       .expect(200);
     expect(updated.body).toMatchObject({
       enabled: false,
       recording_subdir: "new/folder",
-      quality: "720p",
+      quality: "1080p60",
+      url: "https://www.twitch.tv/updated",
     });
+    expect(
+      (await request(server).get("/watch-targets/target").expect(200)).body,
+    ).toMatchObject({
+      enabled: false,
+      recording_subdir: "new/folder",
+      quality: "1080p60",
+      url: "https://www.twitch.tv/updated",
+    });
+
+    await request(server)
+      .patch("/watch-targets/target")
+      .send({ enabled: true })
+      .expect(200);
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(directory, "watchlist.json"), "utf8"),
+      ),
+    ).toEqual([
+      {
+        ...target,
+        enabled: true,
+        recording_subdir: "new/folder",
+        quality: "1080p60",
+        url: "https://www.twitch.tv/updated",
+      },
+      { ...target, id: "sibling", enabled: false },
+    ]);
   });
 
   it("PATCH url with valid HTTPS URL persists and is returned by GET", async () => {

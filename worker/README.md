@@ -116,6 +116,8 @@ This behavior is the real model implemented by the current worker and not a futu
 
 `ProbeResult` classifies Streamlink responses as `LIVE`, `OFFLINE`, or `ERROR`. LIVE creates or reuses an open Stream; OFFLINE finalizes it; ERROR records bounded, safe diagnostics without treating an uncertain probe as an end. Terminal recording persistence is retried while pending. Shutdown sets a cooperative event, then the normal flow terminates and reaps active children and persists their error terminal state.
 
+Quality selection keeps the WatchTarget's persisted preference unchanged. At runtime, an unavailable `1080p60` preference can deterministically select `720p60`; the selected variant and fallback reason are runtime-only. When no variant is selectable, the Worker creates no Stream or Recording. An `ERROR` probe is not equivalent to `OFFLINE`.
+
 ## Current Structure
 
 Actual Worker files:
@@ -365,7 +367,7 @@ An omitted `enabled` value is legacy `true`; `true` permits probes and launches;
 
 ### Validation and optional live exercise
 
-Recorded deterministic evidence: `161` unittest passed, `161` pytest passed, `py_compile` passed, API `68` tests passed, API typecheck passed, and Docker smoke passed `20/20`; no deterministic failures were reported. The smoke uses a unique isolated Compose project, three uniquely labeled Linux named mutable volumes, and one read-only fixture bind copied into `/tmp`; it exposes no host ports. Cleanup is restricted to exact resources carrying matching ownership labels. Its fake Streamlink proves neither platform/network availability nor a playable MP4.
+Recorded deterministic evidence: `180` unittest passed, `180` pytest passed, `py_compile` passed, API `68` tests passed, API typecheck passed, and Docker smoke passed `20/20`; no deterministic failures were reported. The smoke uses a unique isolated Compose project, three uniquely labeled Linux named mutable volumes, and one read-only fixture bind copied into `/tmp`; it exposes no host ports. Cleanup is restricted to exact resources carrying matching ownership labels. Its fake Streamlink proves neither platform/network availability nor a playable MP4.
 
 Optional real-platform exercise: **NOT RUN / pending**. Use only an authorized URL; collect the installed version, probe classification, sanitized logs, domain progression, and output metadata. Inspect any temporary output with `ffprobe`; an `.mp4` suffix alone does not prove MP4 format or playability. Keep URLs, samples, and raw diagnostics private, remove temporary output, and do not publish them.
 
@@ -387,7 +389,7 @@ The current `worker/test_worker.py` suite covers real scenarios from the current
 - invalid JSON;
 - legacy compatibility for `sessions.json`.
 
-The current deterministic suite has 161 tests. The repository-level `pnpm test:smoke` runs Docker smoke Gates A-D for classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. It uses deterministic fake Streamlink and does not validate a real platform, network, or playable MP4.
+The current deterministic suite has 180 tests. The repository-level `pnpm test:smoke` runs Docker smoke Gates A-D for classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. It uses deterministic fake Streamlink and does not validate a real platform, network, or playable MP4.
 
 These tests are deterministic and local and do not depend on internet access or live channels.
 
@@ -702,7 +704,7 @@ Um valor `enabled` omitido é o legado `true`; `true` permite probes e inicializ
 
 ### Validação e exercício live opcional
 
-Evidência determinística registrada: `161` unittest passou, `161` pytest passou, `py_compile` passou, `68` testes da API passaram, typecheck da API passou e o smoke Docker passou `20/20`; nenhuma falha determinística foi reportada. O smoke usa um projeto Compose único e isolado, três volumes mutáveis nomeados do Linux com rótulos únicos e um bind de fixture somente leitura copiado para `/tmp`; ele não expõe portas do host. A limpeza é restrita aos recursos exatos que carregam rótulos de propriedade correspondentes. Seu Streamlink falso não prova disponibilidade de plataforma/rede nem MP4 reproduzível.
+Evidência determinística registrada: `180` unittest passou, `180` pytest passou, `py_compile` passou, `68` testes da API passaram, typecheck da API passou e o smoke Docker passou `20/20`; nenhuma falha determinística foi reportada. O smoke usa um projeto Compose único e isolado, três volumes mutáveis nomeados do Linux com rótulos únicos e um bind de fixture somente leitura copiado para `/tmp`; ele não expõe portas do host. A limpeza é restrita aos recursos exatos que carregam rótulos de propriedade correspondentes. Seu Streamlink falso não prova disponibilidade de plataforma/rede nem MP4 reproduzível.
 
 Exercício opcional em plataforma real: **NOT RUN / pendente**. Use somente URL autorizada; colete versão instalada, classificação do probe, logs sanitizados, progressão do domínio e metadados de saída. Inspecione qualquer saída temporária com `ffprobe`; o sufixo `.mp4` sozinho não prova formato MP4 nem reprodução. Mantenha URLs, amostras e diagnósticos brutos privados, remova a saída temporária e não os publique.
 
@@ -724,7 +726,7 @@ A suite atual `worker/test_worker.py` cobre cenários reais do estado atual do W
 - invalid JSON;
 - compatibilidade legacy de `sessions.json`.
 
-A suíte determinística atual tem 161 testes. O `pnpm test:smoke` na raiz executa os Gates A-D do smoke Docker para classificação, lifecycle, negação/recuperação de persistência, ciclos de escrita cruzada API/Worker, SIGTERM/coleta de filhos ativos e logs sem segredos. Ele usa Streamlink falso determinístico e não valida plataforma, rede ou MP4 reproduzível reais.
+A suíte determinística atual tem 180 testes. O `pnpm test:smoke` na raiz executa os Gates A-D do smoke Docker para classificação, lifecycle, negação/recuperação de persistência, ciclos de escrita cruzada API/Worker, SIGTERM/coleta de filhos ativos e logs sem segredos. Ele usa Streamlink falso determinístico e não valida plataforma, rede ou MP4 reproduzível reais.
 
 Esses testes são deterministicamente locais e não dependem de internet ou de canais em live.
 

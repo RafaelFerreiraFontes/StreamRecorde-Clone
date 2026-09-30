@@ -147,6 +147,8 @@ Compose mounts `./runtime-data` at `/data` in both the API and Worker. The share
 - `streams.json`: detected stream history.
 - `sessions.json`: legacy recording persistence.
 
+The WatchTarget URL is authoritative for Streamlink probe and capture. Quality is a persisted preference; any runtime fallback is not written back. Open Stream is external browser navigation only, and recordings remain private rather than public media.
+
 `runtime-data/` and `recordings/` are ignored by Git and must not be versioned. On a clean clone, startup creates the directories and JSON files; do not create JSON files manually. Their canonical empty forms are `watchlist.json` as `[]`, `channels_status.json` as `{}`, `streams.json` as `[]`, and `sessions.json` as `[]`. Existing files are not overwritten merely because a container starts. Keep the API and Worker pointed at the same directory when they need to share state.
 
 Compose mounts `./recordings` (or `RECORDINGS_DIR`) at `/recordings` in the Worker and read-only in the API. API `RECORDINGS_ROOT=/recordings` enables the safe in-app location browser and folder picker. The frontend has no filesystem mount. `OUTPUT_DIR` is the output root, and a WatchTarget's relative `recording_subdir` is appended beneath it. For example, `recording_subdir=twitch/pixelcarvel` writes to the host path `./recordings/twitch/pixelcarvel/`. With `OUTPUT_DIR=/recordings` and `recording_subdir=creators/example`, the Worker writes to `/recordings/creators/example`. These files are local temporary/current implementation output, not final cloud storage or public media.
