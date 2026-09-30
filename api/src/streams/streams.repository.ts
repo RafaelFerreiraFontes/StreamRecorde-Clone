@@ -260,6 +260,7 @@ export class StreamsRepository {
       recordingSubdir?: string;
       enabled?: boolean;
       quality?: string;
+      url?: string;
     },
   ): Promise<WatchTarget> {
     return this.mutex.runExclusive(async () => {
@@ -285,6 +286,7 @@ export class StreamsRepository {
       }
       if (patch.enabled !== undefined) entry.enabled = patch.enabled;
       if (patch.quality !== undefined) entry.quality = patch.quality;
+      if (patch.url !== undefined) entry.url = patch.url;
       // If undefined, keep existing value (no-op)
       await this.writeWatchlist(watchlist);
       return this.toWatchTarget(entry, status);

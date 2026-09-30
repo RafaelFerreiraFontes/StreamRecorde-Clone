@@ -159,6 +159,72 @@ describe("Wave 04.5 HTTP and persistence", () => {
     });
   });
 
+  it("PATCH url with valid HTTPS URL persists and is returned by GET", async () => {
+    const server = app.getHttpServer();
+    const updated = await request(server)
+      .patch("/watch-targets/target")
+      .send({ url: "https://www.twitch.tv/updated" })
+      .expect(200);
+    expect(updated.body.url).toBe("https://www.twitch.tv/updated");
+    expect((await request(server).get("/watch-targets/target").expect(200)).body.url).toBe("https://www.twitch.tv/updated");
+    expect(JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8"))).toEqual([
+      { ...target, url: "https://www.twitch.tv/updated" },
+      { ...target, id: "sibling", enabled: false },
+    ]);
+  });
+
+  it("PATCH url with valid HTTP URL is accepted", async () => {
+    await request(app.getHttpServer())
+      .patch("/watch-targets/target")
+      .send({ url: "http://example.com/channel" })
+      .expect(200);
+  });
+
+  it("PATCH url preserves all unrelated fields and custom property", async () => {
+    const server = app.getHttpServer();
+    await request(server).patch("/watch-targets/target").send({ url: "https://kick.com/channel" }).expect(200);
+    expect((await request(server).get("/watch-targets/target").expect(200)).body).toMatchObject({
+      url: "https://kick.com/channel",
+      quality: target.quality,
+      enabled: true,
+      recording_subdir: target.recording_subdir,
+    });
+    expect(JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8"))[0]).toEqual({ ...target, url: "https://kick.com/channel" });
+  });
+
+  it.each([
+    "",
+    "not-a-url",
+    "/relative",
+    "//protocol-relative.com/path",
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "file:///etc/passwd",
+    "https://user:pass@example.com/channel",
+    42,
+  ])("PATCH url rejects invalid value %p without a partial write", async (url) => {
+    await request(app.getHttpServer())
+      .patch("/watch-targets/target")
+      .send({ url, enabled: true })
+      .expect(400);
+    expect(JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8"))).toEqual([
+      target,
+      { ...target, id: "sibling", enabled: false },
+    ]);
+  });
+
+  it("PATCH url does not alter sibling", async () => {
+    await request(app.getHttpServer())
+      .patch("/watch-targets/target")
+      .send({ url: "https://www.twitch.tv/updated" })
+      .expect(200);
+    expect(JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8"))[1]).toEqual({
+      ...target,
+      id: "sibling",
+      enabled: false,
+    });
+  });
+
   it("lists only safe metadata; resolves recording IDs and missing files without leaking host paths", async () => {
     const server = app.getHttpServer();
     const listing = (

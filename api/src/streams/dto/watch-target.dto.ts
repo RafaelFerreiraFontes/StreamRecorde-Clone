@@ -7,6 +7,14 @@ export const WATCH_TARGET_QUALITIES = [
   "1080p60", "720p60", "1080p", "720p", "480p", "360p", "160p",
 ] as const;
 
+export const WATCH_TARGET_URL_OPTIONS: NonNullable<Parameters<typeof IsUrl>[0]> = {
+  protocols: ["http", "https"],
+  require_protocol: true,
+  require_valid_protocol: true,
+  allow_protocol_relative_urls: false,
+  disallow_auth: true,
+};
+
 export class CreateWatchTargetDto {
   @IsString()
   @Transform(({ value }: { value: string }) => normalizeTextInput(value))
@@ -23,7 +31,7 @@ export class CreateWatchTargetDto {
   )
   platform: "youtube" | "twitch" | "kick";
 
-  @IsUrl()
+  @IsUrl(WATCH_TARGET_URL_OPTIONS)
   @IsString()
   url: string;
 
@@ -60,4 +68,11 @@ export class PatchWatchTargetDto {
     typeof value === "string" ? value.toLowerCase().trim() : value,
   )
   quality?: string;
+
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsString({ message: "url must be a string" })
+  @IsUrl(WATCH_TARGET_URL_OPTIONS, {
+    message: "url must be an absolute HTTP or HTTPS URL without credentials",
+  })
+  url?: string;
 }
