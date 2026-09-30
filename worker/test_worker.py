@@ -2856,3 +2856,152 @@ class TestAtomicReplaceFaults(unittest.TestCase):
         # Verify file was written correctly
         result = json.loads(self.target_path.read_text(encoding="utf-8"))
         self.assertEqual(result, {"probe": True})
+
+
+class ProbeStreamsTests(unittest.TestCase):
+    def test_live_probe_carries_streams_mapping(self):
+        url = "https://twitch.tv/example"
+        stdout = json.dumps({"streams": {"1080p60": {}, "720p": {}}})
+        result = worker.classify_probe_result(url, 0, stdout)
+
+        self.assertEqual(result.state, worker.ProbeState.LIVE)
+        self.assertIsNotNone(result.streams)
+        self.assertIn("1080p60", result.streams)
+        self.assertIn("720p", result.streams)
+
+    def test_non_live_probes_do_not_carry_streams(self):
+        url = "https://twitch.tv/example"
+        cases = (
+            (json.dumps({"streams": {}}), worker.ProbeState.OFFLINE),
+            ("invalid json{", worker.ProbeState.ERROR),
+        )
+
+        for stdout, expected_state in cases:
+            with self.subTest(stdout=stdout):
+                result = worker.classify_probe_result(url, 0, stdout)
+                self.assertEqual(result.state, expected_state)
+                self.assertIsNone(result.streams)
+
+    def test_is_live_forwards_streams(self):
+        stdout = json.dumps({"streams": {"best": {}, "1080p60": {}, "720p": {}}})
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
+            result = worker.is_live("https://twitch.tv/example")
+
+        self.assertEqual(result.state, worker.ProbeState.LIVE)
+        self.assertEqual(set(result.streams or ()), {"best", "1080p60", "720p"})
+        mock_run.assert_called_once()
+
+    def test_is_live_offline_does_not_carry_streams(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout=json.dumps({"streams": {}}), stderr=""
+            )
+            result = worker.is_live("https://twitch.tv/example")
+
+        self.assertEqual(result.state, worker.ProbeState.OFFLINE)
+        self.assertIsNone(result.streams)
+
+    def test_probe_result_repr_omits_streams_content(self):
+        stdout = json.dumps(
+            {"streams": {"1080p60": {"url": "https://secret.example.com/stream"}}}
+        )
+        result = worker.classify_probe_result("https://twitch.tv/example", 0, stdout)
+        representation = repr(result)
+
+        self.assertNotIn("secret.example.com", representation)
+        self.assertNotIn("streams=", representation)
+
+
+class QualitySelectionTests(unittest.TestCase):
+    """Pure unit tests for select_quality; no subprocess or I/O."""
+
+    def test_selection_contract(self):
+        cases = (
+            ("1080p60", ["1080p60", "1080p", "720p60"], "1080p60", "exact_match", True),
+            ("1080p60", ["1080p", "720p60"], "1080p", "same_resolution_fallback", False),
+            ("1080p60", ["720p60", "720p"], "720p60", "lower_resolution_fallback", False),
+            ("1080p60", ["720p", "480p"], "720p", "lower_resolution_fallback", False),
+            ("720p60", ["720p", "480p"], "720p", "same_resolution_fallback", False),
+            ("480p", ["480p"], "480p", "exact_match", True),
+            ("480p", ["720p"], "720p", "higher_resolution_fallback", False),
+            ("1080p60", ["360p"], "360p", "single_playable_variant", False),
+            ("best", ["best", "1080p60", "720p"], "best", "alias_direct", True),
+            ("best", ["1080p", "1080p60", "720p"], "1080p60", "alias_fallback", False),
+            ("1080p60", [], None, "no_playable_variant", False),
+            ("1080p60", ["audio_only"], "audio_only", "single_playable_variant", False),
+        )
+
+        for preferred, available, selected, reason, exact_match in cases:
+            with self.subTest(preferred=preferred, available=available):
+                result = worker.select_quality(preferred, available)
+                self.assertEqual(result.selected, selected)
+                self.assertEqual(result.reason, reason)
+                self.assertEqual(result.exact_match, exact_match)
+                self.assertEqual(result.preferred, preferred)
+
+    def test_aliases(self):
+        cases = (
+            ("source", ["source", "1080p60", "720p"], "source", "alias_direct"),
+            ("chunked", ["chunked", "1080p60"], "chunked", "alias_direct"),
+            ("worst", ["worst", "360p", "480p"], "worst", "alias_direct"),
+            ("source", ["1080p60", "720p", "480p"], "1080p60", "alias_fallback"),
+            ("worst", ["1080p60", "720p"], "1080p60", "alias_fallback"),
+            ("best", ["720p"], "720p", "alias_fallback"),
+        )
+
+        for preferred, available, selected, reason in cases:
+            with self.subTest(preferred=preferred, available=available):
+                result = worker.select_quality(preferred, available)
+                self.assertEqual(result.selected, selected)
+                self.assertEqual(result.reason, reason)
+
+    def test_fps_tie_breaking(self):
+        cases = (
+            ("720p60", ["720p60", "720p30", "720p"], "720p60", "exact_match"),
+            ("720p60", ["720p30", "720p"], "720p30", "same_resolution_fallback"),
+            ("720p", ["720p60", "720p30"], "720p30", "same_resolution_fallback"),
+            ("1080p60", ["720p60", "720p"], "720p60", "lower_resolution_fallback"),
+            ("480p", ["720p60", "720p"], "720p60", "higher_resolution_fallback"),
+            ("720p45", ["720p30", "720p60"], "720p60", "same_resolution_fallback"),
+        )
+
+        for preferred, available, selected, reason in cases:
+            with self.subTest(preferred=preferred, available=available):
+                result = worker.select_quality(preferred, available)
+                self.assertEqual(result.selected, selected)
+                self.assertEqual(result.reason, reason)
+
+    def test_determinism_and_no_mutation(self):
+        preferred = "1080p60"
+        available = ["720p", "480p", "1080p60"]
+        original = list(available)
+        result = worker.select_quality(preferred, available)
+        reordered = worker.select_quality(preferred, ["1080p60", "480p", "720p"])
+        duplicates = worker.select_quality("1080p60", ["720p", "720p", "480p", "480p"])
+        unique = worker.select_quality("1080p60", ["720p", "480p"])
+
+        self.assertEqual(available, original)
+        self.assertEqual(result.selected, reordered.selected)
+        self.assertEqual(duplicates.selected, unique.selected)
+        self.assertEqual(duplicates.reason, unique.reason)
+
+    def test_unparseable_variants_are_deterministic_fallbacks(self):
+        cases = (
+            ("hls", ["1080p60", "720p", "480p"], "1080p60"),
+            ("1080p60", ["hls", "audio_only"], "audio_only"),
+            ("1080p60", ["not_a_quality!!!", "720p"], "720p"),
+            ("1080p60", ["best", "worst", "720p", "480p"], "720p"),
+            ("1080p60", ["480p", "360p"], "480p"),
+        )
+
+        for preferred, available, selected in cases:
+            with self.subTest(preferred=preferred, available=available):
+                self.assertEqual(worker.select_quality(preferred, available).selected, selected)
+
+    def test_preferred_configuration_is_not_mutated(self):
+        entry = {"quality": "1080p60", "url": "https://example.com"}
+        result = worker.select_quality(entry["quality"], ["720p60", "720p"])
+
+        self.assertEqual(result.selected, "720p60")
+        self.assertEqual(entry["quality"], "1080p60")

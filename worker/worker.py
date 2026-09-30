@@ -30,7 +30,7 @@ import threading
 import time
 import re
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping, Optional
 
@@ -645,6 +645,168 @@ class ProbeResult:
     exception_type: str | None = None
     stderr_summary: str | None = None
     timeout_seconds: int | None = None
+    streams: dict[str, object] | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class SelectionResult:
+    selected: str | None
+    reason: str
+    preferred: str
+    exact_match: bool
+
+
+_KNOWN_ALIASES: frozenset[str] = frozenset({"best", "worst", "source", "chunked"})
+_VARIANT_RE = re.compile(r"^(\d+)p(\d+)?$")
+
+
+def _parse_variant(name: str) -> tuple[int, int | None] | None:
+    """Return (resolution, fps_or_none) for parseable names, else None."""
+    match = _VARIANT_RE.match(name)
+    if match is None:
+        return None
+    resolution = int(match.group(1))
+    fps = int(match.group(2)) if match.group(2) is not None else None
+    return (resolution, fps)
+
+
+def select_quality(preferred: str, available: list[str]) -> SelectionResult:
+    """Select the best playable variant for a preferred quality.
+
+    Never mutates `available` or any WatchTarget field.
+    """
+    unique = list(dict.fromkeys(available))
+
+    if not unique:
+        return SelectionResult(None, "no_playable_variant", preferred, False)
+
+    if preferred in unique:
+        is_alias = preferred in _KNOWN_ALIASES
+        return SelectionResult(
+            preferred, "alias_direct" if is_alias else "exact_match", preferred, True
+        )
+
+    if len(unique) == 1:
+        candidate_variant = _parse_variant(unique[0])
+        preferred_variant = _parse_variant(preferred)
+        if (
+            candidate_variant is not None
+            and preferred_variant is not None
+            and candidate_variant[0] > preferred_variant[0]
+        ):
+            reason = "higher_resolution_fallback"
+        elif preferred in _KNOWN_ALIASES:
+            reason = "alias_fallback"
+        else:
+            reason = "single_playable_variant"
+        return SelectionResult(unique[0], reason, preferred, False)
+
+    alias_names = [name for name in unique if name in _KNOWN_ALIASES]
+    real_names = [name for name in unique if name not in _KNOWN_ALIASES]
+    parsed: list[tuple[str, int, int | None]] = []
+    unparseable: list[str] = []
+    for name in real_names:
+        parsed_variant = _parse_variant(name)
+        if parsed_variant is not None:
+            parsed.append((name, parsed_variant[0], parsed_variant[1]))
+        else:
+            unparseable.append(name)
+
+    if preferred in _KNOWN_ALIASES:
+        return SelectionResult(
+            _best_ranked(parsed, unparseable, alias_names),
+            "alias_fallback",
+            preferred,
+            False,
+        )
+
+    preferred_variant = _parse_variant(preferred)
+    if preferred_variant is None:
+        candidate = _best_ranked(parsed, unparseable, alias_names)
+        return SelectionResult(
+            candidate,
+            "unparseable_fallback" if candidate is not None else "no_playable_variant",
+            preferred,
+            False,
+        )
+
+    preferred_resolution, preferred_fps = preferred_variant
+    same_resolution = [item for item in parsed if item[1] == preferred_resolution]
+    if same_resolution:
+        return SelectionResult(
+            _pick_fps(same_resolution, preferred_fps),
+            "same_resolution_fallback",
+            preferred,
+            False,
+        )
+
+    lower = [item for item in parsed if item[1] < preferred_resolution]
+    if lower:
+        best_resolution = max(resolution for _, resolution, _ in lower)
+        candidates = [item for item in lower if item[1] == best_resolution]
+        return SelectionResult(
+            _pick_fps_highest(candidates), "lower_resolution_fallback", preferred, False
+        )
+
+    higher = [item for item in parsed if item[1] > preferred_resolution]
+    if higher:
+        best_resolution = min(resolution for _, resolution, _ in higher)
+        candidates = [item for item in higher if item[1] == best_resolution]
+        return SelectionResult(
+            _pick_fps_highest(candidates), "higher_resolution_fallback", preferred, False
+        )
+
+    if unparseable:
+        return SelectionResult(sorted(unparseable)[0], "unparseable_fallback", preferred, False)
+    if alias_names:
+        return SelectionResult(sorted(alias_names)[0], "unparseable_fallback", preferred, False)
+    return SelectionResult(None, "no_playable_variant", preferred, False)
+
+
+def _pick_fps(candidates: list[tuple[str, int, int | None]], pref_fps: int | None) -> str:
+    """Pick the best FPS match within same-resolution candidates."""
+    if pref_fps is not None:
+        def key_explicit(candidate: tuple[str, int, int | None]):
+            name, _, fps = candidate
+            difference = abs(fps - pref_fps) if fps is not None else 10000
+            return (difference, -(fps if fps is not None else 0), name)
+
+        return sorted(candidates, key=key_explicit)[0][0]
+
+    no_fps = [candidate for candidate in candidates if candidate[2] is None]
+    if no_fps:
+        return sorted(no_fps, key=lambda candidate: candidate[0])[0][0]
+    return sorted(candidates, key=lambda candidate: (candidate[2] or 0, candidate[0]))[0][0]
+
+
+def _pick_fps_highest(candidates: list[tuple[str, int, int | None]]) -> str:
+    """Pick highest FPS variant; no-FPS after explicit FPS; name as tiebreaker."""
+    return sorted(
+        candidates,
+        key=lambda candidate: (-(candidate[2] if candidate[2] is not None else -1), candidate[0]),
+    )[0][0]
+
+
+def _best_ranked(
+    parsed: list[tuple[str, int, int | None]],
+    unparseable: list[str],
+    alias_names: list[str],
+) -> str | None:
+    """Return the globally best ranked candidate across all available variants."""
+    if parsed:
+        return sorted(
+            parsed,
+            key=lambda candidate: (
+                -candidate[1],
+                -(candidate[2] if candidate[2] is not None else -1),
+                candidate[0],
+            ),
+        )[0][0]
+    if unparseable:
+        return sorted(unparseable)[0]
+    if alias_names:
+        return sorted(alias_names)[0]
+    return None
 
 
 def classify_probe_result(
@@ -685,7 +847,7 @@ def classify_probe_result(
         return ProbeResult(ProbeState.ERROR, "invalid_streams", returncode)
     if not streams:
         return ProbeResult(ProbeState.OFFLINE, "empty_streams", returncode)
-    return ProbeResult(ProbeState.LIVE, "streams_available", returncode)
+    return ProbeResult(ProbeState.LIVE, "streams_available", returncode, streams=dict(streams))
 
 
 def is_live(url: str) -> ProbeResult:
@@ -703,6 +865,7 @@ def is_live(url: str) -> ProbeResult:
             classified.reason,
             classified.returncode,
             stderr_summary=_sanitize_diagnostic(result.stderr),
+            streams=classified.streams,
         )
     except subprocess.TimeoutExpired as error:
         return ProbeResult(
