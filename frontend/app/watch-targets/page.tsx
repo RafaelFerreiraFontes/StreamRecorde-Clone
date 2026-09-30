@@ -11,6 +11,16 @@ import { Badge, Empty, Json, ResourceStatus, Table } from "@/components/ui";
 
 type EditingTarget = { id: string; recording_subdir?: string } | null;
 
+function isSafeHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value) return false;
+  try {
+    const u = new URL(value);
+    return (u.protocol === "http:" || u.protocol === "https:") && !u.username && !u.password;
+  } catch {
+    return false;
+  }
+}
+
 export function WatchTargetEnabledSwitch({
   target,
   pending,
@@ -58,6 +68,102 @@ export function WatchTargetEnabledSwitch({
   );
 }
 
+export function WatchTargetUrlEditor({
+  target,
+  pending,
+  afterMutation,
+  onError,
+}: {
+  target: WatchTarget;
+  pending: boolean;
+  afterMutation: () => Promise<void>;
+  onError: (error: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function startEdit() {
+    setEditValue(target.url ?? "");
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+    setEditValue("");
+  }
+
+  async function saveUrl() {
+    if (!isSafeHttpUrl(editValue)) {
+      onError("Enter a valid HTTP or HTTPS URL without credentials.");
+      return;
+    }
+    setSaving(true);
+    onError("");
+    try {
+      await api<WatchTarget>(`/watch-targets/${encodeURIComponent(target.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ url: editValue }),
+      });
+      await afterMutation();
+      setEditing(false);
+      setEditValue("");
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="edit-subdir">
+        <input
+          aria-label={`URL for ${target.channel_name}`}
+          type="url"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          placeholder="https://www.twitch.tv/channel"
+          maxLength={2048}
+          disabled={saving}
+          aria-busy={saving}
+        />
+        <button
+          className="primary small"
+          onClick={() => void saveUrl()}
+          disabled={saving || pending}
+        >
+          Save
+        </button>
+        <button
+          className="secondary small"
+          onClick={cancelEdit}
+          disabled={saving}
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="url-cell">
+      <span className={isSafeHttpUrl(target.url) ? "path url-truncate" : "muted"} title={target.url}>
+        {isSafeHttpUrl(target.url) ? target.url : "—"}
+      </span>
+      <button
+        className="secondary small inline"
+        onClick={startEdit}
+        disabled={pending}
+        title="Edit URL"
+        aria-label={`Edit URL for ${target.channel_name}`}
+      >
+        Edit
+      </button>
+    </div>
+  );
+}
+
 export default function WatchTargets() {
   const { snapshot, afterMutation } = useDashboard();
   const [picker, setPicker] = useState<"create" | "edit" | null>(null);
@@ -91,15 +197,7 @@ export default function WatchTargets() {
     setError("");
     setMessage("");
 
-    try {
-      const url = new URL(payload.url);
-      if (
-        !["http:", "https:"].includes(url.protocol) ||
-        url.username ||
-        url.password
-      )
-        throw new Error();
-    } catch {
+    if (!isSafeHttpUrl(payload.url)) {
       setError("Enter a valid HTTP or HTTPS channel URL without credentials.");
       return;
     }
@@ -300,6 +398,7 @@ export default function WatchTargets() {
               "Creator",
               "Platform",
               "Quality",
+              "URL",
               "Recording Folder",
               "Enabled",
               "State",
@@ -311,6 +410,17 @@ export default function WatchTargets() {
                 <td>
                   <strong>{t.channel_name}</strong>
                   <code className="subtext">{t.id}</code>
+                  {isSafeHttpUrl(t.url) && (
+                    <a
+                      href={t.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="secondary small inline"
+                      aria-label={`Open stream for ${t.channel_name}`}
+                    >
+                      Open Stream
+                    </a>
+                  )}
                 </td>
                 <td>
                   {snapshot.creators.data?.find((c) => c.id === t.creator_id)
@@ -319,6 +429,14 @@ export default function WatchTargets() {
                 <td>{t.platform}</td>
                 <td>
                   <code>{t.quality}</code>
+                </td>
+                <td>
+                  <WatchTargetUrlEditor
+                    target={t}
+                    pending={pending}
+                    afterMutation={afterMutation}
+                    onError={setError}
+                  />
                 </td>
                 <td>
                   {editingTarget?.id === t.id ? (

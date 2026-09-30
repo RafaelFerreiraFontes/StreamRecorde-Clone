@@ -395,6 +395,14 @@ tbody tr:hover {
   max-width: 340px;
   overflow-wrap: anywhere;
 }
+.url-truncate {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
 .badge {
   display: inline-flex;
   align-items: center;

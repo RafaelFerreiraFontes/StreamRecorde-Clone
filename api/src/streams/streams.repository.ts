@@ -256,8 +256,7 @@ export class StreamsRepository {
    */
   async updateWatchTarget(
     id: string,
-    recordingSubdir: string | undefined,
-    enabled?: boolean,
+    patch: { recordingSubdir?: string; enabled?: boolean; url?: string },
   ): Promise<WatchTarget> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
@@ -269,19 +268,15 @@ export class StreamsRepository {
         throw new NotFoundException(`Watch target ${id} not found`);
 
       const entry = watchlist[index];
-      // Empty string -> delete the field (clear override)
-      // Undefined -> no-op (field not present in payload)
-      // Non-empty string -> set the normalized value
-      if (recordingSubdir !== undefined) {
-        if (recordingSubdir === "") {
-          // Clear the override - delete the property
+      if (patch.recordingSubdir !== undefined) {
+        if (patch.recordingSubdir === "") {
           delete entry.recording_subdir;
         } else {
-          entry.recording_subdir = recordingSubdir;
+          entry.recording_subdir = patch.recordingSubdir;
         }
       }
-      if (enabled !== undefined) entry.enabled = enabled;
-      // If undefined, keep existing value (no-op)
+      if (patch.enabled !== undefined) entry.enabled = patch.enabled;
+      if (patch.url !== undefined) entry.url = patch.url;
       await this.writeWatchlist(watchlist);
       return this.toWatchTarget(entry, status);
     });

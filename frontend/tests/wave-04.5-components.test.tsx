@@ -25,7 +25,7 @@ const { cleanup, fireEvent, render, screen, waitFor } =
   await import("@testing-library/react");
 const { RecordingBrowser } = await import("../components/recording-browser");
 const { DashboardProvider } = await import("../components/provider");
-const { default: WatchTargets, WatchTargetEnabledSwitch } =
+const { default: WatchTargets, WatchTargetEnabledSwitch, WatchTargetUrlEditor } =
   await import("../app/watch-targets/page");
 
 const target = {
@@ -195,4 +195,141 @@ test("watch target edit keeps manual entry and saves picker selections through t
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("URL editor renders current URL with accessible label and enters edit mode", () => {
+  render(<WatchTargetUrlEditor target={target} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+  assert.equal(screen.getByText(target.url).textContent, target.url);
+  fireEvent.click(screen.getByRole("button", { name: "Edit URL for Channel" }));
+  assert.equal((screen.getByRole("textbox", { name: "URL for Channel" }) as HTMLInputElement).value, target.url);
+});
+
+test("URL editor sends PATCH with the correct URL body and reconciles after success", async () => {
+  const originalFetch = globalThis.fetch;
+  const errors: string[] = [];
+  let refreshes = 0;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, "/api/backend/watch-targets/target-1");
+    assert.deepEqual(JSON.parse(String(init?.body)), { url: "https://www.twitch.tv/new" });
+    return Response.json({ ...target, url: "https://www.twitch.tv/new" });
+  };
+  try {
+    render(<WatchTargetUrlEditor target={target} pending={false} afterMutation={async () => { refreshes += 1; }} onError={(error) => errors.push(error)} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit URL for Channel" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "URL for Channel" }), { target: { value: "https://www.twitch.tv/new" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => assert.equal(refreshes, 1));
+    assert.equal(screen.getByText(target.url).textContent, target.url);
+    assert.deepEqual(errors, [""]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("URL editor shows aria-busy and disabled while saving", async () => {
+  const originalFetch = globalThis.fetch;
+  let resolveRequest!: (value: Response) => void;
+  globalThis.fetch = async () => new Promise<Response>((resolve) => { resolveRequest = resolve; });
+  try {
+    render(<WatchTargetUrlEditor target={target} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit URL for Channel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const input = screen.getByRole("textbox", { name: "URL for Channel" });
+    assert.equal(input.getAttribute("aria-busy"), "true");
+    assert.equal((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled, true);
+    resolveRequest(Response.json(target));
+    await waitFor(() => assert.equal(screen.queryByRole("textbox", { name: "URL for Channel" }), null));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("URL editor calls onError and stays open on failure", async () => {
+  const originalFetch = globalThis.fetch;
+  const errors: string[] = [];
+  globalThis.fetch = async () => Response.json({ message: "nope" }, { status: 500 });
+  try {
+    render(<WatchTargetUrlEditor target={target} pending={false} afterMutation={async () => {}} onError={(error) => errors.push(error)} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit URL for Channel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => assert.match(errors.at(-1) ?? "", /HTTP 500/));
+    assert.ok(screen.getByRole("textbox", { name: "URL for Channel" }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("URL editor cancel and invalid input do not send PATCH", () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const errors: string[] = [];
+  globalThis.fetch = async () => { calls += 1; return Response.json(target); };
+  try {
+    render(<WatchTargetUrlEditor target={target} pending={false} afterMutation={async () => {}} onError={(error) => errors.push(error)} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit URL for Channel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit URL for Channel" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "URL for Channel" }), { target: { value: "not-a-url" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    assert.equal(calls, 0);
+    assert.match(errors.at(-1) ?? "", /valid HTTP or HTTPS URL/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Open Stream link uses a safe persisted URL and is absent for invalid URLs", async () => {
+  const originalFetch = globalThis.fetch;
+  const renderTargets = async (entries: typeof target[]) => {
+    globalThis.fetch = async (url) => {
+      const pathname = new URL(String(url), "http://localhost").pathname;
+      if (pathname.endsWith("/watch-targets")) return Response.json(entries);
+      if (pathname.endsWith("/creators")) return Response.json([{ id: "creator-1", display_name: "Creator" }]);
+      return Response.json([]);
+    };
+    render(<DashboardProvider><WatchTargets /></DashboardProvider>);
+    await screen.findByText(entries[0].channel_name);
+  };
+  try {
+    await renderTargets([target]);
+    const link = screen.getByRole("link", { name: "Open stream for Channel" });
+    assert.equal(link.getAttribute("href"), target.url);
+    assert.equal(link.getAttribute("target"), "_blank");
+    assert.match(link.getAttribute("rel") ?? "", /noopener/);
+    assert.match(link.getAttribute("rel") ?? "", /noreferrer/);
+    cleanup();
+    await renderTargets([{ ...target, url: "not-a-url" }]);
+    assert.equal(screen.queryByRole("link", { name: "Open stream for Channel" }), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("URL editor for one target does not affect sibling target display", async () => {
+  const originalFetch = globalThis.fetch;
+  const sibling = { ...target, id: "target-2", channel_name: "Sibling", url: "https://example.test/sibling" };
+  globalThis.fetch = async (url, init) => {
+    const pathname = new URL(String(url), "http://localhost").pathname;
+    if (init?.method === "PATCH") return Response.json({ ...target, url: "https://example.test/new" });
+    if (pathname.endsWith("/watch-targets")) return Response.json([target, sibling]);
+    if (pathname.endsWith("/creators")) return Response.json([{ id: "creator-1", display_name: "Creator" }]);
+    return Response.json([]);
+  };
+  try {
+    render(<DashboardProvider><WatchTargets /></DashboardProvider>);
+    await screen.findByRole("button", { name: "Edit URL for Channel" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit URL for Channel" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "URL for Channel" }), { target: { value: "https://example.test/new" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText(sibling.url);
+    assert.equal(screen.getByText(sibling.url).textContent, sibling.url);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("URL editor displays a non-standard valid HTTPS URL exactly", () => {
+  const customUrl = "https://example.test/channel?variant=non-standard";
+  render(<WatchTargetUrlEditor target={{ ...target, url: customUrl }} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+  assert.equal(screen.getByText(customUrl).textContent, customUrl);
 });

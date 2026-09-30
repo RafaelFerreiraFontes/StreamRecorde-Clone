@@ -2,6 +2,14 @@ import { IsIn, IsString, IsUrl, IsOptional, IsBoolean, ValidateIf } from "class-
 import { Transform } from "class-transformer";
 import { normalizeTextInput } from "../sanitize";
 
+export const WATCH_TARGET_URL_OPTIONS: NonNullable<Parameters<typeof IsUrl>[0]> = {
+  protocols: ["http", "https"],
+  require_protocol: true,
+  require_valid_protocol: true,
+  allow_protocol_relative_urls: false,
+  disallow_auth: true,
+};
+
 export class CreateWatchTargetDto {
   @IsString()
   @Transform(({ value }: { value: string }) => normalizeTextInput(value))
@@ -18,7 +26,7 @@ export class CreateWatchTargetDto {
   )
   platform: "youtube" | "twitch" | "kick";
 
-  @IsUrl()
+  @IsUrl(WATCH_TARGET_URL_OPTIONS)
   @IsString()
   url: string;
 
@@ -58,4 +66,11 @@ export class PatchWatchTargetDto {
   @ValidateIf((_object, value) => value !== undefined)
   @IsString({ message: "recording_subdir must be a string" })
   recording_subdir?: string;
+
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsString({ message: "url must be a string" })
+  @IsUrl(WATCH_TARGET_URL_OPTIONS, {
+    message: "url must be an absolute HTTP or HTTPS URL without credentials",
+  })
+  url?: string;
 }
