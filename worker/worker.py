@@ -883,11 +883,10 @@ def is_live(url: str) -> ProbeResult:
         )
 
 
-def start_recording(entry: dict, stream_id: str | None = None):
+def start_recording(entry: dict, stream_id: str | None = None, quality: str = "best"):
     global active_recordings, channels_status, recordings, lock
 
     url = entry["url"]
-    quality = entry.get("quality", "best")
     platform = entry.get("platform", "unknown")
     channel_name = str(entry.get("channel_name") or "unknown-channel")
     watch_target_id = entry.get("id")
@@ -1282,6 +1281,35 @@ def poll_loop():
                         log.warning("Watch target URL changed during probe (watch_target_id=%s)", safe_target_id)
                         continue
 
+                    preferred_quality = refreshed_entry.get("quality", "best")
+                    available_qualities = list((probe_result.streams or {}).keys())
+                    selection = select_quality(preferred_quality, available_qualities)
+
+                    safe_preferred_quality = _sanitize_diagnostic(preferred_quality) or "suppressed"
+                    safe_selected_quality = _sanitize_diagnostic(selection.selected) if selection.selected is not None else "absent"
+                    safe_fallback_reason = _sanitize_diagnostic(selection.reason) or "suppressed"
+
+                    if selection.selected is None:
+                        log.warning(
+                            "Quality selection unavailable (watch_target_id=%s, preferred_quality=%s, "
+                            "available_count=%s, selected_quality=absent, fallback_reason=%s)",
+                            safe_target_id,
+                            safe_preferred_quality,
+                            len(available_qualities),
+                            safe_fallback_reason,
+                        )
+                        continue
+
+                    log.info(
+                        "Quality selected (watch_target_id=%s, preferred_quality=%s, "
+                        "available_count=%s, selected_quality=%s, fallback_reason=%s)",
+                        safe_target_id,
+                        safe_preferred_quality,
+                        len(available_qualities),
+                        safe_selected_quality,
+                        safe_fallback_reason,
+                    )
+
                     stream_id = None
                     with lock:
                         active_stream = find_active_stream(id)
@@ -1290,7 +1318,7 @@ def poll_loop():
                         else:
                             new_stream = create_stream(id)
                             stream_id = new_stream["id"]
-                    start_recording(refreshed_entry, stream_id)
+                    start_recording(refreshed_entry, stream_id, selection.selected)
                 elif probe_result.state is ProbeState.OFFLINE:
                     log.info(
                         "Probe: OFFLINE (watch_target_id=%s, returncode=%s, diagnostic=%s)",
