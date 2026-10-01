@@ -1339,7 +1339,7 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry(True)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         with patch.object(
-            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")
+            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})
         ) as is_live, patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen, patch.object(
             worker.threading, "Thread"
         ), patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
@@ -1354,7 +1354,7 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry()
         del entry["enabled"]
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), patch.object(
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), patch.object(
             worker, "start_recording"
         ) as start_recording:
             self.poll_once()
@@ -1508,11 +1508,11 @@ class WatchTargetEnabledTests(unittest.TestCase):
         Path(worker.CONFIG_PATH).write_text(json.dumps([disabled]), encoding="utf-8")
         self.poll_once()
         Path(worker.CONFIG_PATH).write_text(json.dumps([enabled]), encoding="utf-8")
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), patch.object(
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), patch.object(
             worker, "start_recording"
         ) as start_recording:
             self.poll_once()
-        start_recording.assert_called_once_with(enabled, "stream-1")
+        start_recording.assert_called_once_with(enabled, "stream-1", "best")
 
     def test_reenable_during_active_capture_does_not_duplicate_recording(self):
         entry = self.entry(True)
@@ -1593,13 +1593,214 @@ class WatchTargetEnabledTests(unittest.TestCase):
         disabled = self.entry(False)
         enabled = {**self.entry(True), "id": "target-2"}
         Path(worker.CONFIG_PATH).write_text(json.dumps([disabled, enabled]), encoding="utf-8")
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")) as is_live, patch.object(
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})) as is_live, patch.object(
             worker, "start_recording"
         ) as start_recording:
             self.poll_once()
         is_live.assert_called_once_with(enabled["url"])
         start_recording.assert_called_once()
         self.assertEqual(start_recording.call_args.args[0]["id"], "target-2")
+
+
+class ProbeRecordingIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.original_globals = {
+            name: getattr(worker, name) for name in (
+                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
+                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
+                "streams_data", "lock", "shutdown_event",
+            )
+        }
+        self.addCleanup(self.restore_worker_globals)
+        self.temp_dir = tempfile.TemporaryDirectory()
+        config_dir = Path(self.temp_dir.name)
+        worker.CONFIG_PATH = str(config_dir / "watchlist.json")
+        worker.CHANNELS_STATUS_PATH = str(config_dir / "channels_status.json")
+        worker.SESSIONS_PATH = str(config_dir / "sessions.json")
+        worker.STREAMS_PATH = str(config_dir / "streams.json")
+        worker.OUTPUT_DIR = str(config_dir / "recordings")
+        for path, value in (
+            (worker.CONFIG_PATH, []),
+            (worker.CHANNELS_STATUS_PATH, {}),
+            (worker.SESSIONS_PATH, []),
+            (worker.STREAMS_PATH, []),
+        ):
+            Path(path).write_text(json.dumps(value), encoding="utf-8")
+        worker.channels_status = {}
+        worker.recordings = []
+        worker.active_recordings = {}
+        worker.streams_data = []
+        worker.lock = worker.threading.Lock()
+        worker.shutdown_event = worker.threading.Event()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def restore_worker_globals(self):
+        for name, value in self.original_globals.items():
+            setattr(worker, name, value)
+
+    @staticmethod
+    def entry(quality="best"):
+        return {
+            "id": "target-1",
+            "channel_name": "creator",
+            "platform": "twitch",
+            "url": "https://twitch.tv/creator",
+            "quality": quality,
+            "enabled": True,
+        }
+
+    def poll_once(self):
+        with patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+
+    def test_live_fallback_quality_reaches_streamlink(self):
+        entry = self.entry("1080p60")
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        probe_result = worker.ProbeResult(
+            worker.ProbeState.LIVE, "streams_available", streams={"720p60": {}, "720p": {}}
+        )
+
+        with patch.object(worker, "is_live", return_value=probe_result) as is_live, patch.object(
+            worker.subprocess, "Popen", return_value=FakeProcess()
+        ) as popen, patch.object(worker.threading, "Thread"):
+            self.poll_once()
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("-o") - 1], "720p60")
+        is_live.assert_called_once_with(entry["url"])
+        self.assertEqual(entry["quality"], "1080p60")
+        persisted_entry = json.loads(Path(worker.CONFIG_PATH).read_text(encoding="utf-8"))[0]
+        self.assertEqual(persisted_entry["quality"], "1080p60")
+        self.assertEqual(worker.streams_data[0]["watch_target_id"], entry["id"])
+        self.assertEqual(worker.recordings[0]["watch_target_id"], entry["id"])
+        self.assertEqual(worker.recordings[0]["stream_id"], worker.streams_data[0]["id"])
+
+    def test_live_single_variant_reaches_streamlink(self):
+        entry = self.entry("1080p")
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        probe_result = worker.ProbeResult(
+            worker.ProbeState.LIVE, "streams_available", streams={"720p": {}}
+        )
+
+        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
+            worker.subprocess, "Popen", return_value=FakeProcess()
+        ) as popen, patch.object(worker.threading, "Thread"):
+            self.poll_once()
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("-o") - 1], "720p")
+
+    def test_live_no_selectable_variant_skips_recording(self):
+        entry = self.entry()
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        status = {
+            entry["id"]: {
+                "channel_name": entry["channel_name"],
+                "platform": entry["platform"],
+                "state": "idle",
+            }
+        }
+        Path(worker.CHANNELS_STATUS_PATH).write_text(json.dumps(status), encoding="utf-8")
+        probe_result = worker.ProbeResult(
+            worker.ProbeState.LIVE, "streams_available", streams={}
+        )
+
+        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
+            worker, "create_stream"
+        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
+            worker, "finalize_stream"
+        ) as finalize_stream:
+            self.poll_once()
+
+        create_stream.assert_not_called()
+        start_recording.assert_not_called()
+        finalize_stream.assert_not_called()
+        self.assertEqual(worker.streams_data, [])
+        self.assertEqual(worker.recordings, [])
+        self.assertEqual(worker.active_recordings, {})
+        self.assertEqual(worker.channels_status, status)
+        self.assertEqual(json.loads(Path(worker.STREAMS_PATH).read_text(encoding="utf-8")), [])
+        self.assertEqual(json.loads(Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")), [])
+        self.assertEqual(
+            json.loads(Path(worker.CHANNELS_STATUS_PATH).read_text(encoding="utf-8")), status
+        )
+
+    def test_live_refresh_race_uses_refreshed_quality(self):
+        initial = self.entry("1080p")
+        refreshed = self.entry("720p")
+        probe_result = worker.ProbeResult(
+            worker.ProbeState.LIVE, "streams_available", streams={"720p": {}, "480p": {}}
+        )
+
+        with patch.object(worker, "load_watchlist", side_effect=[[initial], [refreshed]]), patch.object(
+            worker, "is_live", return_value=probe_result
+        ) as is_live, patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen, patch.object(
+            worker.threading, "Thread"
+        ):
+            self.poll_once()
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("-o") - 1], "720p")
+        is_live.assert_called_once_with(initial["url"])
+
+    def test_offline_does_not_invoke_selection(self):
+        entry = self.entry()
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        probe_result = worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")
+
+        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
+            worker, "select_quality"
+        ) as select_quality, patch.object(worker, "finalize_stream") as finalize_stream:
+            self.poll_once()
+
+        select_quality.assert_not_called()
+        finalize_stream.assert_called_once_with("target-1")
+
+    def test_error_does_not_invoke_selection_or_finalize(self):
+        entry = self.entry()
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        probe_result = worker.ProbeResult(worker.ProbeState.ERROR, "timeout")
+
+        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
+            worker, "select_quality"
+        ) as select_quality, patch.object(worker, "finalize_stream") as finalize_stream:
+            self.poll_once()
+
+        select_quality.assert_not_called()
+        finalize_stream.assert_not_called()
+
+    def test_start_recording_explicit_quality_overrides_entry(self):
+        entry = self.entry("1080p")
+        worker.channels_status["target-1"] = {"state": "idle"}
+
+        with patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen, patch.object(
+            worker.threading, "Thread"
+        ):
+            worker.start_recording(entry, "stream-1", "720p60")
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("-o") - 1], "720p60")
+        self.assertEqual(entry["quality"], "1080p")
+
+    def test_live_fallback_log_contains_safe_fields(self):
+        entry = self.entry("1080p60")
+        Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
+        probe_result = worker.ProbeResult(
+            worker.ProbeState.LIVE, "streams_available", streams={"720p": {}}
+        )
+
+        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
+            worker.subprocess, "Popen", return_value=FakeProcess()
+        ), patch.object(worker.threading, "Thread"), self.assertLogs(worker.log, "INFO") as logs:
+            self.poll_once()
+
+        output = "\n".join(logs.output)
+        self.assertIn("selected_quality=720p", output)
+        self.assertIn("fallback_reason=", output)
+        self.assertNotIn(entry["url"], output)
 
 
 if __name__ == "__main__":
@@ -1666,7 +1867,7 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), \
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
              patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
@@ -1888,7 +2089,7 @@ class StreamDetectionTests(unittest.TestCase):
             "quality": "best",
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
-        live = worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")
+        live = worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})
         offline = worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")
         probe_error = worker.ProbeResult(worker.ProbeState.ERROR, "timeout")
 
@@ -2024,7 +2225,7 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), \
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
              patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
@@ -2052,7 +2253,7 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), \
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
              patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
@@ -2080,7 +2281,7 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), \
+        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), \
              patch.object(worker.subprocess, "Popen") as popen_mock, \
              patch.object(worker.threading, "Thread"), \
              patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
@@ -2856,3 +3057,152 @@ class TestAtomicReplaceFaults(unittest.TestCase):
         # Verify file was written correctly
         result = json.loads(self.target_path.read_text(encoding="utf-8"))
         self.assertEqual(result, {"probe": True})
+
+
+class ProbeStreamsTests(unittest.TestCase):
+    def test_live_probe_carries_streams_mapping(self):
+        url = "https://twitch.tv/example"
+        stdout = json.dumps({"streams": {"1080p60": {}, "720p": {}}})
+        result = worker.classify_probe_result(url, 0, stdout)
+
+        self.assertEqual(result.state, worker.ProbeState.LIVE)
+        self.assertIsNotNone(result.streams)
+        self.assertIn("1080p60", result.streams)
+        self.assertIn("720p", result.streams)
+
+    def test_non_live_probes_do_not_carry_streams(self):
+        url = "https://twitch.tv/example"
+        cases = (
+            (json.dumps({"streams": {}}), worker.ProbeState.OFFLINE),
+            ("invalid json{", worker.ProbeState.ERROR),
+        )
+
+        for stdout, expected_state in cases:
+            with self.subTest(stdout=stdout):
+                result = worker.classify_probe_result(url, 0, stdout)
+                self.assertEqual(result.state, expected_state)
+                self.assertIsNone(result.streams)
+
+    def test_is_live_forwards_streams(self):
+        stdout = json.dumps({"streams": {"best": {}, "1080p60": {}, "720p": {}}})
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
+            result = worker.is_live("https://twitch.tv/example")
+
+        self.assertEqual(result.state, worker.ProbeState.LIVE)
+        self.assertEqual(set(result.streams or ()), {"best", "1080p60", "720p"})
+        mock_run.assert_called_once()
+
+    def test_is_live_offline_does_not_carry_streams(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout=json.dumps({"streams": {}}), stderr=""
+            )
+            result = worker.is_live("https://twitch.tv/example")
+
+        self.assertEqual(result.state, worker.ProbeState.OFFLINE)
+        self.assertIsNone(result.streams)
+
+    def test_probe_result_repr_omits_streams_content(self):
+        stdout = json.dumps(
+            {"streams": {"1080p60": {"url": "https://secret.example.com/stream"}}}
+        )
+        result = worker.classify_probe_result("https://twitch.tv/example", 0, stdout)
+        representation = repr(result)
+
+        self.assertNotIn("secret.example.com", representation)
+        self.assertNotIn("streams=", representation)
+
+
+class QualitySelectionTests(unittest.TestCase):
+    """Pure unit tests for select_quality; no subprocess or I/O."""
+
+    def test_selection_contract(self):
+        cases = (
+            ("1080p60", ["1080p60", "1080p", "720p60"], "1080p60", "exact_match", True),
+            ("1080p60", ["1080p", "720p60"], "1080p", "same_resolution_fallback", False),
+            ("1080p60", ["720p60", "720p"], "720p60", "lower_resolution_fallback", False),
+            ("1080p60", ["720p", "480p"], "720p", "lower_resolution_fallback", False),
+            ("720p60", ["720p", "480p"], "720p", "same_resolution_fallback", False),
+            ("480p", ["480p"], "480p", "exact_match", True),
+            ("480p", ["720p"], "720p", "higher_resolution_fallback", False),
+            ("1080p60", ["360p"], "360p", "single_playable_variant", False),
+            ("best", ["best", "1080p60", "720p"], "best", "alias_direct", True),
+            ("best", ["1080p", "1080p60", "720p"], "1080p60", "alias_fallback", False),
+            ("1080p60", [], None, "no_playable_variant", False),
+            ("1080p60", ["audio_only"], "audio_only", "single_playable_variant", False),
+        )
+
+        for preferred, available, selected, reason, exact_match in cases:
+            with self.subTest(preferred=preferred, available=available):
+                result = worker.select_quality(preferred, available)
+                self.assertEqual(result.selected, selected)
+                self.assertEqual(result.reason, reason)
+                self.assertEqual(result.exact_match, exact_match)
+                self.assertEqual(result.preferred, preferred)
+
+    def test_aliases(self):
+        cases = (
+            ("source", ["source", "1080p60", "720p"], "source", "alias_direct"),
+            ("chunked", ["chunked", "1080p60"], "chunked", "alias_direct"),
+            ("worst", ["worst", "360p", "480p"], "worst", "alias_direct"),
+            ("source", ["1080p60", "720p", "480p"], "1080p60", "alias_fallback"),
+            ("worst", ["1080p60", "720p"], "1080p60", "alias_fallback"),
+            ("best", ["720p"], "720p", "alias_fallback"),
+        )
+
+        for preferred, available, selected, reason in cases:
+            with self.subTest(preferred=preferred, available=available):
+                result = worker.select_quality(preferred, available)
+                self.assertEqual(result.selected, selected)
+                self.assertEqual(result.reason, reason)
+
+    def test_fps_tie_breaking(self):
+        cases = (
+            ("720p60", ["720p60", "720p30", "720p"], "720p60", "exact_match"),
+            ("720p60", ["720p30", "720p"], "720p30", "same_resolution_fallback"),
+            ("720p", ["720p60", "720p30"], "720p30", "same_resolution_fallback"),
+            ("1080p60", ["720p60", "720p"], "720p60", "lower_resolution_fallback"),
+            ("480p", ["720p60", "720p"], "720p60", "higher_resolution_fallback"),
+            ("720p45", ["720p30", "720p60"], "720p60", "same_resolution_fallback"),
+        )
+
+        for preferred, available, selected, reason in cases:
+            with self.subTest(preferred=preferred, available=available):
+                result = worker.select_quality(preferred, available)
+                self.assertEqual(result.selected, selected)
+                self.assertEqual(result.reason, reason)
+
+    def test_determinism_and_no_mutation(self):
+        preferred = "1080p60"
+        available = ["720p", "480p", "1080p60"]
+        original = list(available)
+        result = worker.select_quality(preferred, available)
+        reordered = worker.select_quality(preferred, ["1080p60", "480p", "720p"])
+        duplicates = worker.select_quality("1080p60", ["720p", "720p", "480p", "480p"])
+        unique = worker.select_quality("1080p60", ["720p", "480p"])
+
+        self.assertEqual(available, original)
+        self.assertEqual(result.selected, reordered.selected)
+        self.assertEqual(duplicates.selected, unique.selected)
+        self.assertEqual(duplicates.reason, unique.reason)
+
+    def test_unparseable_variants_are_deterministic_fallbacks(self):
+        cases = (
+            ("hls", ["1080p60", "720p", "480p"], "1080p60"),
+            ("1080p60", ["hls", "audio_only"], "audio_only"),
+            ("1080p60", ["not_a_quality!!!", "720p"], "720p"),
+            ("1080p60", ["best", "worst", "720p", "480p"], "720p"),
+            ("1080p60", ["480p", "360p"], "480p"),
+        )
+
+        for preferred, available, selected in cases:
+            with self.subTest(preferred=preferred, available=available):
+                self.assertEqual(worker.select_quality(preferred, available).selected, selected)
+
+    def test_preferred_configuration_is_not_mutated(self):
+        entry = {"quality": "1080p60", "url": "https://example.com"}
+        result = worker.select_quality(entry["quality"], ["720p60", "720p"])
+
+        self.assertEqual(result.selected, "720p60")
+        self.assertEqual(entry["quality"], "1080p60")

@@ -180,13 +180,14 @@ Purpose:
 - `GET /watch-targets`
 - `GET /watch-targets/:id`
 - `POST /watch-targets`
-- `PATCH /watch-targets/:id` (updates `recording_subdir`; an empty string clears it)
+- `PATCH /watch-targets/:id` (updates any combination of `enabled`, `recording_subdir`, `quality`, and `url`; an empty `recording_subdir` clears it)
 - `DELETE /watch-targets/:id`
 
 Purpose:
 
 - query monitoring configuration;
 - create persistent configuration for a Creator;
+- update only supplied configuration fields while preserving omitted fields and sibling WatchTargets;
 - remove a single WatchTarget without corrupting the sibling targets of the same Creator.
 
 ### Stream

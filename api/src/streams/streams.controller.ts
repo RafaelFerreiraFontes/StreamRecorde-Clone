@@ -65,7 +65,7 @@ export class StreamController {
   }
 
   /**
-   * PATCH /watch-targets/:id - Update enabled and/or recording_subdir.
+    * PATCH /watch-targets/:id - Update enabled, recording_subdir, and/or url.
    * Omitted fields are unchanged; an empty recording_subdir clears its override.
    */
   @Patch("/watch-targets/:id")

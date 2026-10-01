@@ -54,4 +54,5 @@ export const qualities = [
   "720p",
   "480p",
   "360p",
+  "160p",
 ];

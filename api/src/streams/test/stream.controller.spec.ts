@@ -1,4 +1,7 @@
 import { Test, TestingModule } from "@nestjs/testing";
+import { BadRequestException } from "@nestjs/common";
+import { plainToInstance } from "class-transformer";
+import { validate } from "class-validator";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
@@ -11,6 +14,7 @@ import {
 } from "../streams.service";
 import { StreamsRepository } from "../streams.repository";
 import { WatchTargetJsonAdapter } from "../json-compatibility.adapters";
+import { PatchWatchTargetDto } from "../dto/watch-target.dto";
 import {
   legacyChannelStatus,
   legacySessions,
@@ -608,6 +612,72 @@ describe("StreamController", () => {
 
     expect(findSessionsByChannel).toHaveBeenCalledWith("channel-id");
   });
+
+  it("PATCH quality only changes quality and preserves enabled, recording_subdir, url, and sibling entries", async () => {
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    const watchlist = [
+      { id: "first", display_name: "Creator", channel_name: "first", platform: "twitch", url: "https://twitch.tv/first", quality: "best", enabled: false, recording_subdir: "archive" },
+      { id: "second", display_name: "Creator", channel_name: "second", platform: "twitch", url: "https://twitch.tv/second", quality: "480p", enabled: true },
+    ];
+    await fs.writeFile(watchlistPath, JSON.stringify(watchlist), "utf-8");
+
+    await expect(controller.patchWatchTarget("first", { quality: "720p" })).resolves.toMatchObject({ quality: "720p" });
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
+      { ...watchlist[0], quality: "720p" },
+      watchlist[1],
+    ]);
+  });
+
+  it("PATCH quality persists to watchlist.json via adapter round trip", async () => {
+    const watchlistPath = process.env.WATCHLIST_PATH!;
+    await controller.patchWatchTarget("1", { quality: "1080p60" });
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toContainEqual(
+      expect.objectContaining({ id: "1", quality: "1080p60" }),
+    );
+  });
+
+  it("PATCH quality 160p is accepted", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "160p" })).resolves.toMatchObject({ quality: "160p" });
+  });
+
+  it("PATCH omitting quality leaves existing quality unchanged", async () => {
+    await controller.patchWatchTarget("1", { enabled: false });
+    await expect(controller.getWatchTarget("1")).resolves.toMatchObject({ quality: "1080p", enabled: false });
+  });
+
+  it("PATCH quality combined with enabled works", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "720p", enabled: false })).resolves.toMatchObject({ quality: "720p", enabled: false });
+  });
+
+  it("PATCH rejects unsupported quality value", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "invalid-quality" })).rejects.toThrow(BadRequestException);
+  });
+
+  it("PATCH rejects empty string quality", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "" })).rejects.toThrow(BadRequestException);
+  });
+
+  it("PATCH rejects unknown key alongside quality", async () => {
+    await expect(controller.patchWatchTarget("1", { quality: "720p", unknownField: "x" } as never)).rejects.toThrow(BadRequestException);
+  });
+
+  it("WatchTargetJsonAdapter round trip preserves custom quality value", () => {
+    const entry = { id: "custom", channel_name: "channel", platform: "twitch", url: "https://twitch.tv/channel", quality: "custom-variant" };
+    expect(WatchTargetJsonAdapter.fromDomain(WatchTargetJsonAdapter.toDomain(entry))).toMatchObject({ quality: "custom-variant" });
+  });
+});
+
+describe("PatchWatchTargetDto quality validation", () => {
+  it("normalizes supported string values and rejects empty or non-string values", async () => {
+    const normalized = plainToInstance(PatchWatchTargetDto, { quality: " 720P " });
+    expect(normalized.quality).toBe("720p");
+    await expect(validate(normalized)).resolves.toHaveLength(0);
+
+    for (const quality of ["", 720, null]) {
+      const dto = plainToInstance(PatchWatchTargetDto, { quality });
+      await expect(validate(dto)).resolves.not.toHaveLength(0);
+    }
+  });
 });
 
 describe("StreamRepository", () => {
@@ -1187,6 +1257,125 @@ describe("recording_subdir path validation", () => {
 
     const target = await controller.getWatchTarget("existing-1");
     expect(target.recording_subdir).toBe("read/path");
+  });
+});
+
+describe("WatchTarget URL PATCH", () => {
+  let tempDir: string;
+  let controller: StreamController;
+  let watchlistPath: string;
+  const target = {
+    id: "url-target",
+    display_name: "Creator",
+    channel_name: "channel",
+    platform: "twitch",
+    url: "https://www.twitch.tv/old",
+    quality: "best",
+    enabled: true,
+    recording_subdir: "twitch/channel",
+    custom: "preserved",
+  };
+  const sibling = {
+    id: "url-sibling",
+    display_name: "Creator",
+    channel_name: "other",
+    platform: "twitch",
+    url: "https://www.twitch.tv/other",
+    quality: "720p",
+    enabled: false,
+  };
+
+  async function writeFixture(entries = [target, sibling]) {
+    await fs.writeFile(watchlistPath, JSON.stringify(entries), "utf-8");
+  }
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "watch-target-url-"));
+    watchlistPath = path.join(tempDir, "watchlist.json");
+    process.env.CONFIG_DIR = tempDir;
+    process.env.WATCHLIST_PATH = watchlistPath;
+    process.env.CHANNELS_STATUS_PATH = path.join(tempDir, "channels_status.json");
+    process.env.SESSIONS_PATH = path.join(tempDir, "sessions.json");
+    process.env.STREAMS_PATH = path.join(tempDir, "streams.json");
+    await writeFixture();
+    await fs.writeFile(process.env.CHANNELS_STATUS_PATH, "{}", "utf-8");
+    await fs.writeFile(process.env.SESSIONS_PATH, "[]", "utf-8");
+    await fs.writeFile(process.env.STREAMS_PATH, "[]", "utf-8");
+    const module = await Test.createTestingModule({
+      controllers: [StreamController],
+      providers: [StreamsRepository, StreamerService, SessionService, StreamService, RecordingService],
+    }).compile();
+    controller = module.get<StreamController>(StreamController);
+  });
+
+  afterEach(async () => {
+    process.env = { ...originalEnv };
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("PATCH url only persists new URL and returns updated target", async () => {
+    await expect(controller.patchWatchTarget(target.id, { url: "https://www.twitch.tv/new" })).resolves.toMatchObject({ url: "https://www.twitch.tv/new" });
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
+      expect.objectContaining({ url: "https://www.twitch.tv/new" }), sibling,
+    ]);
+  });
+
+  it("PATCH url preserves all other fields and sibling", async () => {
+    await controller.patchWatchTarget(target.id, { url: "https://www.twitch.tv/new" });
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
+      { ...target, url: "https://www.twitch.tv/new" }, sibling,
+    ]);
+  });
+
+  it("PATCH url with HTTP is accepted", async () => {
+    await expect(controller.patchWatchTarget(target.id, { url: "http://www.twitch.tv/channel" })).resolves.toMatchObject({ url: "http://www.twitch.tv/channel" });
+  });
+
+  it("omitting url in PATCH is a no-op", async () => {
+    await controller.patchWatchTarget(target.id, { enabled: true });
+    expect((await WatchTargetJsonAdapter.read(watchlistPath))[0].url).toBe(target.url);
+  });
+
+  it("PATCH url combined with enabled and recording_subdir", async () => {
+    await controller.patchWatchTarget(target.id, { url: "https://kick.com/channel", enabled: false, recording_subdir: "kick/channel" });
+    expect((await WatchTargetJsonAdapter.read(watchlistPath))[0]).toMatchObject({ url: "https://kick.com/channel", enabled: false, recording_subdir: "kick/channel" });
+  });
+
+  it.each([
+    ["empty string", ""],
+    ["relative URL", "/relative/path"],
+    ["javascript scheme", "javascript:alert(1)"],
+    ["data scheme", "data:text/html,<h1>x</h1>"],
+    ["credential-bearing URL", "https://user:pass@example.com/channel"],
+    ["non-string value", 42],
+  ])("PATCH url rejects %s without a partial write", async (_description, url) => {
+    await expect(controller.patchWatchTarget(target.id, { url } as never)).rejects.toThrow();
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([target, sibling]);
+  });
+
+  it("PATCH url rejects unknown key alongside url without a partial write", async () => {
+    await expect(controller.patchWatchTarget(target.id, { url: "https://twitch.tv/x", unknown: "x" } as never)).rejects.toThrow();
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([target, sibling]);
+  });
+
+  it("adapter round-trip preserves URL exactly", () => {
+    const domainTarget = {
+      id: "custom-url",
+      creator_id: "Creator",
+      channel_name: "channel",
+      platform: "twitch" as const,
+      url: "https://www.twitch.tv/channel?exact=Value%2FOne",
+      quality: "best",
+      enabled: true,
+      state: "idle" as const,
+    };
+    expect(WatchTargetJsonAdapter.toDomain(WatchTargetJsonAdapter.fromDomain(domainTarget)).url).toBe(domainTarget.url);
+  });
+
+  it("legacy malformed URL survives unrelated PATCH", async () => {
+    await writeFixture([{ ...target, url: "not-a-url" }, sibling]);
+    await controller.patchWatchTarget(target.id, { enabled: false });
+    expect((await WatchTargetJsonAdapter.read(watchlistPath))[0]).toMatchObject({ url: "not-a-url", enabled: false });
   });
 });
 

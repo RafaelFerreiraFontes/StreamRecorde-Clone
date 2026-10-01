@@ -25,7 +25,7 @@ const { cleanup, fireEvent, render, screen, waitFor } =
   await import("@testing-library/react");
 const { RecordingBrowser } = await import("../components/recording-browser");
 const { DashboardProvider } = await import("../components/provider");
-const { default: WatchTargets, WatchTargetEnabledSwitch } =
+const { default: WatchTargets, WatchTargetEnabledSwitch, WatchTargetQualitySelect, WatchTargetUrlEditor } =
   await import("../app/watch-targets/page");
 
 const target = {
@@ -195,4 +195,311 @@ test("watch target edit keeps manual entry and saves picker selections through t
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("WatchTarget row keeps enabled, quality, folder, URL, and safe stream navigation controls after sequential edits", async () => {
+  const originalFetch = globalThis.fetch;
+  const patches: unknown[] = [];
+  let persistedTarget = { ...target };
+  globalThis.fetch = async (url, init) => {
+    const pathname = new URL(String(url), "http://localhost").pathname;
+    if (init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body));
+      patches.push(body);
+      persistedTarget = { ...persistedTarget, ...body };
+      return Response.json(persistedTarget);
+    }
+    if (pathname.endsWith("/watch-targets")) return Response.json([persistedTarget]);
+    if (pathname.endsWith("/creators")) return Response.json([{ id: "creator-1", display_name: "Creator" }]);
+    return Response.json([]);
+  };
+  try {
+    render(<DashboardProvider><WatchTargets /></DashboardProvider>);
+    const enabled = await screen.findByRole("switch", { name: /Enabled for Channel/ });
+    const quality = screen.getByRole("combobox", { name: /Quality for Channel/ });
+    const folder = screen.getByRole("button", { name: "Edit recording folder" });
+    const urlEditor = screen.getByRole("button", { name: /Edit URL for Channel/ });
+    const streamLink = screen.getByRole("link", { name: /Open stream for Channel/ });
+    assert.equal(enabled.getAttribute("aria-checked"), "true");
+    assert.equal((quality as HTMLSelectElement).value, "best");
+    assert.ok(folder);
+    assert.ok(urlEditor);
+    assert.equal(streamLink.getAttribute("target"), "_blank");
+    assert.equal(streamLink.getAttribute("rel"), "noopener noreferrer");
+
+    fireEvent.change(quality, { target: { value: "1080p60" } });
+    await waitFor(() => assert.deepEqual(patches, [{ quality: "1080p60" }]));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Edit URL for Channel/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "URL for Channel" }), {
+      target: { value: "https://www.twitch.tv/updated" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => assert.deepEqual(patches, [
+      { quality: "1080p60" },
+      { url: "https://www.twitch.tv/updated" },
+    ]));
+    await waitFor(() => assert.equal(
+      screen.getByRole("link", { name: /Open stream for Channel/ }).getAttribute("href"),
+      "https://www.twitch.tv/updated",
+    ));
+    assert.equal(screen.getByRole("switch", { name: /Enabled for Channel/ }).getAttribute("aria-checked"), "true");
+    assert.equal((screen.getByRole("combobox", { name: /Quality for Channel/ }) as HTMLSelectElement).value, "1080p60");
+    assert.ok(screen.getByRole("button", { name: "Edit recording folder" }));
+    assert.ok(screen.getByRole("button", { name: /Edit URL for Channel/ }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("WatchTargetEnabledSwitch handles error and reverts optimistic state", async () => {
+  let resolveRequest!: (value: Response) => void;
+  const request = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => request;
+  try {
+    render(<WatchTargetEnabledSwitch target={target} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+    const toggle = screen.getByRole("switch");
+    fireEvent.click(toggle);
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    assert.equal(toggle.getAttribute("aria-busy"), "true");
+    assert.equal((toggle as HTMLButtonElement).disabled, true);
+    resolveRequest(Response.json(target));
+    await waitFor(() => assert.equal(toggle.getAttribute("aria-busy"), "false"));
+    assert.equal(toggle.getAttribute("aria-checked"), "true");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("WatchTargetQualitySelect renders and updates quality", async () => {
+  let patchCalled = false;
+  globalThis.fetch = async (input, init) => {
+    if (init?.method === "PATCH") {
+      patchCalled = true;
+      assert.equal(JSON.parse(init.body as string).quality, "720p60");
+      return Response.json({ ...target, quality: "720p60" });
+    }
+    return Response.json({});
+  };
+
+  let afterMutationCalled = false;
+  render(
+    <WatchTargetQualitySelect
+      target={target}
+      pending={false}
+      afterMutation={async () => {
+        afterMutationCalled = true;
+      }}
+      onError={() => {}}
+    />
+  );
+
+  const select = screen.getByRole("combobox") as HTMLSelectElement;
+  assert.equal(select.value, "best");
+
+  fireEvent.change(select, { target: { value: "720p60" } });
+
+  await waitFor(() => assert.ok(patchCalled));
+  await waitFor(() => assert.ok(afterMutationCalled));
+});
+
+test("WatchTargetQualitySelect handles custom legacy quality", async () => {
+  const legacyTarget = { ...target, quality: "custom-variant" };
+  render(
+    <WatchTargetQualitySelect
+      target={legacyTarget}
+      pending={false}
+      afterMutation={async () => {}}
+      onError={() => {}}
+    />
+  );
+
+  const select = screen.getByRole("combobox") as HTMLSelectElement;
+  assert.equal(select.value, "custom-variant");
+  assert.ok(Array.from(select.options).some((option) => option.value === "custom-variant"));
+});
+
+test("WatchTargetQualitySelect handles error and reverts optimistic state", async () => {
+  let patchCalled = false;
+  let errorCalled = false;
+  globalThis.fetch = async (input, init) => {
+    if (init?.method === "PATCH") {
+      patchCalled = true;
+      return new Response("Server error", { status: 500 });
+    }
+    return Response.json({});
+  };
+
+  render(
+    <WatchTargetQualitySelect
+      target={target}
+      pending={false}
+      afterMutation={async () => {}}
+      onError={() => {
+        errorCalled = true;
+      }}
+    />
+  );
+
+  const select = screen.getByRole("combobox") as HTMLSelectElement;
+  fireEvent.change(select, { target: { value: "160p" } });
+
+  await waitFor(() => assert.ok(patchCalled));
+  await waitFor(() => assert.ok(errorCalled));
+
+  // Should revert to original value
+  assert.equal(select.value, "best");
+  assert.ok(Array.from((screen.getByRole("combobox") as HTMLSelectElement).options).some((option) => option.value === "160p"));
+});
+
+test("WatchTargetUrlEditor renders and updates url", async () => {
+  let patchCalled = false;
+  globalThis.fetch = async (input, init) => {
+    if (init?.method === "PATCH") {
+      patchCalled = true;
+      assert.equal(JSON.parse(init.body as string).url, "https://example.test/new");
+      return Response.json({ ...target, url: "https://example.test/new" });
+    }
+    return Response.json({});
+  };
+
+  let afterMutationCalled = false;
+  render(
+    <WatchTargetUrlEditor
+      target={target}
+      pending={false}
+      afterMutation={async () => {
+        afterMutationCalled = true;
+      }}
+      onError={() => {}}
+    />
+  );
+
+  const editButton = screen.getByTitle("Edit URL");
+  fireEvent.click(editButton);
+
+  const input = screen.getByRole("textbox") as HTMLInputElement;
+  assert.equal(input.value, "https://example.test/channel");
+
+  fireEvent.change(input, { target: { value: "https://example.test/new" } });
+
+  const saveButton = screen.getByText("Save");
+  fireEvent.click(saveButton);
+
+  await waitFor(() => assert.ok(patchCalled));
+  await waitFor(() => assert.ok(afterMutationCalled));
+});
+
+test("WatchTargetUrlEditor handles error and reverts optimistic state", async () => {
+  let patchCalled = false;
+  let errorCalled = false;
+  globalThis.fetch = async (input, init) => {
+    if (init?.method === "PATCH") {
+      patchCalled = true;
+      return new Response("Server error", { status: 500 });
+    }
+    return Response.json({});
+  };
+
+  render(
+    <WatchTargetUrlEditor
+      target={target}
+      pending={false}
+      afterMutation={async () => {}}
+      onError={() => {
+        errorCalled = true;
+      }}
+    />
+  );
+
+  const editButton = screen.getByTitle("Edit URL");
+  fireEvent.click(editButton);
+
+  const input = screen.getByRole("textbox") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "https://example.test/error" } });
+
+  const saveButton = screen.getByText("Save");
+  fireEvent.click(saveButton);
+
+  await waitFor(() => assert.ok(patchCalled));
+  await waitFor(() => assert.ok(errorCalled));
+
+  // Should still be in edit mode with the attempted value
+  assert.equal((screen.getByRole("textbox") as HTMLInputElement).value, "https://example.test/error");
+});
+
+test("WatchTargetUrlEditor rejects invalid URLs client-side", async () => {
+  let patchCalled = false;
+  let errorCalled = false;
+  globalThis.fetch = async (input, init) => {
+    if (init?.method === "PATCH") patchCalled = true;
+    return Response.json({});
+  };
+
+  render(
+    <WatchTargetUrlEditor
+      target={target}
+      pending={false}
+      afterMutation={async () => {}}
+      onError={() => {
+        errorCalled = true;
+      }}
+    />
+  );
+
+  const editButton = screen.getByTitle("Edit URL");
+  fireEvent.click(editButton);
+
+  const input = screen.getByRole("textbox") as HTMLInputElement;
+
+  // Test invalid protocol
+  fireEvent.change(input, { target: { value: "ftp://example.test" } });
+  fireEvent.click(screen.getByText("Save"));
+  assert.ok(errorCalled);
+  assert.equal(patchCalled, false);
+
+  errorCalled = false;
+
+  // Test credentials
+  fireEvent.change(input, { target: { value: "https://user:pass@example.test" } });
+  fireEvent.click(screen.getByText("Save"));
+  assert.ok(errorCalled);
+  assert.equal(patchCalled, false);
+});
+
+test("WatchTargets renders Open Stream link for safe URLs", async () => {
+  globalThis.fetch = async (input) =>
+    Response.json(String(input).endsWith("/watch-targets") ? [target] : []);
+
+  render(
+    <DashboardProvider>
+      <WatchTargets />
+    </DashboardProvider>
+  );
+
+  await waitFor(() => {
+    const link = screen.getByRole("link", { name: /Open stream for Channel/i });
+    assert.equal(link.getAttribute("href"), "https://example.test/channel");
+    assert.equal(link.getAttribute("target"), "_blank");
+    assert.equal(link.getAttribute("rel"), "noopener noreferrer");
+  });
+});
+
+test("WatchTargets omits Open Stream link for unsafe URLs", async () => {
+  const unsafeTarget = { ...target, url: "javascript:alert(1)" };
+  globalThis.fetch = async (input) =>
+    Response.json(String(input).endsWith("/watch-targets") ? [unsafeTarget] : []);
+
+  render(
+    <DashboardProvider>
+      <WatchTargets />
+    </DashboardProvider>
+  );
+
+  await waitFor(() => {
+    assert.ok(screen.getByText("Channel"));
+    const links = screen.queryAllByRole("link", { name: /Open stream for Channel/i });
+    assert.equal(links.length, 0);
+  });
 });
