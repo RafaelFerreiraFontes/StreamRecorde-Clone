@@ -5,7 +5,6 @@ recordings
 .vscode
 worker/config/
 worker/__pycache__/
-.github/
 *.tsbuildinfo
 runtime-data/
 .env
