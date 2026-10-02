@@ -1,5 +1,5 @@
 ---
-description: Project-wide architecture, domain model, coding standards, and implementation guidelines for the StreamRecorder Clone. Apply these instructions to backend, worker, database, API, and related project files.
+description: Durable local-first architecture, domain, security, engineering, and agent workflow rules for StreamRecorder Clone.
 applyTo: "**/*"
 ---
 
@@ -7,1069 +7,604 @@ applyTo: "**/*"
 
 ## 1. Project Context
 
-This project is a personal, portfolio-oriented web application inspired by StreamRecorder.
+StreamRecorder Clone is a personal, portfolio-oriented application inspired by StreamRecorder. It monitors and records live streams from Twitch, YouTube, and Kick.
 
-The application allows users to monitor live streams from supported platforms and record them directly to the user's connected cloud storage.
+The product should demonstrate reliable domain modeling, media execution, persistence, testing, and secure operation while remaining practical for one developer to maintain. Technical quality is measured by working, understandable behavior and evidence, not by the number of technologies introduced.
 
-Supported platforms:
+These instructions define durable rules. Statements marked **current** describe the verified Wave 04.75 baseline; **target**, **future**, and wave references describe work that has not necessarily been implemented. Inspect the actual code before acting.
 
-* Twitch
-* YouTube
-* Kick
+## 2. Product Direction — Local First
 
-Supported cloud storage providers:
+**Local Mode is the primary product mode. Hosted Mode is future and optional.**
 
-* Google Drive
-* Dropbox
-* OneDrive
+The application must first work robustly on the user's computer. Local execution is not merely a development environment.
 
-The application must avoid permanent video storage on the application server.
+The main workflow must not require a VPS, remote deployment, hosted backend, Google Drive, Dropbox, OneDrive, cloud storage, or external/cloud OAuth. Capturing a platform stream still requires access to that platform; local-first does not imply offline media capture.
 
-The server/workers should act primarily as an orchestration and media-processing layer, while the final recording is stored in the user's connected cloud storage.
+Local Recording Storage is the primary destination. Completed local files are retained user data. Optional export cannot redefine a valid local recording as failed or make a cloud account mandatory.
 
-The initial implementation should prioritize:
+Hosted deployment will be planned in later waves without replacing Local Mode.
 
-1. Low infrastructure cost.
-2. Simple operation by a solo developer.
-3. Clear domain separation.
-4. Extensible architecture.
-5. Reliable background processing.
-6. Minimal server-side buffering.
-7. Strong technical quality suitable for a professional portfolio.
+## 3. Development Philosophy
 
----
-
-# 2. Current Development Philosophy
-
-This is a solo-developed project.
-
-Do not introduce unnecessary enterprise-level complexity.
+This is a solo-developed project. Prioritize low infrastructure cost, simple operation, clear domain separation, reliability, and maintainability.
 
 Prefer:
 
-* simple and explicit architecture;
-* well-defined domain entities;
-* modular services;
-* small functions;
-* dependency injection where appropriate;
-* repository abstractions;
-* background jobs;
-* structured logging;
-* predictable error handling;
-* testable components.
+- Simple, explicit architecture and well-defined entities.
+- Modular services and small, focused functions.
+- Dependency injection where appropriate.
+- Repository abstractions when they isolate real persistence concerns.
+- Background execution for long-running work; queue jobs when the active wave requires them.
+- Structured logging, predictable error handling, and testable components.
+- Minimal necessary media processing and controlled temporary storage.
 
-Avoid introducing technologies, abstractions, design patterns, or infrastructure merely because they are commonly used in large-scale systems.
+Avoid enterprise complexity, patterns, dependencies, and infrastructure adopted merely because large systems use them. Every architectural decision must justify its operational and maintenance cost.
 
-Every architectural decision should justify its complexity.
+## 4. Current Verified Architecture
 
----
-
-# 3. High-Level Architecture
-
-The project is divided into the following logical components:
+The Wave 04.75 baseline is:
 
 ```text
-Frontend
-   |
-   | REST / WebSocket / SSE
-   v
-Backend API
-   |
-   +---- PostgreSQL
-   |
-   +---- Redis / Job Queue
-   |
-   v
-Recording Worker
-   |
-   +---- Streamlink
-   |
-   +---- FFmpeg
-   |
-   v
-Cloud Storage
-   |
-   +---- Google Drive
-   +---- Dropbox
-   +---- OneDrive
+Browser -> Next.js Frontend / API proxy -> NestJS REST API
+                                               |
+                                      Shared JSON adapters
+                                               |
+                                    Python polling Worker
+                                               |
+                                           Streamlink
+                                               |
+                                      Local recording files
 ```
 
-The backend is responsible for:
+The Worker is an independent process that reads shared configuration and writes operational state/history. The API does not currently dispatch Recording Jobs.
 
-* authentication;
-* user management;
-* creators;
-* watch targets;
-* recordings;
-* streams;
-* tags;
-* cloud storage connections;
-* recording configuration;
-* job creation;
-* job status;
-* retention management;
-* API/WebSocket communication.
+Compose runs only frontend, api, and worker. API and Worker share runtime-data at /data. Worker writes /recordings; API mounts it read-only. The frontend has no filesystem mount.
 
-Workers are responsible for:
+| Shared file | Current responsibility |
+| --- | --- |
+| watchlist.json | WatchTarget configuration and name-based Creator identity |
+| channels_status.json | Operational/runtime snapshot merged into API responses |
+| streams.json | Detected Stream history |
+| sessions.json | Legacy Recording history; channel_id maps to watch_target_id |
 
-* executing recording jobs;
-* monitoring streams;
-* invoking Streamlink;
-* invoking FFmpeg when required;
-* processing the recording;
-* uploading/storing the result in the user's cloud storage;
-* reporting job progress and failures.
+Shared JSON is transitional persistence and communication for the initial local MVP. Atomic replacement and process-local locks do not provide cross-process transactions, distributed locks, or multi-worker coordination.
 
-The worker must not become responsible for business-domain decisions that belong to the API/backend.
+The Worker image pins streamlink==8.6.1 and installs FFmpeg. Capture directly invokes Streamlink with an .mp4 output path; no separate FFmpeg finalization step is explicitly invoked. A suffix or fake test output is not proof of playable MP4 media.
 
----
+The dashboard, target editing, adaptive quality, and recording location browser are implemented. PostgreSQL, persisted User, authentication, Redis/BullMQ, queue-backed Recording Jobs, SSE, Worker heartbeat, cloud integrations, and Tauri are not implemented. Use code to resolve stale statements in historical documentation.
 
-# 4. Domain Model
+## 5. Target Architecture
 
-The system must use explicit domain entities.
-
-Core entities include:
+The future local architecture may evolve toward:
 
 ```text
-User
-Creator
-WatchTarget
-Stream
-Recording
-CloudStorageConnection
-Tag
-```
-
-The relationships must remain explicit.
-
-Conceptually:
-
-```text
-User
- |
- +-- CloudStorageConnection
- |
- +-- Creator
-       |
-       +-- WatchTarget
-       |      |
-       |      +-- Recording configuration
-       |
-       +-- Stream
-              |
-              +-- Recording
-```
-
----
-
-# 5. Creator
-
-A `Creator` represents the streamer/content creator being monitored.
-
-A Creator is independent from a specific recording configuration.
-
-Examples:
-
-```text
-Creator
-- name: ExampleStreamer
-- platform: Twitch
-- externalId: ...
-```
-
-The Creator should contain identity-related information about the streamer, but should not contain recording-specific configuration.
-
-Do not store recording quality, resolution, bitrate, recording format, or other WatchTarget-specific settings directly on Creator.
-
----
-
-# 6. WatchTarget
-
-`WatchTarget` is a central domain entity.
-
-A WatchTarget represents a specific monitoring/recording configuration for a Creator.
-
-A single Creator may have multiple WatchTargets.
-
-Example:
-
-```text
-Creator: ExampleStreamer
-
-WatchTarget A
-- Platform: Twitch
-- Quality: Best Available
-- Enabled: true
-
-WatchTarget B
-- Platform: Twitch
-- Quality: 720p
-- Enabled: true
-
-WatchTarget C
-- Platform: Twitch
-- Quality: 480p
-- Enabled: false
-```
-
-The purpose of this design is to allow the user to customize multiple recording strategies for the same Creator.
-
-WatchTargets must therefore be modeled as independent entities related to Creator.
-
-Conceptually:
-
-```text
-Creator 1
-   |
-   +---- WatchTarget 1
-   |
-   +---- WatchTarget 2
-   |
-   +---- WatchTarget 3
-```
-
-Never model multiple WatchTargets as duplicated fields inside Creator.
-
-Avoid structures such as:
-
-```text
-Creator:
-  quality1
-  quality2
-  quality3
-```
-
-Instead:
-
-```text
-Creator
-  |
-  +-- WatchTarget
-  +-- WatchTarget
-  +-- WatchTarget
-```
-
----
-
-# 7. WatchTarget Responsibilities
-
-A WatchTarget should contain configuration related to monitoring and recording.
-
-Possible configuration includes:
-
-* creator relationship;
-* platform;
-* target/channel identifier;
-* stream URL or external identifier when appropriate;
-* enabled/disabled state;
-* preferred quality;
-* recording format;
-* recording options;
-* destination/cloud storage configuration;
-* tags or metadata when applicable;
-* monitoring preferences.
-
-The exact fields should be implemented according to the current database/domain design.
-
-Do not prematurely add fields that are not required by the current feature.
-
----
-
-# 8. WatchTarget and Quality
-
-Recording quality is a property of a WatchTarget, not a Creator.
-
-This allows the same Creator to have different recording configurations.
-
-For example:
-
-```text
-Creator
-└── ExampleStreamer
-
-    ├── WatchTarget
-    │   └── Best Available
-    │
-    ├── WatchTarget
-    │   └── 1080p
-    │
-    └── WatchTarget
-        └── 720p
-```
-
-The worker should receive the resolved WatchTarget configuration when a recording job is created.
-
-The worker should not independently decide which WatchTarget should be used.
-
-The backend is responsible for resolving the configuration.
-
----
-
-# 9. Creator Grouping
-
-The UI and API should conceptually group WatchTargets by Creator.
-
-Example:
-
-```text
-Creator: ExampleStreamer
-
-  Watch Targets
-  ├── Best Quality
-  ├── 720p
-  └── Audio/Low Bandwidth
-```
-
-The database should remain normalized.
-
-Grouping is a presentation/query concern, not a reason to denormalize WatchTargets into Creator.
-
-API responses may expose nested structures when useful for the frontend, but the persistence model should preserve separate entities.
-
----
-
-# 10. Stream
-
-A `Stream` represents an actual live-stream occurrence.
-
-A Creator can have many Streams over time.
-
-Conceptually:
-
-```text
-Creator
- |
- +-- Stream #1
- +-- Stream #2
- +-- Stream #3
-```
-
-A Stream should represent the actual event/session rather than the persistent monitoring configuration.
-
-Do not use Stream as a replacement for WatchTarget.
-
-Difference:
-
-```text
-Creator
-    = who is being monitored
-
-WatchTarget
-    = how the system should monitor/record that creator
-
-Stream
-    = an actual live broadcast detected by the system
-
-Recording
-    = the recording produced from a stream
-```
-
----
-
-# 11. Recording
-
-A `Recording` represents a concrete recording job/result.
-
-A recording should preserve enough information to understand:
-
-* which User initiated/owns it;
-* which Creator was involved;
-* which WatchTarget configuration generated it;
-* which Stream it belongs to;
-* current status;
-* timestamps;
-* output metadata;
-* cloud storage destination;
-* error information when applicable.
-
-The relationship between WatchTarget and Recording is important.
-
-A recording must retain the WatchTarget context that generated it.
-
-This prevents historical recordings from becoming ambiguous if the WatchTarget configuration is later modified.
-
-Prefer storing the relevant immutable/snapshot information in the recording/job context when necessary instead of assuming the WatchTarget will never change.
-
----
-
-# 12. Recording Lifecycle
-
-Recording jobs should use explicit states.
-
-Recommended conceptual lifecycle:
-
-```text
-PENDING
-   |
-   v
-RECORDING
-   |
-   v
-UPLOADING
-   |
-   v
-COMPLETED
-```
-
-Failure can occur from any processing stage:
-
-```text
-PENDING
-RECORDING
-UPLOADING
-   |
-   v
-ERROR
-```
-
-The exact enum names should remain consistent throughout:
-
-* database;
-* backend;
-* worker;
-* queue;
-* WebSocket/SSE;
-* frontend.
-
-Do not use different names for the same state in different layers.
-
----
-
-# 13. Background Jobs
-
-Recording must be asynchronous.
-
-The API should not keep an HTTP request open for the entire duration of a live stream.
-
-Expected flow:
-
-```text
-API
- |
- | create recording job
- v
-Redis / Queue
- |
- v
+Tauri 2 Desktop
+     |
+     v
+Next.js Frontend
+     |
+     v
+NestJS API
+     |
+     +---- PostgreSQL
+     |
+     +---- Redis / BullMQ
+     |
+     v
 Worker
- |
- +-- Streamlink
- |
- +-- FFmpeg
- |
- v
-Cloud Storage
+     |
+     +---- Streamlink
+     +---- FFmpeg / final media handling
+     |
+     v
+Local Recording Storage
 ```
 
-The API should return quickly after successfully scheduling the job.
-
-Workers should be independently executable and restartable.
-
----
-
-# 14. Worker Responsibilities
-
-Workers should focus on execution.
-
-A worker should:
-
-1. Receive a recording job.
-2. Load the required configuration.
-3. Resolve the stream.
-4. Start Streamlink.
-5. Process/transcode through FFmpeg when required.
-6. Upload/store the recording.
-7. Update recording status.
-8. Report errors.
-9. Clean up temporary resources.
-
-Workers should not contain large amounts of business logic.
-
-Business decisions should remain in backend services.
-
----
-
-# 15. Temporary Storage
-
-The application server should not be used as permanent video storage.
-
-Temporary files may exist when technically necessary for FFmpeg or cloud-upload operations.
-
-Temporary media must:
-
-* have a controlled lifecycle;
-* be removed after successful processing;
-* be removed after recoverable failures when possible;
-* not become permanent application data.
-
-Prefer streaming/progressive upload strategies when supported by the selected cloud provider and recording pipeline.
-
----
-
-# 16. Database Principles
-
-PostgreSQL is the primary persistent database.
-
-Use normalized relational entities.
-
-Prefer:
+This is a target, not the current implementation. The intended completion flow is:
 
 ```text
-users
-creators
-watch_targets
-streams
-recordings
-cloud_storage_connections
-tags
-...
+Stream -> Worker -> Streamlink -> FFmpeg / final media handling
+       -> Local Recording Storage -> Recording completed
 ```
 
-with explicit foreign-key relationships.
+Tauri 2 is planned for Wave 08.5 as the desktop shell and native integration layer. Embedded PostgreSQL strategy, Redis packaging, API/Worker sidecars, FFmpeg packaging, and Python bundling are undecided. Resolve them when that wave is planned, not from this conceptual diagram.
 
-Do not duplicate domain data unnecessarily.
+## 6. Domain Model
 
-Foreign keys should enforce important relationships.
-
-Use indexes for fields frequently used in:
-
-* lookup;
-* filtering;
-* joins;
-* status queries;
-* background job processing.
-
----
-
-# 17. Multi-User Architecture
-
-The application must support multiple users from the beginning.
-
-Every user-owned resource must have a clear ownership boundary.
-
-At minimum, consider ownership for:
+Keep the fundamental distinction explicit:
 
 ```text
-User
- ├── Creators
- ├── WatchTargets
- ├── Recordings
- ├── CloudStorageConnections
- └── Tags
+Creator     = who
+WatchTarget = how
+Stream      = an actual broadcast occurrence
+Recording   = a concrete capture attempt/result
 ```
 
-A user must never be able to access another user's resources through an API endpoint.
+This distinction governs schema, API, Worker, frontend, future jobs, and tests. Do not merge entities for implementation convenience.
 
-Authorization should be enforced at the service/query level rather than relying exclusively on frontend restrictions.
-
----
-
-# 18. Authentication
-
-The project uses basic authentication with multiple accounts.
-
-User information includes:
-
-* unique ID;
-* username;
-* unique email;
-* password hash;
-* creation date;
-* relevant account timestamps.
-
-Passwords must never be stored in plaintext.
-
-Use a strong password hashing algorithm such as bcrypt/Argon2 according to the project's established dependencies.
-
-Authentication tokens/sessions must not expose sensitive user information unnecessarily.
-
----
-
-# 19. Cloud Storage
-
-Cloud storage credentials belong to the authenticated User.
-
-Conceptually:
+Conceptual relationships to validate against actual behavior:
 
 ```text
-User
- |
- +-- Google Drive Connection
- +-- Dropbox Connection
- +-- OneDrive Connection
+Creator -> WatchTarget
+WatchTarget -> Stream
+WatchTarget -> Recording
+Stream -> Recording
 ```
 
-OAuth access tokens and refresh tokens are sensitive credentials.
+One Creator may have multiple targets; one detected Stream may have multiple capture attempts. The current Stream references a WatchTarget. Do not invent a direct persisted Creator-to-Stream foreign key or assume broadcasts across targets are already deduplicated.
 
-They must:
+User, CloudStorageConnection, Tag, and a separate CloudExport are future concepts. Their mention does not authorize creating them in the current wave.
 
-* never be returned in normal API responses;
-* never be logged;
-* never be committed to Git;
-* be encrypted at rest when persisted;
-* be handled only by the appropriate backend/cloud-storage services.
+## 7. Creator
 
-Cloud providers should be abstracted behind a common interface where practical.
+Creator identifies the person/content creator being monitored, independently of a recording configuration.
 
-Example conceptual interface:
+Identity-related information belongs here. Recording quality, resolution, bitrate, recording format, enabled state, and output-folder settings belong to WatchTarget, not Creator. Never add fields such as quality1, quality2, and quality3 to represent multiple configurations.
+
+**Current:** Creator contains id and display_name, derived by name convention from watchlist entries, with channel_name fallback. Creator routes are read-only; independent Creator CRUD and persistent identity do not exist.
+
+**Wave 05 target:** stable independently persisted identity and Creator management. Preserve compatibility for existing name-based references and explicitly handle collisions/renames. A display-name change must not silently reassign historical records.
+
+## 8. WatchTarget
+
+WatchTarget is an independent monitoring/recording configuration associated with a Creator.
 
 ```text
-CloudStorageProvider
-  upload()
-  delete()
-  createFolder()
-  ...
+Creator
+├── WatchTarget A -> Best
+├── WatchTarget B -> 1080p
+└── WatchTarget C -> 720p
 ```
 
-Provider-specific implementations should remain isolated.
+Each target has its own identity and settings. Editing, disabling, or removing A must not modify B or C. Creator grouping is a presentation/query concern; preserve separate normalized entities.
 
----
+Current configuration includes creator_id, channel_name, platform, URL, preferred quality, enabled, and optional recording_subdir. State is exposed using operational data; do not confuse it with static configuration.
 
-# 20. Retention
+Quality is a WatchTarget preference. Adaptive runtime selection may choose an available variant but must not overwrite the persisted preference. The WatchTarget URL is authoritative for probe and capture; do not reconstruct it from Creator identity.
 
-The application has a 7-day retention policy.
+The Worker currently reloads configuration during polling and refreshes it before launch. Preserve guards against removed/disabled targets, invalid required fields, and changed URLs. Disabling a target prevents new work; existing captures and pending terminal persistence follow their current independent lifecycle.
 
-Recordings older than the configured retention period should be automatically removed from the user's cloud storage.
+Future jobs must resolve the exact originating WatchTarget and relevant configuration context. Do not substitute a Creator-wide default. Add future format/options/tags only when the active feature requires them.
 
-The deletion process should be:
+## 9. Stream
+
+Stream represents a real detected broadcast occurrence, not persistent monitoring configuration. It must never substitute for WatchTarget.
+
+Repeated polls can refer to the same open Stream. A later broadcast receives a new identity. A failed Recording attempt does not necessarily mean the broadcast has ended.
+
+Current Streams retain id, watch_target_id, state, started_at, and optional finished_at. Preserve their history and distinguish confirmed OFFLINE from an uncertain ERROR probe. Do not close a broadcast merely because probing failed or a target was disabled.
+
+## 10. Recording
+
+Recording represents a concrete capture attempt/result. A retry during the same broadcast can create another Recording for the same Stream.
+
+Preserve enough context to understand:
+
+- The originating WatchTarget and relevant Creator identity.
+- The Stream relationship when known.
+- Requested recording configuration and relevant execution context.
+- State, timestamps, local output metadata, and failure information.
+- Ownership when introduced in its own wave; export references when separately implemented.
+
+Historical meaning must survive later target edits. Use explicit immutable snapshots or another justified historical-context strategy where needed; do not assume current target settings describe past captures.
+
+**Current:** the identifier is session_id; records include watch_target_id, timestamps, state, and output_file. stream_id exists in Worker memory but both legacy sessions adapters omit it. Do not claim a persisted link or fabricate one when migrating history.
+
+Removing a target currently leaves history. Future relationship/deletion policies must preserve that history deliberately rather than cascade-delete it by convenience.
+
+## 11. Recording Lifecycle
+
+Use explicit state transitions and consistent contracts across persistence, API, Worker, frontend, and future queue/realtime layers.
+
+The current shared state vocabulary is:
 
 ```text
-Scheduled Job
-      |
-      v
-Find expired recordings
-      |
-      v
-Delete remote file
-      |
-      v
-Update database
+idle
+offline
+recording
+finished
+error
 ```
 
-The database must preserve enough metadata to locate the remote file.
+These values are not all sequential capture stages. Current capture attempts normally progress from recording to finished/error. Successful completion uses finished, not COMPLETED.
 
-Deletion must be idempotent where possible.
-
-A failed deletion should not silently appear as a successful deletion.
-
----
-
-# 21. Tags
-
-The database should support a flexible tagging system.
-
-Tags may eventually be associated with:
-
-* creators;
-* watch targets;
-* streams;
-* recordings.
-
-Tags should be modeled as reusable entities rather than duplicated strings everywhere.
-
-Avoid prematurely creating many specialized tag tables if a generic relational tagging model is sufficient.
-
----
-
-# 22. API Design
-
-The API should follow REST principles where appropriate.
-
-Use resources rather than action-heavy endpoints.
-
-Prefer:
+Probe classification is separate:
 
 ```text
-GET    /creators
-POST   /creators
-GET    /creators/:id
-PATCH  /creators/:id
-DELETE /creators/:id
+LIVE / OFFLINE / ERROR
 ```
 
-and:
+ERROR must not be treated as OFFLINE. Current success requires a non-interrupted subprocess, zero exit code, and an existing non-empty output; these checks alone do not prove container format or playability.
+
+A possible future Recording lifecycle is PENDING -> RECORDING -> COMPLETED, with ERROR outcomes. If adopted, migrate enum/data/API contracts explicitly; do not silently rename current values.
+
+Optional export should have a separate lifecycle, for example:
 
 ```text
-GET    /creators/:id/watch-targets
-POST   /creators/:id/watch-targets
-PATCH  /watch-targets/:id
-DELETE /watch-targets/:id
+Recording.state = COMPLETED
+CloudExport.state = PENDING -> UPLOADING -> COMPLETED
+                                  |
+                                  v
+                                FAILED
 ```
 
-The exact routes should follow the existing backend conventions.
+A local Recording may remain COMPLETED while CloudExport is FAILED. UPLOADING is not a mandatory stage of local recording success.
 
-Do not break established API contracts without a clear reason.
+## 12. API Responsibilities
 
----
-
-# 23. Validation
-
-Validate input at the API boundary.
-
-Do not trust frontend validation.
-
-Validate:
-
-* required fields;
-* enum values;
-* IDs;
-* URLs;
-* platform values;
-* recording configuration;
-* authentication input;
-* pagination/filter parameters.
-
-Invalid input should produce consistent HTTP errors.
-
----
-
-# 24. Error Handling
-
-Errors should be explicit and structured.
-
-Avoid:
+The API is the application/domain and exposure layer:
 
 ```text
-catch (error) {
-  console.log(error);
-}
+Controller -> Service -> Repository -> Persistence
 ```
 
-Prefer structured logging and meaningful application errors.
+Controllers stay thin. Services apply application/domain rules. Repositories handle persistence. Adapters isolate physical formats and legacy contracts. Keep filesystem access in the existing dedicated service boundary.
 
-Errors should distinguish between:
+**Current API:** NestJS REST, DTO validation, Creator grouping/reads, WatchTarget configuration CRUD, Stream/Recording reads, legacy compatibility, and safe read-only recording-location browsing.
 
-* validation errors;
-* authentication errors;
-* authorization errors;
-* not-found errors;
-* external API errors;
-* worker errors;
-* cloud-storage errors;
-* unexpected internal errors.
+**Target API:** stable relational domain management, then ownership/authentication, then queue/job orchestration and later optional integration management as their waves arrive. /auth, /users, cloud resources, and Creator mutations are not existing routes.
 
-Never expose internal stack traces or secrets to API consumers in production.
+The API must not execute an hours-long capture inside an HTTP request. Frontend validation and UI restrictions do not replace API validation or future backend authorization.
 
----
+## 13. Worker Responsibilities
 
-# 25. Logging
+Worker is the operational/media layer. It should not accumulate user-facing business policy, authentication, or persistence rules that belong to API services/repositories.
 
-Use structured logging.
+Its responsibilities include resolving execution configuration, observing streams, starting capture, monitoring subprocesses, reporting lifecycle outcomes, handling operational failures, and cleaning up owned temporary resources.
 
-Logs should provide enough information to diagnose:
+Preserve the verified baseline:
 
-* job creation;
-* worker execution;
-* stream detection;
-* recording start;
-* recording completion;
-* upload;
-* cloud provider failures;
-* queue failures;
-* cleanup;
-* retention deletion.
+- LIVE/OFFLINE/ERROR classification without false broadcast termination.
+- Enabled enforcement and pre-launch configuration refresh.
+- Authoritative URL and adaptive quality without preference mutation.
+- Local output and separate Stream/Recording lifecycle.
+- Pending terminal-persistence recovery.
+- Cooperative subprocess termination and reaping on shutdown.
 
-Never log:
+Isolate Streamlink behind clear helpers/services; avoid scattering platform behavior throughout the Worker or duplicating the full pipeline for each platform. Detect launch, probe, capture, and process-exit failures.
 
-* passwords;
-* OAuth access tokens;
-* OAuth refresh tokens;
-* JWT secrets;
-* complete authorization headers;
-* sensitive personal data unnecessarily.
+Use FFmpeg only for required container conversion, remuxing, normalization, or justified transcoding. Avoid costly transcoding by default. Installed FFmpeg is not evidence of explicit finalization.
 
----
+Keep Worker independently executable/restartable from the API where the integration allows it. Future DB/API dependencies need explicit unavailability/recovery behavior; do not promise disconnected operation without support.
 
-# 26. Configuration
+Cleanup must target owned temporary/partial resources under an explicit policy. Preserve valid completed local media and do not mask persistence failure as successful durable completion.
 
-Configuration must come from environment variables or a dedicated configuration layer.
+## 14. Background Jobs
 
-Never hardcode:
+Long-running recording is asynchronous to HTTP.
 
-* secrets;
-* database passwords;
-* OAuth credentials;
-* JWT secrets;
-* cloud credentials;
-* production URLs.
+```text
+CURRENT:
+Worker polling -> capture attempt -> local file and JSON history
 
-Provide sensible development defaults only when they are safe.
+FUTURE WAVE 06:
+API / Redis-BullMQ -> Recording Job -> Worker -> local file
+```
 
-Environment-specific configuration should remain separate from application logic.
+The future API should validate the target, resolve execution context, persist/schedule work, and return promptly. Worker performs the long-running operation and reports progress/outcome.
 
----
+Job payloads should contain stable IDs and sufficient configuration references/snapshots to execute the intended target. They must never directly contain OAuth tokens or other secrets. Resolve credentials through the appropriate backend/provider boundary when such features exist.
 
-# 27. Testing
+Define job retries, duplicate execution, status persistence, and failure recovery when Wave 06 is planned. Do not introduce a queue prematurely during Wave 05 persistence migration.
 
-New domain logic should be testable independently.
+## 15. Local Recording Storage
 
-Prioritize tests for:
+Local Recording Storage is the primary final destination, not a disposable buffer awaiting cloud upload.
 
-* authentication;
-* Creator ownership;
-* WatchTarget creation/update;
-* multiple WatchTargets per Creator;
-* recording lifecycle;
-* queue/job creation;
-* worker error handling;
-* cloud-storage abstraction;
-* retention logic.
+Keep completed files accessible through local recording management. Distinguish retained output from partial files and temporary processing artifacts. A failed optional export must not delete or invalidate a valid local recording.
 
-Particularly important:
+Preserve configured root containment: recording_subdir is relative to OUTPUT_DIR, with current sanitized channel-name fallback only for absent/empty overrides. Reject unsafe paths rather than silently accepting traversal or arbitrary destinations.
+
+The API's current browser is read-only and returns location/directory metadata. Preserve symlink/junction restrictions, missing-file states, and root boundaries. It is not download, playback, public serving, or native Explorer integration.
+
+Waves 07/07.5 extend existing local capture/browser functionality with deliberate file lifecycle and storage management; they do not imply local recording is absent today.
+
+## 16. PostgreSQL Principles
+
+**Current:** shared JSON persistence. **Wave 05 target:** PostgreSQL as the primary domain database for Creator, WatchTarget, Stream, and Recording.
+
+- Use normalized entities and explicit relationships.
+- Enforce meaningful integrity with foreign keys/constraints where appropriate.
+- Index actual lookup, filter, join, status, and later job-processing queries.
+- Avoid needless duplication while retaining justified immutable historical context.
+- Use reproducible migrations and test clean setup, upgrades, restart persistence, and failures.
+- Define timestamp interpretation, identifier compatibility, nullability, transactions, and deletion policies explicitly.
+
+No ORM/query layer is currently selected. Compare Prisma, Drizzle, TypeORM, and direct SQL/query builder using solo maintenance, migrations, type safety, NestJS/PostgreSQL integration, overhead, testability, and future ownership/Tags. Record a justified choice.
+
+Separate domain persistence from operational runtime communication. channels_status.json may remain operational during transition; not every JSON must disappear simultaneously.
+
+Reuse StreamsRepository and adapters where useful. Declare one primary authority per entity, avoid uncontrolled dual writes, and preserve ongoing Worker updates. Migration needs backup, explicit import policy, idempotence, malformed-data handling, and rollback. Follow the Wave 05 plan for concrete acceptance.
+
+Do not add a fictional/nullable user_id merely to anticipate Wave 05.5, or implement Tags, queue infrastructure, or cloud entities in this wave.
+
+## 17. Future User, Authentication, and Ownership
+
+**Not currently implemented; planned for Wave 05.5.**
+
+Local profile/account design must respect Local Mode and not require external OAuth or a hosted identity provider. Do not claim current routes are authenticated.
+
+Future User data should have a stable unique ID, username/account identity, unique email as specified by the account model, password hash for password authentication, creation time, and relevant account timestamps.
+
+Never store plaintext passwords. Use Argon2/bcrypt or an equivalent strong password hashing algorithm appropriate to the selected dependencies. Handle authentication tokens/sessions securely without exposing secrets or unnecessary personal information.
+
+Enforce ownership in backend services/queries. User A must not access User B's resources by changing IDs, filters, or request paths. Frontend restrictions are not an authorization boundary.
+
+Plan ownership for Creators, WatchTargets, Recordings and, when introduced, cloud connections and Tags. Test indirect relationships and user isolation. Security requirements apply when those features are introduced; they do not authorize premature User implementation in Wave 05.
+
+## 18. Optional Cloud Export and Credential Security
+
+Cloud is optional and later:
+
+```text
+Completed Local Recording -> Optional Cloud Export
+                                +-> Google Drive
+                                +-> Dropbox
+                                +-> OneDrive
+```
+
+Google Drive/CloudStorageConnection/OAuth are planned for Wave 09, export/upload for 09.5, and Dropbox/OneDrive for 10. Local success never requires a connected provider.
+
+Prefer separate Recording and CloudExport lifecycles. Credentials belong to the appropriate authenticated User connection when ownership exists.
+
+OAuth access and refresh tokens must:
+
+- Never appear in logs, normal API responses, or queue payloads.
+- Never be committed to Git.
+- Be protected and encrypted at rest when persisted.
+- Be handled only by appropriate backend/cloud integration services.
+
+Isolate provider-specific behavior behind a small provider/service interface when practical. Upload/delete/folder operations must not leak provider details throughout the domain. Do not create a speculative abstraction for every imagined provider operation.
+
+Future exported files also remain private. Track export failures and retries independently from local recording validity.
+
+## 19. Tags
+
+Tags are planned for Wave 06.5 and are not implemented.
+
+Model Tags as reusable entities rather than duplicated strings scattered across records. They may eventually relate to Creator, WatchTarget, Stream, and Recording.
+
+Decide concrete relationships, ownership, constraints, and filtering needs in that wave. Avoid premature specialized tables or a generic tagging framework without demonstrated requirements.
+
+## 20. API Design
+
+Prefer REST resource-oriented endpoints where appropriate. Existing contracts win over conceptual route examples.
+
+Current domain routes include Creator GETs, WatchTarget GET/POST/PATCH/DELETE, Stream GETs, and Recording GETs with watchTargetId filtering. /streamer and /session remain legacy compatibility boundaries.
+
+Do not imply POST /creators or /creators/:id/watch-targets exists today. Future Creator CRUD must be designed around stable identity and compatibility rather than copying an old illustrative endpoint list.
+
+Preserve response shapes, identifiers, filters, error semantics, and PATCH omission behavior unless a justified migration explicitly changes them. Apply changes consistently through the Next.js proxy and client when necessary.
+
+## 21. Validation
+
+Validate at the API boundary; frontend validation improves UX but is not authoritative.
+
+Validate required fields, identifiers, enums, URLs, supported platform, quality, strict boolean enabled, recording paths, and pagination/filter parameters when supported. Validate authentication inputs when authentication exists.
+
+Preserve current URL rules: absolute HTTP/HTTPS, valid protocol, and no embedded credentials. Preserve quality validation against supported values and normalization semantics.
+
+For recording_subdir and browsing paths, enforce relative-path containment and reject traversal, absolute/drive/UNC paths, control characters, and unsafe symlink/junction access. Keep validation aligned with the filesystem helpers and Windows behavior.
+
+PATCH only changes supplied fields. Empty recording_subdir clears the override; omission leaves it unchanged. Invalid input must produce consistent, actionable errors rather than silently changing unrelated fields.
+
+## 22. Error Handling
+
+Use explicit, structured errors and meaningful categories:
+
+- Validation and not found.
+- Worker/media process and platform/network.
+- Persistence/database and filesystem.
+- Queue/job failures when introduced.
+- Authentication/authorization when introduced.
+- Cloud provider/export failures when introduced.
+- Unexpected internal failures.
+
+Do not swallow meaningful failures in silent catch blocks or merely print an exception and continue as though the operation succeeded. Best-effort cleanup may deliberately tolerate an error, but its scope must be explicit and must not mask the initiating failure.
+
+Never expose internal stack traces or secrets to API consumers. Use safe diagnostics for investigation. Distinguish invalid persisted data from valid empty state, and distinguish probe errors from confirmed offline status.
+
+## 23. Logging
+
+Use structured logging with safe context sufficient to diagnose:
+
+- Stream probes and Worker execution.
+- Recording start, progress where supported, completion, and failure.
+- Persistence/database, filesystem, and recovery failures.
+- Job/queue lifecycle when implemented.
+- Optional cloud export and retention cleanup when implemented.
+
+Prefer bounded identifiers, categories, return codes, and sanitized messages. Logs should help correlate operations without dumping private payloads.
+
+Never log passwords, OAuth access/refresh tokens, JWT/session secrets, full Authorization headers, or sensitive personal data. Avoid raw private URLs, raw Streamlink maps/debug output, and credentials in diagnostic messages. Preserve current secret-safe diagnostics.
+
+## 24. Configuration
+
+Use environment variables or a dedicated configuration layer; keep environment-specific settings out of business logic.
+
+Never hardcode real secrets, database passwords, OAuth credentials, JWT/session secrets, cloud credentials, or production URLs. Provide safe local defaults and credential-free examples where needed.
+
+Preserve current non-empty per-file override -> CONFIG_DIR -> local-default precedence. Keep API and Worker pointed at the same runtime storage while JSON communication remains active.
+
+OUTPUT_DIR controls Worker output; RECORDINGS_ROOT controls API browsing. recording_subdir is a target-relative setting, not permission to change arbitrary infrastructure paths. Frontend API_BASE_URL is server-side configuration.
+
+Local Mode must remain operable without cloud configuration. Future database/queue configuration must document local persistence, startup behavior, and recovery.
+
+## 25. Testing Principles
+
+Test domain logic independently and test integration boundaries with the actual contracts.
+
+This is a mandatory scenario:
 
 ```text
 One Creator
-   |
-   +-- WatchTarget A
-   +-- WatchTarget B
-   +-- WatchTarget C
+├── WatchTarget A
+├── WatchTarget B
+└── WatchTarget C
 ```
 
-must be a supported and tested scenario.
+Create different configurations and prove that editing, disabling, or deleting one target leaves its siblings unchanged.
 
-Tests should verify that modifying or deleting one WatchTarget does not unintentionally modify other WatchTargets belonging to the same Creator.
+Prioritize:
 
----
+- Domain identity, relationships, configuration validation, and API regression.
+- Stream/Recording lifecycle, repeated broadcasts, retries, and historical context.
+- Preferred versus effective quality, authoritative URL, and enabled enforcement.
+- Persistence round trips, malformed/missing data, restart/reload, and recovery.
+- Worker compatibility, subprocess failures/shutdown, and terminal-persistence errors.
+- Filesystem containment, permissions, missing output, and safe cleanup.
+- Frontend loading/error/reconciliation and relevant proxy/component behavior.
 
-# 28. Architecture Boundaries
+Automated tests must be deterministic and must not depend on Twitch, YouTube, Kick, real live streams, or platform network availability. Mock/fake Streamlink and process boundaries; use isolated storage and later an isolated local test database. Never use real runtime-data or user media as fixtures.
 
-Maintain clear separation between:
+Add database migration/unavailability tests in Wave 05; auth/ownership and user-isolation tests in 05.5; queue/job payload/retry tests in 06; Tags tests in 06.5; cloud provider/export and retention tests in their waves. Future test categories do not expand current implementation scope.
+
+Keep these evidence levels distinct:
 
 ```text
-Controller
-   ↓
-Service
-   ↓
-Repository
-   ↓
-Database
+container running
+!= API healthy
+!= probe successful
+!= capture successful
+!= playable media
 ```
 
-For worker-related functionality:
+Existing fake-Streamlink Docker smoke validates deterministic integration, not a real playable MP4. Report actual commands/results, historical evidence, and unperformed manual checks separately. Use existing test frameworks and focused tests before the required affected-suite validation.
 
-```text
-Queue
-   ↓
-Worker
-   ↓
-Service / Provider
-   ↓
-External System
-```
+## 26. Architecture Boundaries
 
-Controllers should remain thin.
+Maintain Controller -> Service -> Repository -> Persistence separation. JSON adapters currently implement compatibility boundaries; future DB adapters must not move application rules into controllers.
 
-Repositories should focus on persistence.
+Worker owns long-running operational execution and media/process helpers. API owns user-facing business rules and future orchestration policy. Current Worker polling is an explicit transitional responsibility.
 
-Services should contain application/domain logic.
+External platform/cloud integrations belong behind appropriate helpers/providers. Frontend must not access shared JSON directly, run media tools, or become a second business-rule implementation.
 
-Workers should orchestrate long-running background operations.
+Do not require every boundary to become a generic interface. Add seams where they support the actual migration, testability, or external dependency.
 
-External integrations should be isolated behind provider/service abstractions.
+## 27. Naming Conventions
 
----
+Use Creator, WatchTarget, Stream, and Recording consistently. Use User and CloudStorageConnection for their future domain concepts; use CloudExport consistently when it is formalized.
 
-# 29. Naming Conventions
+Streamer, Session, and channel_id may remain in legacy routes/adapters. Do not propagate legacy names into new domain objects without a distinct reason. Preserve existing session_id contracts until explicitly migrated.
 
-Use consistent names throughout the project.
+Avoid alternative names such as Target, Monitor, Capture, or Video for the same entity unless they have a clearly different domain meaning.
 
-Domain terminology must remain stable.
+## 28. Backward Compatibility
 
-Use:
+When modifying behavior:
 
-* `Creator`
-* `WatchTarget`
-* `Stream`
-* `Recording`
-* `User`
-* `CloudStorageConnection`
+1. Inspect the existing implementation.
+2. Understand current API, persistence, and Worker contracts.
+3. Preserve working behavior where possible.
+4. Refactor incrementally.
+5. Avoid unrelated module rewrites.
+6. Add/update tests around changed behavior.
 
-Do not introduce alternative names for the same concept, such as:
+Do not replace working code for stylistic preference. Wave 05 must preserve current installations, route behavior, JSON compatibility where needed, and local recording operation during transition. Never assume all historical relationships can be reconstructed from incomplete legacy data.
 
-```text
-Streamer
-Target
-Monitor
-Capture
-Video
-```
+## 29. Avoid Premature Abstraction
 
-unless there is a clearly distinct domain meaning.
-
-The distinction between `Creator`, `WatchTarget`, `Stream`, and `Recording` is fundamental to the architecture.
-
----
-
-# 30. Avoid Premature Abstraction
-
-Do not create abstractions simply to follow a design pattern.
-
-Before adding an abstraction ask:
+Before adding an abstraction, ask:
 
 1. Does it solve an actual current problem?
 2. Does it improve testability?
 3. Does it isolate an external dependency?
-4. Will it make the next feature easier?
-5. Does the complexity justify itself?
+4. Does it help the next real planned feature?
+5. Does that benefit justify its complexity?
 
-Prefer simple code over unnecessary abstraction.
+Prefer the smallest maintainable solution. Extensibility is a reason to preserve useful boundaries, not to build infrastructure for every hypothetical future feature.
 
----
+## 30. Security and Compliance
 
-# 31. Backward Compatibility
+Recordings are private local files. Do not publicly expose, index, create public media URLs for, stream publicly, or intentionally redistribute recordings through the application. Future cloud files must also remain private.
 
-When modifying existing functionality:
+Users are responsible for ensuring their recording use complies with applicable copyright and platform rules. Provide appropriate Terms of Use/disclaimers before broader publication. These are product requirements, not a claim that compliance/release work is complete.
 
-1. Inspect the current implementation.
-2. Understand existing API contracts.
-3. Preserve working behavior whenever possible.
-4. Refactor incrementally.
-5. Avoid rewriting unrelated modules.
-6. Add tests before changing behavior when practical.
+Prioritize credential protection, future user isolation, safe filesystem and temporary-file handling, controlled Worker execution, and secure OAuth when introduced. Local-first does not remove security obligations.
 
-Do not replace functioning code merely for stylistic reasons.
+Preserve path containment, appropriate service permissions, and bounded subprocess handling. Do not treat the current unauthenticated local console as a hardened hosted service.
 
----
+## 31. Infrastructure Constraints
 
-# 32. Security and Compliance
+Local Mode is the primary constraint. Keep operation economical and simple on the user's computer.
 
-The application must not publicly expose recorded videos.
+Docker Compose remains a supported development/local runtime workflow. Avoid Kubernetes, clusters, unnecessary microservices, expensive managed services, GPU requirements, and distributed workers without concrete need.
 
-Recordings should not be:
+PostgreSQL and Redis may join the local topology in their respective waves; they are not current Compose services. Persist metadata/media across ordinary restarts and keep destructive cleanup explicit.
 
-* publicly indexed;
-* exposed through public application URLs;
-* intentionally redistributed by the application.
+A future Hosted Mode may start with a simple single-VPS topology, but this is not a Local Mode prerequisite. Desktop service packaging remains a Wave 08.5 decision.
 
-The user is responsible for ensuring that their recordings comply with applicable copyright and platform rules.
+## 32. Roadmap and Development Priority
 
-The application should provide appropriate Terms of Use/disclaimers before broader publication.
+[PROJECT-STATUS.md](../../PROJECT-STATUS.md) is the human status/roadmap reference; these instructions retain durable rules rather than a duplicate full roadmap.
 
-Security decisions must prioritize:
+Near-term boundaries: Wave 05 PostgreSQL/domain persistence; 05.5 User/authentication/ownership; 06 Redis/BullMQ/Recording Jobs; 06.5 Tags; 07/07.5 local file lifecycle and management; 08 SSE/heartbeat; 08.5 Tauri 2; 09 onward optional cloud; Hosted Mode in later phases.
 
-* credential protection;
-* user isolation;
-* private cloud files;
-* secure OAuth handling;
-* safe temporary-file handling;
-* controlled worker execution.
+Use the [Wave 05 plan](../tasks/wave-05/README.md) for its concrete task scope. Future numbering may evolve. Planned diagrams and future security requirements are not evidence of implementation or permission to expand an active task.
 
----
+## 33. AI Agent Behavior
 
-# 33. Infrastructure Constraints
+When modifying the project, the AI agent must:
 
-The application is designed to run economically, potentially on a single VPS during the initial stages.
-
-Do not assume:
-
-* Kubernetes;
-* multiple production clusters;
-* expensive managed services;
-* GPU infrastructure;
-* large persistent media storage.
-
-Redis, PostgreSQL, API, and workers should be deployable with Docker Compose during the initial stages.
-
-Architecture should remain capable of scaling later without requiring that scaling infrastructure immediately.
-
----
-
-# 34. Development Priority
-
-The current development priority is:
-
-```text
-1. Domain model
-2. Creator
-3. WatchTarget
-4. Stream
-5. Recording
-6. User ownership
-7. Queue integration
-8. Worker integration
-9. Cloud storage
-10. Retention
-11. Frontend/dashboard
-12. Invitation/public release
-```
-
-Do not implement later-stage features prematurely if they block the core domain model.
-
----
-
-# 35. Current Architectural Goal
-
-The immediate goal is to establish a clean domain foundation around:
-
-```text
-User
-  |
-  +-- Creator
-        |
-        +-- WatchTarget
-        |      |
-        |      +-- Recording configuration
-        |
-        +-- Stream
-               |
-               +-- Recording
-```
-
-The most important architectural rule is:
-
-> A Creator identifies who is being monitored. A WatchTarget defines how that Creator should be monitored or recorded. A Stream represents an actual live session. A Recording represents the resulting recording/job.
-
-A Creator may have multiple WatchTargets.
-
-Different WatchTargets may use different recording qualities or configurations.
-
-All WatchTargets belonging to the same Creator must remain independently configurable and manageable.
-
-This separation should guide the database schema, API design, worker jobs, frontend organization, and future features.
-
----
-
-# 36. AI Agent Behavior
-
-When modifying the project, the AI coding agent must:
-
-1. Inspect the existing implementation before proposing changes.
+1. Inspect current implementation, task scope, branch, and working tree.
 2. Follow the current architecture unless there is a concrete reason to change it.
 3. Prefer incremental changes.
 4. Avoid unrelated refactors.
-5. Explain architectural changes when they affect multiple modules.
-6. Reuse existing utilities and patterns when appropriate.
-7. Add or update tests for changed behavior.
+5. Explain cross-module architectural changes and their compatibility effects.
+6. Reuse existing utilities and patterns where appropriate.
+7. Add/update relevant tests for behavioral changes and run appropriate validation.
 8. Keep domain terminology consistent.
-9. Consider multi-user isolation for every user-owned resource.
-10. Consider security implications of every authentication, OAuth, worker, and file-storage change.
-11. Avoid adding unnecessary dependencies.
-12. Avoid introducing infrastructure that increases operational complexity without clear benefit.
+9. Consider applicable security, file/process safety, and future ownership boundaries.
+10. Avoid unnecessary dependencies.
+11. Avoid unjustified infrastructure or operational complexity.
+12. Respect active-wave scope and defer later features.
+13. Distinguish planned, implemented, tested, and unverified behavior.
+14. Preserve pre-existing user changes, including staged work.
 
-When a requirement is ambiguous, prefer the smallest implementation that preserves future extensibility.
+When ambiguous, choose the smallest solution that preserves real extensibility. Inspect entities, controllers, services, repositories, adapters, Worker code, and relevant tests before significant architectural work.
 
-Before implementing a significant architectural change, inspect the relevant entities, repositories, services, controllers, queue/worker code, and tests.
+Documentation-only tasks require document/scope validation, not runtime changes to satisfy unrelated tests. Report contradictions outside scope instead of silently rewriting additional files.
 
----
+## 34. Definition of Done
 
-# 37. Definition of Done
+A feature is complete when, as applicable to its wave:
 
-A feature should generally be considered complete only when:
+- Domain model and persistence relationships are correct.
+- API validation exists and business rules are in the right layer.
+- Worker behavior and required background-job behavior are correct.
+- Errors are handled and logs support diagnosis safely.
+- Relevant deterministic tests exist and required checks pass.
+- Existing functionality and compatibility are preserved.
+- Applicable authorization, credential, filesystem, and process security are preserved.
+- Documentation/status is updated when necessary and limitations are explicit.
+- No unrelated complexity or later-wave feature was introduced.
 
-* the domain model is correct;
-* database relationships are correct;
-* ownership/security is enforced;
-* API validation exists;
-* business logic is implemented in the appropriate service;
-* background work is queued when necessary;
-* worker behavior is handled appropriately;
-* errors are handled;
-* logs are useful;
-* relevant tests exist;
-* existing functionality continues to work;
-* no unnecessary architectural complexity was introduced.
+Do not make future auth, queue, cloud, realtime, or desktop capabilities premature acceptance prerequisites. Follow the task lifecycle/human acceptance rules below; no automatic commit or push is implied.
 
----
+## 35. Frontend Responsibilities
+
+The frontend is the management/monitoring interface. API validation and business rules remain authoritative.
+
+Organize WatchTargets by Creator so several independent configurations are understandable. Present recording origin, state, timestamps, and local location with progressive filtering as planned. Do not turn the MVP into an advanced media library.
+
+Preserve current loading, error, stale-data, mutation reconciliation, and polling behavior. The current browser/folder picker is server-storage metadata navigation, not a native folder dialog or media server. Open Stream is validated external browser navigation.
+
+## 36. Real-Time Status
+
+Current frontend and Worker status observation uses polling; no SSE, WebSocket, or Worker heartbeat exists.
+
+Wave 08 plans SSE plus Worker heartbeat. Prefer SSE for that wave unless investigation justifies another transport; WebSocket remains a possible target capability, not an implemented or mandatory extra transport.
+
+Keep persisted state consumable by future realtime updates. Polling is acceptable during transition. Do not infer Worker liveness from successful API requests or an old recording state.
+
+## 37. Retention and Cleanup
+
+Retention is configurable future policy, not a universal mandatory seven-day rule. File lifecycle/limits belong to Waves 07/07.5, with later local/cloud retention policy work.
+
+Do not automatically delete valid recordings without a configured policy. Local and cloud policies may differ. Temporary/partial cleanup must have clear ownership and must not accidentally remove retained files.
+
+Future cleanup should identify eligible files, perform deletion safely and idempotently, and update metadata according to the actual outcome. Keep enough metadata to locate the relevant local/remote object. Failed deletion must not be reported as successful deletion.
 
 # 38. Project Language and Documentation
 

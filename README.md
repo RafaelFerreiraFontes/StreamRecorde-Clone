@@ -1,5 +1,7 @@
 # StreamRecorder Clone - Development Workflow
 
+For the current milestone, local-first product direction, and planned waves, see [Project Status](PROJECT-STATUS.md).
+
 This repository's root `compose.yml` is the supported Docker Compose workflow for the current API, frontend, and Worker. The legacy Worker-specific Compose file was removed. For component architecture and focused development notes, see [API](api/README.md), [frontend](frontend/README.md), and [Worker](worker/README.md).
 
 ## Prerequisites
@@ -151,7 +153,7 @@ The WatchTarget URL is authoritative for Streamlink probe and capture. Quality i
 
 `runtime-data/` and `recordings/` are ignored by Git and must not be versioned. On a clean clone, startup creates the directories and JSON files; do not create JSON files manually. Their canonical empty forms are `watchlist.json` as `[]`, `channels_status.json` as `{}`, `streams.json` as `[]`, and `sessions.json` as `[]`. Existing files are not overwritten merely because a container starts. Keep the API and Worker pointed at the same directory when they need to share state.
 
-Compose mounts `./recordings` (or `RECORDINGS_DIR`) at `/recordings` in the Worker and read-only in the API. API `RECORDINGS_ROOT=/recordings` enables the safe in-app location browser and folder picker. The frontend has no filesystem mount. `OUTPUT_DIR` is the output root, and a WatchTarget's relative `recording_subdir` is appended beneath it. For example, `recording_subdir=twitch/pixelcarvel` writes to the host path `./recordings/twitch/pixelcarvel/`. With `OUTPUT_DIR=/recordings` and `recording_subdir=creators/example`, the Worker writes to `/recordings/creators/example`. These files are local temporary/current implementation output, not final cloud storage or public media.
+Compose mounts `./recordings` (or `RECORDINGS_DIR`) at `/recordings` in the Worker and read-only in the API. API `RECORDINGS_ROOT=/recordings` enables the safe in-app location browser and folder picker. The frontend has no filesystem mount. `OUTPUT_DIR` is the output root, and a WatchTarget's relative `recording_subdir` is appended beneath it. For example, `recording_subdir=twitch/pixelcarvel` writes to the host path `./recordings/twitch/pixelcarvel/`. With `OUTPUT_DIR=/recordings` and `recording_subdir=creators/example`, the Worker writes to `/recordings/creators/example`. These files are retained local recording output, the primary destination of the local-first product. Cloud export is optional and planned for later; recordings are not public media.
 
 `CONFIG_DIR` is infrastructure configuration, not a frontend UI or user setting. For both API and Worker, it selects a directory containing the runtime JSON files. The Worker also accepts optional per-file overrides, each with higher priority than `CONFIG_DIR`: `WATCHLIST_PATH`, `CHANNELS_STATUS_PATH`, `STREAMS_PATH`, and `SESSIONS_PATH`. Non-empty overrides win; otherwise the Worker uses `CONFIG_DIR`, then its module-relative defaults.
 
