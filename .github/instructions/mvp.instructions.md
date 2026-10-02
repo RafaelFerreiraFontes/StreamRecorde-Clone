@@ -287,7 +287,7 @@ Separate domain storage from operational communication. channels_status.json may
 
 Existing local data needs backup, explicit import, idempotence, malformed-data handling, and rollback. Missing historical links and timezone-free timestamps require honest migration policy.
 
-User/auth belongs to 05.5, Redis/BullMQ to 06, and Tags to 06.5. Do not create fictitious user_id fields or cloud tables merely to anticipate those waves. Follow the [Wave 05 task](../tasks/wave-05/01-postgresql-domain-persistence.task.md) for concrete persistence acceptance.
+User/auth belongs to 05.5, Redis/BullMQ to 06, and Tags to 06.5. Do not create fictitious user_id fields or cloud tables merely to anticipate those waves. Follow the [Wave 05 task](../tasks/wave-05/README.md) for concrete persistence acceptance.
 
 ## 20. Security, Validation, Errors, Logging, and Configuration
 
