@@ -11,7 +11,7 @@ status: user-approve
 
 ## Status and Preconditions
 
-user-approve — PostgreSQL foundation and schema implemented, validated, and independently reviewed; awaiting human acceptance before Task 03. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
+user-approve — PostgreSQL foundation and schema implemented, validated, and human acceptance gate findings addressed (API startup decoupled from PostgreSQL health in compose.yml, verified by isolated decoupled bootstrap test, and Wave README status updated); ready for human acceptance before Task 03. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
 
 ## Context / Objective
 

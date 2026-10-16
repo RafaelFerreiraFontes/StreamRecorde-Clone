@@ -2,7 +2,7 @@
 
 ## Status and Objective
 
-In progress: Task 01 is done; Tasks 02 through 07 are planned. No PostgreSQL code, dependency, schema, migration, or Compose change is implemented yet.
+In progress: Task 01 is done and Task 02 has implemented the PostgreSQL foundation/schema and is awaiting human acceptance. Tasks 03 through 07 remain planned. Existing installations remain JSON-authoritative; no relational domain cutover has occurred.
 
 Progressively replace shared JSON as primary domain persistence for Creator, WatchTarget, Stream, and Recording while preserving the functional Wave 04.75 local baseline. Local Recording Storage remains primary; no cloud account or hosted service is required.
 
