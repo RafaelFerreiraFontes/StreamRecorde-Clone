@@ -1,0 +1,19 @@
+services:
+  postgres-test:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: streamrecorder_test
+      POSTGRES_PASSWORD: streamrecorder_test_local
+      POSTGRES_DB: streamrecorder_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamrecorder_test -d streamrecorder_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  postgres_test_data:

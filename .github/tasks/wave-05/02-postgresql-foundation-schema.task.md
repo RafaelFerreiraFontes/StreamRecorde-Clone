@@ -4,14 +4,14 @@ wave: 05
 order: 02
 depends_on:
   - 01-persistence-architecture-decisions.task.md
-status: planned
+status: user-approve
 ---
 
 # Wave 05 — Task 02 — PostgreSQL Foundation and Schema
 
 ## Status and Preconditions
 
-planned — execution has not started. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
+user-approve — PostgreSQL foundation and schema implemented, validated, and independently reviewed; awaiting human acceptance before Task 03. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
 
 ## Context / Objective
 
