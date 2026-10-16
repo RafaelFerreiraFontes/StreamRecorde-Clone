@@ -4,14 +4,14 @@ wave: 05
 order: 01
 depends_on:
   - ../wave-04.75/05-wave-integration-qa-documentation.task.md
-status: user-approve
+status: done
 ---
 
 # Wave 05 — Task 01 — Persistence Architecture and Cutover Decisions
 
 ## Status and Preconditions
 
-user-approve — architectural decisions documented and validated; Luna independent review passed; awaiting user review. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
+done — architectural decisions documented, independently reviewed, human-approved, and frozen for downstream Wave 05 implementation. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
 
 ## Context / Objective
 

@@ -2,7 +2,7 @@
 
 ## Status and Objective
 
-Planning only: all seven tasks are planned. No PostgreSQL code, dependency, schema, migration, or Compose change is implemented by this reorganization.
+In progress: Task 01 is done; Tasks 02 through 07 are planned. No PostgreSQL code, dependency, schema, migration, or Compose change is implemented yet.
 
 Progressively replace shared JSON as primary domain persistence for Creator, WatchTarget, Stream, and Recording while preserving the functional Wave 04.75 local baseline. Local Recording Storage remains primary; no cloud account or hosted service is required.
 
@@ -25,7 +25,7 @@ Domain persistence and runtime communication must be investigated separately. ch
 
 | Order | Task | Dependency | Status |
 | --- | --- | --- | --- |
-| 01 | [Persistence Architecture and Cutover Decisions](01-persistence-architecture-decisions.task.md) ([decisions](persistence-architecture-decisions.md)) | [Wave 04.75 integration QA](../wave-04.75/05-wave-integration-qa-documentation.task.md) | user-approve |
+| 01 | [Persistence Architecture and Cutover Decisions](01-persistence-architecture-decisions.task.md) ([decisions](persistence-architecture-decisions.md)) | [Wave 04.75 integration QA](../wave-04.75/05-wave-integration-qa-documentation.task.md) | done |
 | 02 | [PostgreSQL Foundation and Schema](02-postgresql-foundation-schema.task.md) | 05-T01 | planned |
 | 03 | [Creator and WatchTarget Relational Persistence](03-creator-watch-target-persistence.task.md) | 05-T02 | planned |
 | 04 | [Stream and Recording Relational Persistence](04-stream-recording-persistence.task.md) | 05-T03 | planned |

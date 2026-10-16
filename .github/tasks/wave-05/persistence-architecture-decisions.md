@@ -37,8 +37,8 @@ or a change from the existing `finished` success state to `COMPLETED`.
 
 The baseline was inspected at commit `c11fb0f9e62782e0564384b4285e7edaf5dd24d9`
 (`docs(wave-05): split PostgreSQL migration into staged tasks`). The task file
-was already in `implement` state before this document was written; it is not
-modified by this task.
+progressed through `implement`, Coordinator validation, independent Luna review,
+and conditional human approval (`user-approve`).
 
 | Evidence | Observed facts used by this decision |
 | --- | --- |
@@ -148,8 +148,8 @@ boundaries.
 | --- | --- | --- |
 | `creators` | `id uuid PK`; `display_name text NOT NULL`; normalized identity key `text NOT NULL`; `created_at timestamptz NOT NULL`; `updated_at timestamptz NOT NULL`; `archived_at timestamptz NULL`. Unique active identity key only after explicit collision resolution. | One Creator has many WatchTargets. Index active identity key and `archived_at`. Display name is not the primary key. |
 | `watch_targets` | `id uuid PK`; `creator_id uuid NOT NULL FK creators(id)`; `channel_name text NOT NULL`; platform constrained to current values; `url text NOT NULL`; `quality text NOT NULL`; `enabled boolean NOT NULL DEFAULT true`; `recording_subdir text NULL`; creation/update/archive timestamps. DB checks mirror safe enum/boolean/path boundary where practical; API remains authoritative for full URL/path validation. | Index `creator_id` and active-target queries. Use `ON DELETE RESTRICT`; archive rather than cascade delete. No uniqueness is imposed on channel name/URL because distinct configurations for one Creator are required. |
-| `streams` | `id uuid PK`; `watch_target_id uuid NOT NULL FK watch_targets(id)`; current state constrained to the existing vocabulary; `started_at timestamptz NOT NULL`; `finished_at timestamptz NULL`; `created_at`/`updated_at`. Check `finished_at >= started_at` when both are valid timestamps. | One WatchTarget has many Streams. Index `(watch_target_id, started_at DESC)`. Enforce the strict one-open-Stream-per-WatchTarget invariant with `CREATE UNIQUE INDEX uq_streams_active_per_target ON streams (watch_target_id) WHERE finished_at IS NULL;`. |
-| `recordings` | `id uuid PK` exposed as `session_id`; `watch_target_id uuid NOT NULL FK watch_targets(id)`; `stream_id uuid NULL FK streams(id)`; `started_at timestamptz NOT NULL`; `finished_at timestamptz NULL`; `output_file text NULL`; state constrained to current vocabulary; immutable execution-context snapshot fields required by T04; timestamps. | A WatchTarget has many Recordings; a Stream has many attempts. Index `(watch_target_id, started_at DESC)`, `(stream_id, started_at DESC)`, and state/terminal queries. A DB trigger or service transaction validates that non-null `stream_id` belongs to the same `watch_target_id`. |
+| `streams` | `id uuid PK`; `watch_target_id uuid NOT NULL FK watch_targets(id)`; current state constrained to the existing vocabulary; `started_at timestamptz NULL`; `legacy_started_at_raw text NULL`; `finished_at timestamptz NULL`; `legacy_finished_at_raw text NULL`; `created_at`/`updated_at`. `CHECK (started_at IS NOT NULL OR legacy_started_at_raw IS NOT NULL)`; check `finished_at >= started_at` only when both typed timestamps are non-null. | One WatchTarget has many Streams. Index `(watch_target_id, started_at DESC)`. Enforce the strict one-open-Stream-per-WatchTarget invariant with `CREATE UNIQUE INDEX uq_streams_active_per_target ON streams (watch_target_id) WHERE finished_at IS NULL AND legacy_finished_at_raw IS NULL;`. |
+| `recordings` | `id uuid PK` exposed as `session_id`; `watch_target_id uuid NOT NULL FK watch_targets(id)`; `stream_id uuid NULL FK streams(id)`; `started_at timestamptz NULL`; `legacy_started_at_raw text NULL`; `finished_at timestamptz NULL`; `legacy_finished_at_raw text NULL`; `output_file text NULL`; state constrained to current vocabulary; immutable execution-context snapshot fields required by T04; timestamps. `CHECK (started_at IS NOT NULL OR legacy_started_at_raw IS NOT NULL)`; check `finished_at >= started_at` only when both typed timestamps are non-null. | A WatchTarget has many Recordings; a Stream has many attempts. Index `(watch_target_id, started_at DESC)`, `(stream_id, started_at DESC)`, and state/terminal queries. A DB trigger or service transaction validates that non-null `stream_id` belongs to the same `watch_target_id`. |
 
 Transaction boundaries are deliberately narrow:
 
@@ -167,8 +167,10 @@ Transaction boundaries are deliberately narrow:
 The transaction model does not make media bytes transactional. A valid local
 file is retained even when metadata persistence needs replay.
 
-`find_active_stream` already treats `finished_at IS NULL` as the active
-Stream for a WatchTarget. If an idempotent event attempts to create another
+An open/active Stream has neither a typed finish (`finished_at IS NULL`) nor
+legacy raw finish evidence (`legacy_finished_at_raw IS NULL`). The current
+`find_active_stream` uses only `finished_at`; T04 must extend it to both fields.
+If an idempotent event attempts to create another
 open Stream, the API transaction handler catches the unique-index conflict or
 resolves it before insert, then returns the existing open Stream ID. It never
 returns an unhandled conflict or creates a second active Stream.
@@ -216,18 +218,21 @@ of `NULL` is “unknown/not persisted,” never a fabricated Stream.
 
 ## 10. Timestamp Policy
 
-New rows use PostgreSQL `timestamptz`, generated/accepted as UTC ISO-8601 with
-an explicit `Z` or offset. Repository/API serializers emit ISO-8601 UTC for new
-timestamps. Ordering and lifecycle checks operate on typed instants only.
+New writes require typed UTC PostgreSQL `timestamptz`, supplied as ISO-8601
+with an explicit `Z` or offset; new relational Recordings must have typed
+`started_at`. Repository/API serializers emit typed ISO-8601 when present.
+Ordering and lifecycle checks operate on typed instants only.
 
 Existing Worker values use `datetime.now().isoformat()` without a timezone.
 They are legacy wall-clock strings. Import preserves the original value in a
-raw legacy timestamp field/audit payload and does not silently label it UTC or
-compute a different instant. A T06 migration may populate typed timestamps
-only when trusted installation-level timezone provenance is supplied explicitly
-and records that conversion. Otherwise the normalized timestamp remains NULL
-and legacy API formatting returns the preserved raw text. This is intentional:
-honest unknown time is safer than false chronological precision.
+`legacy_started_at_raw` (and `legacy_finished_at_raw` when finished), leaving
+the corresponding typed columns NULL. Never append `Z`, UTC, or invented offsets
+to timezone-free wall-clock strings. A T06 migration may populate typed
+timestamps only when trusted installation-level timezone provenance is supplied
+explicitly and records that conversion. API compatibility serialization returns
+typed ISO-8601 when present, or the exact preserved raw text when only raw
+exists. This is intentional: honest unknown time is safer than false
+chronological precision.
 
 ## 11. Worker Persistence Strategy: Options A/B/C
 
@@ -355,7 +360,11 @@ T06 implements this design as an explicit operator-controlled import:
 5. Deterministically map valid IDs: preserve target/stream/session UUIDs;
    map Creators using the approved legacy mapping; retain `channel_id` as the
    compatibility representation of `watch_target_id`; set legacy
-   `recordings.stream_id` to NULL.
+  `recordings.stream_id` to NULL. Preserve each timezone-free start/finish
+  string verbatim in `legacy_started_at_raw`/`legacy_finished_at_raw`, with
+  the corresponding typed column NULL. Derive open Streams only when both
+  `finished_at` and `legacy_finished_at_raw` are NULL; report conflicting
+  duplicate open Streams for one target as an unhandled conflict before activation.
 6. Reject or quarantine malformed/ambiguous rows with an explicit report. Do
    not silently skip an unknown relationship, merge Creator collisions, or
    manufacture timestamps. Operator correction/mapping occurs before rerun.
@@ -389,12 +398,12 @@ or independently writable authority.
 
 | Task | Directive |
 | --- | --- |
-| T02 PostgreSQL foundation/schema | Install/configure Drizzle and PostgreSQL only here. Use checked-in SQL migrations, UUID PKs, UTC `timestamptz`, isolated test DBs, and no User/Tag/queue tables. |
+| T02 PostgreSQL foundation/schema | Install/configure Drizzle and PostgreSQL only here. Use checked-in SQL migrations, UUID PKs, nullable `started_at`/`finished_at` `timestamptz` and nullable `legacy_started_at_raw`/`legacy_finished_at_raw` for Streams and Recordings, `CHECK (started_at IS NOT NULL OR legacy_started_at_raw IS NOT NULL)`, a typed chronological check only when both typed values exist, and `CREATE UNIQUE INDEX uq_streams_active_per_target ON streams (watch_target_id) WHERE finished_at IS NULL AND legacy_finished_at_raw IS NULL;`. Use isolated test DBs and no User/Tag/queue tables. |
 | T03 Creator/WatchTarget | Implement stable Creator UUID identity, explicit legacy-name mapping/collision handling, target independence, archive/restrict history policy, and configuration compatibility projection. Do not cut over existing installations. |
-| T04 Stream/Recording | Implement FKs/indexes/transactions, `CREATE UNIQUE INDEX uq_streams_active_per_target ON streams (watch_target_id) WHERE finished_at IS NULL;`, valid new same-target `stream_id`, nullable legacy unknowns, immutable historical context, and current lifecycle strings. Resolve duplicate open-Stream events idempotently by returning the existing Stream ID. Do not infer old links or change `finished`. |
-| T05 Worker bridge | Implement option A only: internal persistence endpoint plus `GET /internal/v1/watch-targets/execution-configs`, one-event-per-file JSON outbox under `outbox/pending/`, idempotent acknowledgement/replay, and status projection. Activate this bridge in disposable environments; while active, the Worker exclusively reads the endpoint on every poll and before launch. Do not give Worker direct DB credentials or introduce Redis/BullMQ. |
-| T06 migration/cutover | Implement opt-in dry-run, backup/checksum, quiesced snapshot, deterministic mapping, idempotent import, validation, single-authority activation, and post-cutover forward repair. Activate the same Worker configuration endpoint at cutover; retain API-generated `watchlist.json` only for legacy compatibility and restore direct Worker JSON reads only when rolling back to pre-cutover JSON mode. |
-| T07 integration QA/docs | Validate clean and upgrade paths, Windows/Docker local workflow, API/legacy compatibility, Worker outages/restarts/replay, DB restart, local media preservation, and authority audit. |
+| T04 Stream/Recording | Implement FKs/indexes/transactions, require typed `started_at` for new rows, query active Streams only when both finish columns are NULL, apply chronological checks only when both typed values exist, and preserve raw columns verbatim on read. Enforce valid new same-target `stream_id`, nullable legacy unknowns, immutable historical context, and current lifecycle strings. Resolve duplicate open-Stream events idempotently by returning the existing Stream ID. Do not infer old links or change `finished`. |
+| T05 Worker bridge | Implement option A only: internal persistence endpoint plus `GET /internal/v1/watch-targets/execution-configs`, one-event-per-file JSON outbox under `outbox/pending/`, idempotent acknowledgement/replay, and status projection. Pass explicit ISO-8601 UTC/offset timestamps for all new captures. Activate this bridge in disposable environments; while active, the Worker exclusively reads the endpoint on every poll and before launch. Do not give Worker direct DB credentials or introduce Redis/BullMQ. |
+| T06 migration/cutover | Implement opt-in dry-run, backup/checksum, quiesced snapshot, deterministic mapping, idempotent import, validation, single-authority activation, and post-cutover forward repair. Preserve offset-free legacy values in raw columns with typed columns NULL and derive open state using both finish columns. Activate the same Worker configuration endpoint at cutover; retain API-generated `watchlist.json` only for legacy compatibility and restore direct Worker JSON reads only when rolling back to pre-cutover JSON mode. |
+| T07 integration QA/docs | Validate clean typed rows, raw-only legacy imports, active Stream index behavior, clean and upgrade paths, Windows/Docker local workflow, API/legacy compatibility, Worker outages/restarts/replay, DB restart, local media preservation, and authority audit. |
 
 ## 18. Deferred and Out-of-Scope Concerns
 
