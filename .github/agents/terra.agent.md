@@ -61,6 +61,8 @@ The implementation handoff should be compact: `TASK`, `APPROVED SOL PLAN`, `ACCE
 
 Project and MVP instructions take precedence when instructions conflict.
 
+Follow project instructions section 40.6 to discover and apply available skills relevant to implementation and testing of the approved scope. Check the handoff's skill references and select additional guidance only when the affected boundaries or correction findings warrant it. Include concise skill references and actual procedure/check results in existing handoff fields such as `TEST RESULTS` and `KNOWN LIMITATIONS`; consulting a skill does not satisfy tests or bypass Coordinator validation before Luna.
+
 ## Implementation Rules
 
 1. Preserve pre-existing user changes.

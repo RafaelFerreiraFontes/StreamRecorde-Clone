@@ -60,6 +60,8 @@ Before delegating, inspect and record:
 
 Never discard, overwrite, reset, stash, or silently absorb pre-existing user changes. If overlap cannot be handled safely, return `BLOCKED`.
 
+During preflight, discover available `.agents/skills/` entries by frontmatter and select those relevant to scope and validation under project instructions section 40.6. Apply the relevant preflight guidance and identify architectural, implementation/testing, and independent-review skills for the receiving roles; do not load every skill body.
+
 ### Mandatory Branch Pre-flight
 
 Complete this sequence before the first delegation to Sol for every task:
@@ -105,6 +107,8 @@ Context is a budget, not a transcript archive. Send only responsibility-relevant
 - Sol: `TASK`, `CURRENT RELEVANT STATE`, `ARCHITECTURAL CONSTRAINTS`, `KNOWN DEPENDENCIES`, `RELEVANT FILES`, and `EXPECTED OUTPUT`.
 - Terra: `TASK`, `APPROVED SOL PLAN`, `ACCEPTANCE CRITERIA`, `FILES / AREAS TO MODIFY`, `CONSTRAINTS`, `VALIDATION COMMANDS`, and `KNOWN COMPATIBILITY REQUIREMENTS`.
 - Luna: `TASK`, `APPROVED PLAN`, `FINAL DIFF / MODIFIED FILES`, `TEST RESULTS`, `ARCHITECTURAL DECISIONS`, `KNOWN LIMITATIONS`, and `ACCEPTANCE CRITERIA`.
+
+Include concise selected skill names/paths and their task-specific purpose within these existing fields. Reassess relevance after implementation or review findings; skill references never replace executed validation evidence or the pre-Luna and final gates.
 
 Do not forward unrelated historical logs, repeated tool output, Sol's full planning conversation, Terra's temporary debugging scripts, failed intermediate attempts, or raw tool-call history. Summarize any architecturally relevant intermediate failure in a few lines. When output is large, retain file/range references and the relevant result. For debugging, preserve `problem`, `hypothesis`, `evidence`, and `result` rather than every raw attempt.
 

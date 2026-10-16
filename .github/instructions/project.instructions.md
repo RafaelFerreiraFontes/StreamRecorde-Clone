@@ -789,3 +789,26 @@ Summarize large outputs, reference specific files/ranges, and do not resend unre
 Terra's limit is three directed diagnostic attempts for the same cause before `coordinator-review`. Luna's separate limit is three formal `review/QA -> fixing -> Coordinator validation -> review/QA` cycles before `coordinator-review`. Never combine these counters.
 
 Luna performs independent QA without editing implementation and focuses on acceptance criteria, regressions, architecture, compatibility, final diff, and validation results. After a green Coordinator gate, Luna does not reconstruct Terra's entire investigation; any additional investigation must be narrowly targeted at the suspected point.
+
+## 40.6 Contextual Skill Discovery and Use
+
+Discover repository skills in `.agents/skills/*/SKILL.md` using the environment's skill catalog or a targeted filesystem listing. Read the frontmatter `name` and `description` to select skills matching the task, affected boundaries, and current workflow stage. Read and follow the selected skill's relevant instructions and referenced resources before applying it. Use relevant skills when available in the environment; do not load every skill body or follow every reference indiscriminately. Reassess selection when the plan, diff, or review findings reveal another affected boundary.
+
+Current skill entry points, selected by relevance rather than as a mandatory checklist:
+
+| Task or boundary | Skill name under `.agents/skills/` |
+| --- | --- |
+| Scope, Git ownership, baseline, and validation planning | `streamrecorder-task-preflight` |
+| Domain identity, relationships, and legacy mappings | `streamrecorder-domain-contracts` |
+| PostgreSQL schema, migrations, repositories, import, and authority | `streamrecorder-postgres-persistence` |
+| Worker polling, probe, capture, recovery, and shutdown | `streamrecorder-worker-lifecycle` |
+| API contracts, proxy, dashboard, and filesystem browsing | `streamrecorder-api-frontend` |
+| Isolated containers, mounts, volumes, and smoke validation | `streamrecorder-docker-validation` |
+| Privacy, secrets, paths, platform access, and exposure | `streamrecorder-security-compliance` |
+| Independent diff, acceptance-criteria, and validation audit | `streamrecorder-review-gate` |
+
+Coordinator (including Delegate Coordinator in the reserve workflow) identifies relevant available skills during preflight. Sol consults architectural skills applicable to the plan; Terra applies implementation and testing skills appropriate to the approved scope; Luna selects review skills from the actual diff and independently verifies the evidence. Direct agent sessions also discover and select skills for their role.
+
+Keep handoffs compact: include selected skill names/paths and a brief reason within existing fields such as `RELEVANT FILES`, `CONSTRAINTS`, `VALIDATION COMMANDS`, or `KNOWN LIMITATIONS`. Recipients verify applicability and availability; references do not prove that a procedure or check was executed. Do not copy whole skill bodies into agent files or handoffs. If a relevant skill is unavailable, report the gap and continue under permanent instructions where required evidence can still be obtained; use existing blocking rules if required validation cannot be completed.
+
+Skills complement permanent project/MVP instructions and the authorized task; they do not override them, expand scope, authorize later tasks, or replace validation gates. Preserve current models, tools, automatic handoffs, task states, `AGENT_RESULT` protocols, review/debugging limits, Coordinator validation, and the final human gate. Skill use grants no commit or push authority. Do not edit skill contents without an objective task-related reason.

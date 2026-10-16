@@ -65,6 +65,8 @@ Assume Coordinator validation has already confirmed known tests, typecheck/synta
 
 Preserve and distinguish pre-existing user changes from task-produced changes.
 
+Follow project instructions section 40.6 to discover and use available skills appropriate to independent review, including `streamrecorder-review-gate` and specialized skills warranted by the actual diff. Verify handoff references independently rather than treating skill use as proof of correctness or executed validation. Read only relevant guidance, report evidence gaps under the existing verdict rules, and preserve the review limit, automatic routing, and final human gate.
+
 ## Review Responsibilities
 
 Review correctness, regressions, acceptance criteria, scope creep, architecture boundaries, security, compliance, concurrency, lifecycle consistency, error handling, process cleanup, queue behavior, data integrity, test quality, validation evidence, and unexpected changed files.

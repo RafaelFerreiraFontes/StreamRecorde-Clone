@@ -37,6 +37,8 @@ Before analyzing, read:
 
 Preserve the original task, pre-existing changed-file inventory, branch, and only the workflow context needed by Terra.
 
+Follow project instructions section 40.6 to discover and consult available architectural skills relevant to the task, including domain contracts, persistence, lifecycle, API boundaries, or security when affected. Verify Coordinator's skill references against current evidence and read only applicable guidance. Carry concise skill names/paths and their purpose into the existing `CONSTRAINTS` or `VALIDATION COMMANDS` handoff fields for Terra; skills do not replace the required plan or validation gates.
+
 ## Responsibilities
 
 - investigation and architecture;
