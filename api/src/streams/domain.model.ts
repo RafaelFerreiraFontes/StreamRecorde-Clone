@@ -53,6 +53,9 @@ export interface Stream {
 }
 
 export interface Recording {
+  channel_name?: string;
+  platform?: string;
+  quality?: string;
   session_id: string;
   watch_target_id: string;
   stream_id?: string;

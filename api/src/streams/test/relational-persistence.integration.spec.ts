@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException, ValidationPipe } from "@nestjs/common";
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
@@ -10,7 +10,9 @@ import { Pool } from "pg";
 import { DatabaseService } from "../../database/database.service";
 import { RelationalStreamsRepository } from "../relational-streams.repository";
 import { StreamsRepository } from "../streams.repository";
-import { StreamerService } from "../streams.service";
+import { RecordingService, StreamerService } from "../streams.service";
+import { RecordingsFilesystemController } from "../recordings-filesystem.controller";
+import { RecordingsFilesystemService } from "../recordings-filesystem.service";
 import { CreateCreatorDto, PatchCreatorDto } from "../dto/creator.dto";
 import { WatchTargetJsonAdapter } from "../json-compatibility.adapters";
 import { StreamsModule } from "../streams.module";
@@ -168,19 +170,199 @@ describeDatabase("relational configuration persistence", () => {
     expect((await WatchTargetJsonAdapter.read(join(directory, "watchlist.json")))[0].enabled).toBe(false);
   });
 
-  it("retains configuration after reconnect and leaves Stream/Recording reads on JSON", async () => {
+  it("retains configuration and relational history after reconnect without reading JSON", async () => {
     const first = await target("Restart");
-    await writeFile(join(directory, "streams.json"), "[]");
-    await writeFile(join(directory, "sessions.json"), "[]");
+    const history = await repository.createStreamAndRecording({ watchTargetId: first.id,
+      stream: { startedAt: "2026-01-01T00:00:00Z" }, recording: { startedAt: "2026-01-01T00:00:00Z" } });
+    await writeFile(join(directory, "streams.json"), "invalid JSON");
+    await writeFile(join(directory, "sessions.json"), "invalid JSON");
     const restartedDatabase = new DatabaseService(databaseUrl);
     try {
       const restarted = new RelationalStreamsRepository(restartedDatabase);
       expect(await restarted.findOneWatchTarget(first.id)).toEqual(first);
       expect(await restarted.findOneCreator(first.creator_id)).toMatchObject({ display_name: "Restart" });
-      expect(await restarted.findAllStreams()).toEqual([]);
-      expect(await restarted.findAllRecordings()).toEqual([]);
+      expect(await restarted.findAllStreams()).toEqual([history.stream]);
+      expect(await restarted.findAllRecordings()).toEqual([history.recording]);
     } finally {
       await restartedDatabase.onModuleDestroy();
+    }
+  });
+
+  it("reuses one active Stream concurrently and preserves distinct attempts and later broadcasts", async () => {
+    const first = await target("Lifecycle");
+    const input = { watchTargetId: first.id, startedAt: "2026-01-01T12:00:00+02:00" };
+    const otherRepository = new RelationalStreamsRepository(database);
+    const observations = await Promise.all([repository.createStream(input), otherRepository.createStream(input), repository.createStream(input)]);
+    const stream = observations[0];
+    expect(observations.every(item => item.id === stream.id)).toBe(true);
+    expect(stream.started_at).toBe("2026-01-01T10:00:00.000Z");
+    expect(await repository.findOneStream(stream.id)).toEqual(stream);
+    expect(await repository.findActiveStreamByWatchTarget(first.id)).toEqual(stream);
+    const attempt = await repository.createRecording({ ...input, sessionId: randomUUID(), streamId: stream.id });
+    await repository.finalizeRecording(attempt.session_id, { state: "error", finishedAt: "2026-01-01T11:00:00Z" });
+    const retry = await repository.createRecording({ ...input, streamId: stream.id });
+    expect(retry.session_id).not.toBe(attempt.session_id);
+    expect(await repository.findRecordingsByWatchTarget(first.id)).toHaveLength(2);
+    const terminal = await repository.finalizeRecordingAndStream({ recordingId: retry.session_id, streamId: stream.id,
+      recordingFinishedAt: "2026-01-01T12:00:00Z", streamFinishedAt: "2026-01-01T12:01:00Z" });
+    expect(terminal.recording.state).toBe("finished");
+    expect(terminal.stream?.finished_at).toBe("2026-01-01T12:01:00.000Z");
+    expect(await repository.findActiveStreamByWatchTarget(first.id)).toBeNull();
+    const later = await repository.createStream({ ...input, startedAt: new Date("2026-01-02T00:00:00Z") });
+    expect(later.id).not.toBe(stream.id);
+    expect(await repository.findStreamsByWatchTarget(first.id)).toHaveLength(2);
+    expect(await repository.findStreamsByWatchTarget(first.id, "2026-01-02T00:00:00Z")).toEqual([later]);
+    expect(await repository.findAllStreams()).toHaveLength(2);
+  });
+
+  it("rejects cross-target links at the repository and composite FK boundaries", async () => {
+    const first = await target("Links");
+    const sibling = await target(first.creator_id, "720p");
+    const startedAt = "2026-01-01T00:00:00Z";
+    const stream = await repository.createStream({ watchTargetId: sibling.id, startedAt });
+    await expect(repository.createRecording({ watchTargetId: first.id, streamId: stream.id, startedAt }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    await expect(pool.query("insert into recordings (id,watch_target_id,stream_id,state,started_at) values ($1,$2,$3,'recording',$4)",
+      [randomUUID(), first.id, stream.id, startedAt])).rejects.toMatchObject({ code: "23503" });
+    await expect(repository.createRecording({ watchTargetId: first.id, streamId: randomUUID(), startedAt })).rejects.toBeInstanceOf(BadRequestException);
+    const unknown = await repository.createRecording({ watchTargetId: first.id, streamId: null, startedAt });
+    expect(unknown.stream_id).toBeUndefined();
+    expect((await pool.query("select stream_id from recordings where id=$1", [unknown.session_id])).rows[0].stream_id).toBeNull();
+  });
+
+  it("rolls back combined creation and terminal changes when the second operation fails", async () => {
+    const first = await target("Atomic");
+    const startedAt = "2026-01-01T00:00:00Z";
+    await expect(repository.createStreamAndRecording({ watchTargetId: first.id, stream: { startedAt }, recording: {} }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(await repository.findAllStreams()).toEqual([]);
+    expect(await repository.findAllRecordings()).toEqual([]);
+    const created = await repository.createStreamAndRecording({ watchTargetId: first.id,
+      stream: { startedAt }, recording: { startedAt, outputFile: "captures/output.mp4" } });
+    await expect(repository.finalizeRecordingAndStream({ recordingId: created.recording.session_id, streamId: created.stream.id,
+      recordingFinishedAt: "2026-01-01T01:00:00Z", streamFinishedAt: "2025-01-01T00:00:00Z" })).rejects.toThrow();
+    expect(await repository.findOneRecording(created.recording.session_id)).toEqual(created.recording);
+    expect(await repository.findOneStream(created.stream.id)).toEqual(created.stream);
+    await expect(repository.finalizeRecordingAndStream({ recordingId: created.recording.session_id, streamId: randomUUID() }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(await repository.findOneRecording(created.recording.session_id)).toEqual(created.recording);
+    await expect(repository.createStreamAndRecording({ watchTargetId: first.id, stream: { startedAt },
+      recording: { id: created.recording.session_id, startedAt } })).rejects.toThrow();
+    expect(await repository.findAllRecordings()).toHaveLength(1);
+    expect(await repository.findActiveStreamByWatchTarget(first.id)).toEqual(created.stream);
+  });
+
+  it("preserves snapshots, IDs, session mappings and files through target edits and archive", async () => {
+    const first = await target("Snapshots");
+    const startedAt = "2026-01-01T00:00:00Z";
+    const created = await repository.createStreamAndRecording({ watchTargetId: first.id,
+      stream: { startedAt }, recording: { startedAt, outputFile: "captures/output.mp4" } });
+    const sibling = await target(first.creator_id, "720p");
+    await repository.createRecording({ watchTargetId: sibling.id, startedAt });
+    await repository.updateWatchTarget(first.id, { quality: "480p" });
+    await pool.query("update watch_targets set channel_name='renamed', platform='youtube' where id=$1", [first.id]);
+    expect(await repository.findOneRecording(created.recording.session_id)).toMatchObject({ channel_name: "channel", platform: "twitch", quality: "best" });
+    process.env.RECORDINGS_ROOT = join(directory, "media");
+    await mkdir(join(directory, "media", "captures"), { recursive: true });
+    await writeFile(join(directory, "media", "captures", "output.mp4"), "owned test fixture");
+    const controller = new RecordingsFilesystemController(new RecordingsFilesystemService(), new RecordingService(repository));
+    await repository.removeWatchTarget(first.id);
+    await repository.removeWatchTarget(sibling.id);
+    await repository.removeCreator(first.creator_id);
+    expect(await repository.findOneRecording(created.recording.session_id)).toEqual(created.recording);
+    const session = await repository.findOneSession(created.recording.session_id);
+    expect(session).toMatchObject({ session_id: created.recording.session_id, channel_id: first.id,
+      channel_name: "channel", platform: "twitch", started_at: "2026-01-01T00:00:00.000Z" });
+    expect(await repository.findSessionsByChannel(first.id)).toEqual([session]);
+    expect(await repository.findAllSessions()).toHaveLength(2);
+    expect(await controller.location(created.recording.session_id)).toEqual({ status: "available", file: "output.mp4",
+      directory: { path: "captures", entries: [{ name: "output.mp4", path: "captures/output.mp4", kind: "file" }] } });
+    expect(await readFile(join(directory, "media", "captures", "output.mp4"), "utf8")).toBe("owned test fixture");
+    await expect(repository.createStream({ watchTargetId: first.id, startedAt })).rejects.toBeInstanceOf(NotFoundException);
+    await expect(repository.createRecording({ watchTargetId: first.id, startedAt })).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it("keeps legacy timestamp evidence unchanged and requires timezone-aware new Stream and Recording starts", async () => {
+    const first = await target("Timestamps");
+    const raw = "2026-01-01T10:00:00";
+    await expect(repository.createStream({ watchTargetId: first.id, legacyStartedAtRaw: raw }))
+      .rejects.toEqual(new BadRequestException("startedAt is required"));
+    const streamId = randomUUID();
+    await pool.query("insert into streams (id,watch_target_id,state,legacy_started_at_raw,legacy_finished_at_raw) values ($1,$2,'finished',$3,$4)",
+      [streamId, first.id, raw, "2026-01-01T11:00:00"]);
+    const stream = await repository.findOneStream(streamId);
+    expect(stream.started_at).toBe(raw);
+    expect(stream.finished_at).toBe("2026-01-01T11:00:00");
+    expect(await repository.findActiveStreamByWatchTarget(first.id)).toBeNull();
+    const later = await repository.createStream({ watchTargetId: first.id, startedAt: "2026-01-02T00:00:00Z" });
+    expect(later.id).not.toBe(stream.id);
+    const legacyId = randomUUID();
+    await pool.query("insert into recordings (id,watch_target_id,state,legacy_started_at_raw,legacy_finished_at_raw) values ($1,$2,'finished',$3,$4)",
+      [legacyId, first.id, raw, "2026-01-01T11:00:00"]);
+    expect(await repository.findOneRecording(legacyId)).toMatchObject({ session_id: legacyId, started_at: raw,
+      finished_at: "2026-01-01T11:00:00", stream_id: undefined });
+    expect(await repository.findOneSession(legacyId)).toMatchObject({ started_at: raw, platform: "twitch", channel_name: "channel" });
+    for (const startedAt of [raw, "not-a-dateZ", new Date(NaN)]) {
+      await expect(repository.createRecording({ watchTargetId: first.id, startedAt })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(repository.createStream({ watchTargetId: first.id, startedAt })).rejects.toBeInstanceOf(BadRequestException);
+    }
+    await expect(repository.createRecording({ watchTargetId: first.id, legacyStartedAtRaw: raw })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(repository.createStream({ watchTargetId: first.id })).rejects.toBeInstanceOf(BadRequestException);
+    for (const id of [randomUUID(), "invalid"]) {
+      await expect(repository.findOneStream(id)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(repository.findOneRecording(id)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(repository.findOneSession(id)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(repository.finalizeStream(id)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(repository.finalizeRecording(id)).rejects.toBeInstanceOf(NotFoundException);
+    }
+  });
+
+  it("serves modern and legacy relational history and watchTargetId filters over HTTP", async () => {
+    const first = await target("HTTP History");
+    const sibling = await target(first.creator_id, "720p");
+    const startedAt = "2026-01-01T00:00:00Z";
+    const created = await repository.createStreamAndRecording({ watchTargetId: first.id,
+      stream: { startedAt }, recording: { startedAt } });
+    await repository.createRecording({ watchTargetId: sibling.id, startedAt });
+    process.env.RELATIONAL_STORAGE = "true";
+    const httpDatabase = new DatabaseService(databaseUrl);
+    const module = await Test.createTestingModule({ imports: [StreamsModule] })
+      .overrideProvider(DatabaseService).useValue(httpDatabase).compile();
+    const app = module.createNestApplication();
+    await app.init();
+    try {
+      const server = app.getHttpServer();
+      expect((await request(server).get("/streams").expect(200)).body).toHaveLength(1);
+      expect((await request(server).get(`/streams/${created.stream.id}`).expect(200)).body.id).toBe(created.stream.id);
+      expect((await request(server).get("/recordings").expect(200)).body).toHaveLength(2);
+      expect((await request(server).get(`/recordings?watchTargetId=${first.id}`).expect(200)).body).toHaveLength(1);
+      expect((await request(server).get(`/recordings/${created.recording.session_id}`).expect(200)).body.stream_id).toBe(created.stream.id);
+      expect((await request(server).get("/session").expect(200)).body).toHaveLength(2);
+      expect((await request(server).get(`/session/${created.recording.session_id}`).expect(200)).body.channel_id).toBe(first.id);
+      expect((await request(server).get(`/session/channel/${first.id}`).expect(200)).body).toHaveLength(1);
+      await request(server).get(`/recordings/${randomUUID()}`).expect(404);
+      await request(server).get(`/streams/${randomUUID()}`).expect(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails relational history reads and writes explicitly without JSON fallback on DB outage", async () => {
+    const unavailable = new DatabaseService("postgresql://test:test@127.0.0.1:1/streamrecorder_test");
+    const offline = new RelationalStreamsRepository(unavailable);
+    await writeFile(join(directory, "streams.json"), "[]");
+    await writeFile(join(directory, "sessions.json"), "[]");
+    try {
+      for (const operation of [() => offline.findAllStreams(), () => offline.findAllRecordings(), () => offline.findAllSessions(),
+        () => offline.createStream({ watchTargetId: randomUUID(), startedAt: new Date() }),
+        () => offline.createRecording({ watchTargetId: randomUUID(), startedAt: new Date() }),
+        () => offline.finalizeRecording(randomUUID()), () => offline.finalizeStream(randomUUID())]) {
+        await expect(operation()).rejects.toThrow();
+      }
+      expect(await readFile(join(directory, "streams.json"), "utf8")).toBe("[]");
+      expect(await readFile(join(directory, "sessions.json"), "utf8")).toBe("[]");
+    } finally {
+      await unavailable.onModuleDestroy();
     }
   });
 

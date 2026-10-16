@@ -8,6 +8,13 @@
       "when": 1792108800000,
       "tag": "0000_database_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792195200000,
+      "tag": "0001_recording_context",
+      "breakpoints": true
     }
   ]
 }

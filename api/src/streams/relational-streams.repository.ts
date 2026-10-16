@@ -1,16 +1,24 @@
 import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
 import { randomUUID } from "crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { isUUID } from "class-validator";
 import { Mutex } from "async-mutex";
 import { DatabaseService } from "../database/database.service";
-import { creators, watchTargets } from "../database/schema";
+import { creators, watchTargets, streams, recordings } from "../database/schema";
 import { StreamsRepository } from "./streams.repository";
-import { Creator, WatchTarget } from "./domain.model";
+import { Creator, WatchTarget, Stream, Recording, RecordingState } from "./domain.model";
+import { SessionDto } from "./dto/session.dto";
 import { CreateCreatorDto, PatchCreatorDto } from "./dto/creator.dto";
 import { CreateWatchTargetDto } from "./dto/watch-target.dto";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { RuntimeStatusJsonAdapter, WatchTargetJsonAdapter, resolveAllConfigPaths } from "./json-compatibility.adapters";
+
+type Transaction = Parameters<Parameters<DatabaseService["connection"]["transaction"]>[0]>[0];
+type StartInput = { startedAt?: Date | string; legacyStartedAtRaw?: string };
+type FinishInput = { state?: RecordingState; finishedAt?: Date | string; legacyFinishedAtRaw?: string };
+type StreamInput = StartInput & { id?: string; watchTargetId: string; state?: RecordingState };
+type RecordingInput = StreamInput & { sessionId?: string; streamId?: string | null; outputFile?: string | null;
+  channelName?: string; platform?: string; quality?: string };
 
 @Injectable()
 export class RelationalStreamsRepository extends StreamsRepository {
@@ -22,6 +30,198 @@ export class RelationalStreamsRepository extends StreamsRepository {
 
   private get db() {
     return this.databaseService.connection;
+  }
+
+  private timestamp(value: Date | string): Date {
+    if (typeof value === "string" && !/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
+      throw new BadRequestException("Timestamp must include an explicit timezone");
+    }
+    const instant = new Date(value);
+    if (!Number.isFinite(instant.getTime())) throw new BadRequestException("Invalid timestamp");
+    return instant;
+  }
+
+  private startValues(data: StartInput) {
+    if (data.startedAt === undefined) {
+      throw new BadRequestException("startedAt is required");
+    }
+    return { startedAt: this.timestamp(data.startedAt),
+      legacyStartedAtRaw: data.legacyStartedAtRaw ?? null };
+  }
+
+  private finishValues(data: FinishInput) {
+    return { state: data.state ?? "finished", updatedAt: new Date(),
+      finishedAt: data.finishedAt === undefined ? (data.legacyFinishedAtRaw === undefined ? new Date() : null) : this.timestamp(data.finishedAt),
+      legacyFinishedAtRaw: data.legacyFinishedAtRaw ?? null };
+  }
+
+  private streamView(row: typeof streams.$inferSelect): Stream {
+    return { id: row.id, watch_target_id: row.watchTargetId, state: row.state as RecordingState,
+      started_at: row.startedAt?.toISOString() ?? row.legacyStartedAtRaw!,
+      finished_at: row.finishedAt?.toISOString() ?? row.legacyFinishedAtRaw ?? undefined };
+  }
+
+  private recordingView(row: typeof recordings.$inferSelect): Recording {
+    return { session_id: row.id, watch_target_id: row.watchTargetId, stream_id: row.streamId ?? undefined,
+      state: row.state as RecordingState, started_at: row.startedAt?.toISOString() ?? row.legacyStartedAtRaw!,
+      finished_at: row.finishedAt?.toISOString() ?? row.legacyFinishedAtRaw ?? undefined,
+      output_file: row.outputFile ?? undefined, channel_name: row.channelName ?? undefined,
+      platform: row.platform ?? undefined, quality: row.quality ?? undefined };
+  }
+
+  override async findAllStreams(): Promise<Stream[]> {
+    return (await this.db.select().from(streams).orderBy(desc(streams.createdAt), streams.id)).map(row => this.streamView(row));
+  }
+
+  override async findOneStream(id: string): Promise<Stream> {
+    if (!isUUID(id)) throw new NotFoundException("Stream not found");
+    const [row] = await this.db.select().from(streams).where(eq(streams.id, id));
+    if (!row) throw new NotFoundException("Stream not found");
+    return this.streamView(row);
+  }
+
+  async findActiveStreamByWatchTarget(watchTargetId: string): Promise<Stream | null> {
+    if (!isUUID(watchTargetId)) return null;
+    const [row] = await this.db.select().from(streams).where(and(eq(streams.watchTargetId, watchTargetId),
+      isNull(streams.finishedAt), isNull(streams.legacyFinishedAtRaw)));
+    return row ? this.streamView(row) : null;
+  }
+
+  async findStreamsByWatchTarget(watchTargetId: string, since?: string): Promise<Stream[]> {
+    if (!isUUID(watchTargetId)) return [];
+    return (await this.db.select().from(streams).where(and(eq(streams.watchTargetId, watchTargetId),
+      since === undefined ? undefined : gte(streams.startedAt, this.timestamp(since))))
+      .orderBy(desc(streams.createdAt), streams.id)).map(row => this.streamView(row));
+  }
+
+  override async findAllRecordings(): Promise<Recording[]> {
+    return (await this.db.select().from(recordings).orderBy(desc(recordings.createdAt), recordings.id)).map(row => this.recordingView(row));
+  }
+
+  override async findOneRecording(id: string): Promise<Recording> {
+    if (!isUUID(id)) throw new NotFoundException("Recording not found");
+    const [row] = await this.db.select().from(recordings).where(eq(recordings.id, id));
+    if (!row) throw new NotFoundException("Recording not found");
+    return this.recordingView(row);
+  }
+
+  override async findRecordingsByWatchTarget(id: string): Promise<Recording[]> {
+    if (!isUUID(id)) return [];
+    return (await this.db.select().from(recordings).where(eq(recordings.watchTargetId, id))
+      .orderBy(desc(recordings.createdAt), recordings.id)).map(row => this.recordingView(row));
+  }
+
+  override async findAllSessions(): Promise<SessionDto[]> {
+    const rows = await this.db.select({ recording: recordings, target: watchTargets }).from(recordings)
+      .leftJoin(watchTargets, eq(recordings.watchTargetId, watchTargets.id)).orderBy(desc(recordings.createdAt), recordings.id);
+    return rows.map(({ recording, target }) => {
+      const view = this.recordingView(recording);
+      return { session_id: view.session_id, channel_id: view.watch_target_id,
+        channel_name: recording.channelName ?? target?.channelName ?? "",
+        platform: recording.platform ?? target?.platform ?? "", state: view.state,
+        started_at: view.started_at, finished_at: view.finished_at, output_file: view.output_file };
+    });
+  }
+
+  override async findOneSession(id: string): Promise<SessionDto> {
+    const session = (await this.findAllSessions()).find(row => row.session_id === id);
+    if (!session) throw new NotFoundException("Session not found");
+    return session;
+  }
+
+  override async findSessionsByChannel(id: string): Promise<SessionDto[]> {
+    return (await this.findAllSessions()).filter(row => row.channel_id === id);
+  }
+
+  private async lockTarget(transaction: Transaction, id: string) {
+    if (!isUUID(id)) throw new NotFoundException("Watch target not found");
+    const [target] = await transaction.select().from(watchTargets)
+      .where(and(eq(watchTargets.id, id), isNull(watchTargets.archivedAt))).for("update");
+    if (!target) throw new NotFoundException("Watch target not found");
+    return target;
+  }
+
+  private async insertStream(transaction: Transaction, data: StreamInput): Promise<Stream> {
+    const start = this.startValues(data);
+    await this.lockTarget(transaction, data.watchTargetId);
+    const [active] = await transaction.select().from(streams).where(and(eq(streams.watchTargetId, data.watchTargetId),
+      isNull(streams.finishedAt), isNull(streams.legacyFinishedAtRaw)));
+    if (active) return this.streamView(active);
+    const [row] = await transaction.insert(streams).values({ id: data.id ?? randomUUID(), watchTargetId: data.watchTargetId,
+      state: data.state ?? "recording", ...start }).onConflictDoNothing({ target: streams.watchTargetId,
+        where: sql`${streams.finishedAt} is null and ${streams.legacyFinishedAtRaw} is null` }).returning();
+    if (row) return this.streamView(row);
+    const [existing] = await transaction.select().from(streams).where(and(eq(streams.watchTargetId, data.watchTargetId),
+      isNull(streams.finishedAt), isNull(streams.legacyFinishedAtRaw)));
+    if (!existing) throw new ConflictException("Active Stream changed; retry creation");
+    return this.streamView(existing);
+  }
+
+  async createStream(data: StreamInput): Promise<Stream> {
+    return this.db.transaction(transaction => this.insertStream(transaction, data));
+  }
+
+  private async insertRecording(transaction: Transaction, data: RecordingInput): Promise<Recording> {
+    const start = this.startValues(data);
+    const target = await this.lockTarget(transaction, data.watchTargetId);
+    if (data.streamId != null) {
+      if (!isUUID(data.streamId)) throw new BadRequestException("Invalid Stream ID");
+      const [stream] = await transaction.select().from(streams).where(and(eq(streams.id, data.streamId), eq(streams.watchTargetId, data.watchTargetId)));
+      if (!stream) throw new BadRequestException("Stream must belong to the recording WatchTarget");
+    }
+    if (data.id && data.sessionId && data.id !== data.sessionId) throw new BadRequestException("Conflicting recording IDs");
+    const [row] = await transaction.insert(recordings).values({ id: data.id ?? data.sessionId ?? randomUUID(),
+      watchTargetId: data.watchTargetId, streamId: data.streamId ?? null, state: data.state ?? "recording", ...start,
+      outputFile: data.outputFile, channelName: data.channelName ?? target.channelName,
+      platform: data.platform ?? target.platform, quality: data.quality ?? target.quality }).returning();
+    return this.recordingView(row);
+  }
+
+  async createRecording(data: RecordingInput): Promise<Recording> {
+    return this.db.transaction(transaction => this.insertRecording(transaction, data));
+  }
+
+  async createStreamAndRecording(data: { watchTargetId: string; stream?: Omit<StreamInput, "watchTargetId">;
+    recording: Omit<RecordingInput, "watchTargetId" | "streamId"> }): Promise<{ stream: Stream; recording: Recording }> {
+    return this.db.transaction(async transaction => {
+      const stream = await this.insertStream(transaction, { ...data.stream, watchTargetId: data.watchTargetId });
+      const recording = await this.insertRecording(transaction, { ...data.recording, watchTargetId: data.watchTargetId, streamId: stream.id });
+      return { stream, recording };
+    });
+  }
+
+  private async updateStream(transaction: Transaction, id: string, data: FinishInput): Promise<Stream> {
+    if (!isUUID(id)) throw new NotFoundException("Stream not found");
+    const [row] = await transaction.update(streams).set(this.finishValues(data)).where(eq(streams.id, id)).returning();
+    if (!row) throw new NotFoundException("Stream not found");
+    return this.streamView(row);
+  }
+
+  async finalizeStream(id: string, data: FinishInput = {}): Promise<Stream> {
+    return this.db.transaction(transaction => this.updateStream(transaction, id, data));
+  }
+
+  private async updateRecording(transaction: Transaction, id: string, data: FinishInput & { outputFile?: string }): Promise<Recording> {
+    if (!isUUID(id)) throw new NotFoundException("Recording not found");
+    const [row] = await transaction.update(recordings).set({ ...this.finishValues(data), outputFile: data.outputFile })
+      .where(eq(recordings.id, id)).returning();
+    if (!row) throw new NotFoundException("Recording not found");
+    return this.recordingView(row);
+  }
+
+  async finalizeRecording(id: string, data: FinishInput & { outputFile?: string } = {}): Promise<Recording> {
+    return this.db.transaction(transaction => this.updateRecording(transaction, id, data));
+  }
+
+  async finalizeRecordingAndStream(data: { recordingId: string; recordingState?: RecordingState; recordingFinishedAt?: Date | string;
+    streamId?: string; streamState?: RecordingState; streamFinishedAt?: Date | string }): Promise<{ recording: Recording; stream?: Stream }> {
+    return this.db.transaction(async transaction => {
+      const recording = await this.updateRecording(transaction, data.recordingId, { state: data.recordingState, finishedAt: data.recordingFinishedAt });
+      if (!data.streamId) return { recording };
+      if (recording.stream_id !== data.streamId) throw new BadRequestException("Recording does not reference Stream");
+      const stream = await this.updateStream(transaction, data.streamId, { state: data.streamState, finishedAt: data.streamFinishedAt });
+      return { recording, stream };
+    });
   }
 
   private creatorView(row: typeof creators.$inferSelect): Creator {
