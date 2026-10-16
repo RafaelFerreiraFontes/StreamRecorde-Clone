@@ -4,14 +4,14 @@ wave: 05
 order: 02
 depends_on:
   - 01-persistence-architecture-decisions.task.md
-status: user-approve
+status: done
 ---
 
 # Wave 05 — Task 02 — PostgreSQL Foundation and Schema
 
 ## Status and Preconditions
 
-user-approve — PostgreSQL foundation and schema implemented, validated, and human acceptance gate findings addressed (API startup decoupled from PostgreSQL health in compose.yml, verified by isolated decoupled bootstrap test, and Wave README status updated); ready for human acceptance before Task 03. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
+done — PostgreSQL foundation and schema implemented, validated, independently reviewed, corrected through the human acceptance gate, and accepted for downstream Wave 05 work. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
 
 ## Context / Objective
 
@@ -36,15 +36,15 @@ All wave-wide exclusions apply, including auth, Redis/BullMQ, Tags, cloud, and d
 
 ## Acceptance Criteria
 
-- [ ] Clean isolated DB -> migrations -> expected four-entity schema is reproducible.
-- [ ] Constraints, indexes, FK/deletion strategy, timestamps, and current state vocabulary match approved decisions.
-- [ ] Re-running migration tooling behaves predictably; failures are explicit rather than leaving an undocumented partial schema.
-- [ ] Insert disposable state -> restart/recreate DB service retaining its volume -> state remains.
-- [ ] Test DB is isolated from normal local DB, runtime-data, and recordings; no user runtime-data is modified.
-- [ ] PostgreSQL health/readiness and unavailable-connection behavior are documented and tested locally.
-- [ ] Minimal seam leaves existing JSON behavior/contracts intact; no live authority changes.
-- [ ] Local Compose works on Docker Desktop/Windows with no real credentials committed.
-- [ ] Focused migration/schema/infrastructure evidence is sufficient for independent review.
+- [x] Clean isolated DB -> migrations -> expected four-entity schema is reproducible.
+- [x] Constraints, indexes, FK/deletion strategy, timestamps, and current state vocabulary match approved decisions.
+- [x] Re-running migration tooling behaves predictably; failures are explicit rather than leaving an undocumented partial schema.
+- [x] Insert disposable state -> restart/recreate DB service retaining its volume -> state remains.
+- [x] Test DB is isolated from normal local DB, runtime-data, and recordings; no user runtime-data is modified.
+- [x] PostgreSQL health/readiness and unavailable-connection behavior are documented and tested locally.
+- [x] Minimal seam leaves existing JSON behavior/contracts intact; no live authority changes.
+- [x] Local Compose works on Docker Desktop/Windows with no real credentials committed.
+- [x] Focused migration/schema/infrastructure evidence is sufficient for independent review.
 
 ## Automated Tests / Verification Commands
 

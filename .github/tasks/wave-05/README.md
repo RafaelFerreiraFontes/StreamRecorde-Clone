@@ -2,7 +2,7 @@
 
 ## Status and Objective
 
-In progress: Task 01 is done and Task 02 has implemented the PostgreSQL foundation/schema and is awaiting human acceptance. Tasks 03 through 07 remain planned. Existing installations remain JSON-authoritative; no relational domain cutover has occurred.
+In progress: Task 01 and Task 02 are done. Tasks 03 through 07 remain planned. PostgreSQL foundation/schema exists, but existing installations remain JSON-authoritative and no relational domain cutover has occurred.
 
 Progressively replace shared JSON as primary domain persistence for Creator, WatchTarget, Stream, and Recording while preserving the functional Wave 04.75 local baseline. Local Recording Storage remains primary; no cloud account or hosted service is required.
 
@@ -26,7 +26,7 @@ Domain persistence and runtime communication must be investigated separately. ch
 | Order | Task | Dependency | Status |
 | --- | --- | --- | --- |
 | 01 | [Persistence Architecture and Cutover Decisions](01-persistence-architecture-decisions.task.md) ([decisions](persistence-architecture-decisions.md)) | [Wave 04.75 integration QA](../wave-04.75/05-wave-integration-qa-documentation.task.md) | done |
-| 02 | [PostgreSQL Foundation and Schema](02-postgresql-foundation-schema.task.md) | 05-T01 | user-approve |
+| 02 | [PostgreSQL Foundation and Schema](02-postgresql-foundation-schema.task.md) | 05-T01 | done |
 | 03 | [Creator and WatchTarget Relational Persistence](03-creator-watch-target-persistence.task.md) | 05-T02 | planned |
 | 04 | [Stream and Recording Relational Persistence](04-stream-recording-persistence.task.md) | 05-T03 | planned |
 | 05 | [Worker Persistence Bridge](05-worker-persistence-bridge.task.md) | 05-T04 | planned |
