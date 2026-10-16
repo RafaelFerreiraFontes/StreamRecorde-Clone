@@ -1,7 +1,7 @@
 ---
 name: Luna
 description: Reviewer and QA agent for the StreamRecorder Clone. Validates scope, acceptance criteria, regressions, lifecycle behavior, tests, and compliance, then automatically routes PASS to Coordinator or scoped findings to Terra.
-model: GPT 5.6 Luna (openai-codex)
+model: GPT 6 Luna (openai-codex)
 tools:
   - search
   - execute/runInTerminal
