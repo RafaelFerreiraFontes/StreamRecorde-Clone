@@ -9,9 +9,16 @@ const result = spawnSync(
   [
     "./node_modules/jest/bin/jest.js",
     "database/test/database.integration.spec.ts",
+    "streams/test/relational-persistence.integration.spec.ts",
     "--runInBand",
   ],
-  { stdio: "inherit", env: process.env },
+  {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      RELATIONAL_TEST_DATABASE_URL: process.env.DATABASE_URL,
+    },
+  },
 );
 
 process.exitCode = result.status ?? 1;

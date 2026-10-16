@@ -38,3 +38,74 @@ the normal database volume, `runtime-data`, or recording directories.
 
 The schema stores metadata only. Recording media stays on the local recording
 mount and is never inserted into PostgreSQL.
+
+## Opt-In Relational Configuration (Task 03)
+
+Default API startup still uses JSON for all domain operations. Setting
+`RELATIONAL_STORAGE=true` selects PostgreSQL for Creator and WatchTarget only.
+This flag is for disposable, isolated compatibility fixtures at this stage,
+not an existing-installation migration or production cutover. Apply migrations
+first and point `DATABASE_URL` and `CONFIG_DIR` (or the individual file overrides)
+at test-owned storage. Never point this mode at normal runtime data.
+
+Relational mode adds `POST /creators`, `PATCH /creators/:id`, and
+`DELETE /creators/:id`. Creator names are trimmed; UUIDs remain stable on rename.
+Name lookups are case-insensitive and return 409 when ambiguous. Duplicate
+display names are permitted as distinct identities; use UUIDs to disambiguate.
+Renaming replaces the current name lookup rather than keeping an old alias.
+Existing name-based WatchTarget creation resolves an unambiguous Creator or
+creates one when absent; an unknown Creator UUID returns 404. Independent
+Creator mutations return 400 in default JSON mode.
+
+Deleting a target archives its configuration. A Creator with non-archived
+targets cannot be deleted, including when those targets are disabled. Neither
+operation deletes Stream/Recording history or media. Stream and Recording
+reads remain JSON-backed until Task 04.
+
+Target mutations commit to PostgreSQL before atomically projecting all active
+targets into `watchlist.json` for the current polling Worker. Creator rename
+also refreshes that projection. The projection includes the Creator display
+name, target UUID, authoritative URL, preferred quality, enabled flag and
+optional relative output folder. Runtime state is still read separately from
+`channels_status.json`. Do not edit the projected watchlist as a second primary.
+
+A projection failure returns HTTP 500 explicitly stating that the database
+committed. Do not blindly retry creation: inspect committed configuration and
+invoke `RelationalStreamsRepository.reprojectWatchlist()` through an
+administrative application context after fixing the filesystem failure. This
+method regenerates configuration without repeating the mutation. No public
+reconciliation endpoint is introduced. Until reconciliation, the polling
+Worker can still observe stale projected configuration. Mutations and
+projection are serialized inside the API process; this is not multi-instance
+coordination, and this checkpoint supports only one configuration-writing API.
+
+### Focused Validation
+
+From the repository root, start a uniquely named disposable database:
+
+```bash
+docker compose -f compose.test-db.yml -p streamrecorder-t03-validation up -d --wait
+```
+
+From `api`, set `RELATIONAL_TEST_DATABASE_URL` to that disposable database's
+connection URL (database name must be `streamrecorder_test`) and run:
+
+```bash
+pnpm test --runInBand relational-persistence.integration.spec.ts
+pnpm exec tsc --noEmit
+pnpm build
+```
+
+The integration suite truncates only the explicitly selected test database and
+uses temporary JSON directories. It checks Creator/target persistence, names,
+three-sibling independence, HTTP validation, archive/history safety, projection
+recovery, reconnect and unavailable-DB behavior. It also reads the actual
+projection with the current Python Worker adapter; `python` must be installed,
+or set `PYTHON` to the Python executable. Without the dedicated test URL, DB
+cases are skipped rather than connecting to normal `DATABASE_URL`.
+
+After validation, remove only this test-owned project and its volume:
+
+```bash
+docker compose -f compose.test-db.yml -p streamrecorder-t03-validation down --volumes
+```

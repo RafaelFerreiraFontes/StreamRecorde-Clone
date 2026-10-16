@@ -18,6 +18,7 @@ import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { SessionDto } from "./dto/session.dto";
 import { CreateWatchTargetDto, PatchWatchTargetDto } from "./dto/watch-target.dto";
 import { RecordingQueryDto } from "./dto/recording-query.dto";
+import { CreateCreatorDto, PatchCreatorDto } from "./dto/creator.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 
 @Controller()
@@ -32,6 +33,21 @@ export class StreamController {
   @Get("/creators")
   getAllCreators(): Promise<Creator[]> {
     return this.streamerService.findAllCreators();
+  }
+
+  @Post("/creators")
+  createCreator(@Body() dto: CreateCreatorDto): Promise<Creator> {
+    return this.streamerService.createCreator(dto);
+  }
+
+  @Patch("/creators/:id")
+  patchCreator(@Param("id") id: string, @Body() dto: PatchCreatorDto): Promise<Creator> {
+    return this.streamerService.updateCreator(id, dto);
+  }
+
+  @Delete("/creators/:id")
+  deleteCreator(@Param("id") id: string): Promise<void> {
+    return this.streamerService.removeCreator(id);
   }
 
   @Get("/creators/:id")

@@ -9,6 +9,7 @@ import {
   WATCH_TARGET_URL_OPTIONS,
 } from "./dto/watch-target.dto";
 import { SessionDto } from "./dto/session.dto";
+import { CreateCreatorDto, PatchCreatorDto } from "./dto/creator.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 
 /**
@@ -102,6 +103,18 @@ function validateRecordingSubdirInput(value: unknown, fieldName = "recording_sub
 @Injectable()
 export class StreamerService {
   constructor(private readonly repository: StreamsRepository) {}
+
+  createCreator(dto: CreateCreatorDto): Promise<Creator> {
+    return this.repository.createCreator(dto);
+  }
+
+  updateCreator(id: string, dto: PatchCreatorDto): Promise<Creator> {
+    return this.repository.updateCreator(id, dto);
+  }
+
+  removeCreator(id: string): Promise<void> {
+    return this.repository.removeCreator(id);
+  }
 
   async findAllCreators(): Promise<Creator[]> {
     return await this.repository.findAllCreators();
