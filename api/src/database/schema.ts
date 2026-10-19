@@ -13,6 +13,15 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+export const migrationManifests = pgTable("migration_manifests", {
+  id: uuid("id").primaryKey(),
+  manifestFingerprint: text("manifest_fingerprint").notNull().unique(),
+  sourceDigests: jsonb("source_digests").notNull(),
+  entityCounts: jsonb("entity_counts").notNull(),
+  toolVersion: text("tool_version").notNull(),
+  appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const workerEvents = pgTable("worker_events", {
   eventId: uuid("event_id").primaryKey(),
   eventType: text("event_type").notNull(),

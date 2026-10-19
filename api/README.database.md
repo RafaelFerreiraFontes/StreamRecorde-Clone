@@ -1,5 +1,152 @@
 # PostgreSQL Foundation
 
+## Legacy JSON Migration And Authority Cutover (Task 06)
+
+Migration is explicit and opt-in. Startup never imports or changes authority.
+Rehearse only with synthetic files and the isolated test database, never normal
+runtime data, recordings, or Docker volumes. The CLI never reads media, changes
+source files, exports DB state to JSON, or changes service environments. Import
+requires an empty domain database; it is not a merge/upsert tool.
+
+### Quiesce And Capture
+
+1. Prevent new launches (disable targets through the current API if necessary),
+	wait for existing captures and terminal persistence to finish, and record any
+	configuration changes. Disabled targets remain disabled after migration.
+2. If an outbox exists, drain pending events and resolve active checkpoints.
+	Never delete pending events to force a gate. Stop API and Worker writers.
+3. Retain original JSON, outbox/checkpoints and media. Back up any existing DB;
+	use a new empty destination rather than dropping existing data for import.
+4. Run dry-run and resolve every error. Exact repeated Creator names group
+	sibling targets. Different trimmed spellings with the same lowercase key are
+	ambiguous: correct an explicitly reviewed source copy rather than guessing
+	by channel or URL. No automatic mapping override is provided.
+5. Capture a new backup outside the source directory. `--quiesced` attests that
+	writers are stopped and the outbox is drained; it cannot prove remote process
+	state. The CLI rereads all bytes to reject observed movement during capture.
+
+Examples from the repository root (placeholder private synthetic directories):
+
+```bash
+pnpm --dir api migrate:legacy dry-run --source /private/synthetic-source
+pnpm --dir api migrate:legacy backup --source /private/synthetic-source --destination /private/synthetic-backup --quiesced
+```
+
+watchlist.json, streams.json and sessions.json are required. Missing files,
+malformed shapes, duplicate object keys/IDs, invalid UUIDs/states/configuration,
+orphan history, ambiguous Creators and multiple open Streams fail validation.
+channels_status.json is optional, validated/backed up, and never imported as
+domain history. An open Stream has neither typed nor raw finish evidence.
+
+manifest.json records origin paths, sizes, SHA-256 checksums, capture time, tool
+version, expected counts, destination schema (`public`) and quiescence attestations.
+A fingerprint binds all fields. Checksums detect drift, not malicious replacement
+of both manifest and files. Protect snapshots with OS permissions/ACLs; never
+commit them. Backup directories/files are created exclusively with restrictive
+POSIX modes; configure private directory ACLs on Windows. An interrupted backup
+leaves its partial directory for inspection; retry with a new destination.
+
+### Import And Verify
+
+Set DATABASE_URL explicitly to the disposable destination for rehearsals. Apply
+checked-in migrations first, including 0003_migration_manifests. The CLI never
+migrates the schema implicitly.
+
+```bash
+pnpm --dir api db:migrate
+pnpm --dir api migrate:legacy import --snapshot /private/synthetic-backup --manifest /private/synthetic-backup/manifest.json --quiesced
+pnpm --dir api migrate:legacy verify --snapshot /private/synthetic-backup --manifest /private/synthetic-backup/manifest.json
+```
+
+All source constraints, digests and counts are checked before database access.
+Creators, targets, Streams, Recordings and the manifest ledger commit in one
+transaction with table locks, or all roll back. Creator UUIDs derive from a
+versioned SHA-256 namespace and trim/lowercase key. Target/Stream/session UUIDs
+are preserved with canonical lowercase encoding. Missing enabled defaults to
+true; preferences and sibling independence remain intact. Safe folder separators
+normalize to `/`.
+
+Legacy timestamps remain verbatim raw strings with typed columns NULL; no timezone
+conversion is attempted, even for text with offsets. Legacy Recording stream_id
+and unavailable historical configuration snapshots remain NULL. Current target
+settings are not historical facts. Output paths are metadata only.
+
+Identical replay checks ledger digests/counts and returns `idempotence-verified`
+without overwriting newer domain state. Snapshot drift, conflicting manifests,
+pre-existing destination rows or ledger conflicts fail explicitly. `verify`
+checks exact counts, IDs, imported fields and relationships in a repeatable-read
+transaction. Run it before activation: legitimate later edits cause exact
+snapshot verification to fail. No lossy repair is attempted.
+
+### Activate And Observe
+
+After verification, configure both stopped services as one checkpoint:
+
+- API: RELATIONAL_STORAGE=true, PERSISTENCE_MODE=bridge, DATABASE_URL and a
+  non-empty INTERNAL_API_TOKEN.
+- Worker: PERSISTENCE_MODE=bridge, matching INTERNAL_API_TOKEN, persistent
+  OUTBOX_DIR and PERSISTENCE_BRIDGE_URL pointing at the internal API base URL.
+
+Use a private Compose override/service configuration. Default Compose deliberately
+does not forward these flags or tokens; host shell variables alone do not configure
+containers. Never put tokens in command arguments, Git, snapshots or printed
+Compose output. API PERSISTENCE_MODE=bridge retires watchlist projection after
+mutations; without it the Task 03 projection remains enabled. Never run a JSON
+Worker alongside relational writers. Start API, check readiness, then start the
+bridge Worker. Retain original files read-only for recovery.
+
+In a shell with matching flags/token and the destination DB:
+
+```bash
+pnpm --dir api migrate:legacy cutover-check --source /private/synthetic-source --api-url http://127.0.0.1:3000 --observation-ms 65000 --outbox /private/worker-outbox
+```
+
+The optional `--outbox <path>` must point to the Worker's actual outbox directory.
+The directory and its `pending/` and `active/` subdirectories must exist and be
+directories; the check fails closed if any are missing or are not directories.
+Complete cutover readiness requires verifying that both `pending` and `active`
+contain no `.json` events/checkpoints; unresolved work fails the check. A drained
+outbox returns `cutover-readiness-verified` with `outboxStatus: "drained"`.
+Without `--outbox`, the result is only `api-database-ready` with
+`outboxStatus: "unverified"`, not complete Worker bridge cutover readiness.
+
+This checks DB connectivity, the authenticated execution-configs response and
+unchanged domain JSON hashes during a bounded observation (1 second to 10 minutes).
+Operational channels_status.json may change. Redirects are rejected; non-local
+token transport requires HTTPS. It does not prove Worker liveness, actual remote
+process environments, or permanent absence of writers. In an isolated rehearsal,
+exercise a synthetic lifecycle and target edit, verify DB/outbox acknowledgement
+and unchanged domain files. Do not use live platform calls as fixtures.
+
+Operational guarantees: `cutover-check` is a diagnostic read-only probe; it does
+not pause, stop, or reconfigure running API or Worker containers. The operator
+must manually stop services, apply configuration flags, restart containers in
+coordinated order, and monitor bridge operation. Atomicity across separate
+container environments is an operational procedure requiring manual coordination,
+not a single automated CLI transaction.
+
+### Rollback And Forward Repair
+
+Before activation/new relational writes: stop both services, retain DB/backup for
+diagnosis, unset RELATIONAL_STORAGE, PERSISTENCE_MODE and PERSISTENCE_BRIDGE_URL,
+then restart in JSON mode. Import did not change originals. Only the owning
+harness may remove disposable database resources.
+
+After any post-cutover write: never reverse-export to legacy JSON or switch back
+to stale snapshots. Freeze launches, preserve PostgreSQL, migration ledger,
+outbox/checkpoints and media, repair the component and resume/replay through the
+existing idempotent bridge. Disaster restore requires a full consistent DB backup
+and reviewed outbox reconciliation, not an automatic migrator action. There is
+no destructive rollback or media cleanup command.
+
+### Validation
+
+`node scripts/test-db-foundation.mjs` includes the migration integration suite
+through the API test harness, using temporary fixtures and the isolated DB.
+It covers identity, raw timestamps, unknown Stream links, late-failure rollback,
+conflicts, verification and checkpoint preservation. The `migrator` Jest suites
+cover non-destructive parsing, duplicate keys, checksums and cutover failures.
+
 Wave 05 Task 02 adds an inert PostgreSQL foundation. The current JSON adapters
 and `StreamsRepository` remain the sole production authority until the explicit
 cutover task. The API starts without connecting to PostgreSQL; connection and
@@ -44,8 +191,8 @@ mount and is never inserted into PostgreSQL.
 Default API startup still uses JSON for all domain operations. Setting
 `RELATIONAL_STORAGE=true` selects PostgreSQL for Creator, WatchTarget, Stream,
 and Recording operations.
-This flag is for disposable, isolated compatibility fixtures at this stage,
-not an existing-installation migration or production cutover. Apply migrations
+Task 06 supplies the explicit existing-installation checkpoint above. Until
+that checkpoint is complete, use disposable compatibility fixtures. Apply migrations
 first and point `DATABASE_URL` and `CONFIG_DIR` (or the individual file overrides)
 at test-owned storage. Never point this mode at normal runtime data.
 
@@ -150,7 +297,7 @@ immutable snapshots, HTTP/session reads, file locations, reconnect and outage.
 ## Opt-In Worker Bridge (Task 05)
 
 Existing installations remain JSON-authoritative by default. Task 05 adds no
-automatic import or cutover. In disposable relational environments only, apply
+automatic import or cutover. After the Task 06 checkpoint, or in disposable relational environments, apply
 migrations (including `0002_worker_events`), set API `RELATIONAL_STORAGE=true`
 and `DATABASE_URL`, then opt the Worker in with `PERSISTENCE_MODE=bridge` or a
 non-empty `PERSISTENCE_BRIDGE_URL` (the API base URL, without `/internal/v1`).

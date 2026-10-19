@@ -2,7 +2,7 @@
 
 ## Status and Objective
 
-In progress: Tasks 01 through 05 are done. Tasks 06 and 07 remain planned. Existing installations remain JSON-authoritative and no relational domain cutover has occurred.
+In progress: Tasks 01 through 06 are done. Task 07 remains planned. Existing installations remain JSON-authoritative and no relational domain cutover has occurred.
 
 Progressively replace shared JSON as primary domain persistence for Creator, WatchTarget, Stream, and Recording while preserving the functional Wave 04.75 local baseline. Local Recording Storage remains primary; no cloud account or hosted service is required.
 
@@ -30,7 +30,7 @@ Domain persistence and runtime communication must be investigated separately. ch
 | 03 | [Creator and WatchTarget Relational Persistence](03-creator-watch-target-persistence.task.md) | 05-T02 | done |
 | 04 | [Stream and Recording Relational Persistence](04-stream-recording-persistence.task.md) | 05-T03 | done |
 | 05 | [Worker Persistence Bridge](05-worker-persistence-bridge.task.md) | 05-T04 | done |
-| 06 | [Legacy JSON Migration and Authority Cutover](06-legacy-json-migration-cutover.task.md) | 05-T05 | planned |
+| 06 | [Legacy JSON Migration and Authority Cutover](06-legacy-json-migration-cutover.task.md) | 05-T05 | done |
 | 07 | [Wave Integration QA and Documentation](07-wave-integration-qa-documentation.task.md) | 05-T06 | planned |
 
 ```text

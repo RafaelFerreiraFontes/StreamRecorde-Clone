@@ -442,6 +442,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
   }
 
   private async projectWatchlist(): Promise<void> {
+    if (process.env.PERSISTENCE_MODE === "bridge") return;
     try {
       const entries = (await this.activeTargets()).map(({ target, displayName }) => ({
         id: target.id, display_name: displayName, channel_name: target.channelName,

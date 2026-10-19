@@ -13,7 +13,7 @@ function run(command, args, environment = process.env, cwd) {
 try {
   run("docker", [...compose, "up", "-d", "--wait"]);
   run(process.execPath, ["-r", "ts-node/register", "src/database/migrate.ts"], { ...process.env, DATABASE_URL: databaseUrl }, "api");
-  run(process.execPath, ["scripts/test-db-integration.mjs"], { ...process.env, DATABASE_URL: databaseUrl, BRIDGE_TEST_DB_RESTART: "true" }, "api");
+  run(process.execPath, ["scripts/test-db-integration.mjs"], { ...process.env, DATABASE_URL: databaseUrl, RELATIONAL_TEST_DATABASE_URL: databaseUrl, BRIDGE_TEST_DB_RESTART: "true" }, "api");
   run(process.execPath, ["scripts/database-persistence-check.mjs", "--seed"], { ...process.env, DATABASE_URL: databaseUrl }, "api");
   run("docker", [...compose, "stop", "postgres-test"]);
   run("docker", [...compose, "rm", "-sf", "postgres-test"]);

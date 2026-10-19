@@ -9,6 +9,7 @@ const result = spawnSync(
   [
     "./node_modules/jest/bin/jest.js",
     "database/test/database.integration.spec.ts",
+    "database/test/legacy-migration.integration.spec.ts",
     "streams/test/relational-persistence.integration.spec.ts",
     "streams/test/internal-events.integration.spec.ts",
     "--runInBand",
