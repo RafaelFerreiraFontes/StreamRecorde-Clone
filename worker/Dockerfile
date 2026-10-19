@@ -16,6 +16,7 @@ WORKDIR /app
 # Copy worker modules
 COPY worker.py .
 COPY json_adapters.py .
+COPY outbox.py .
 
 # Create runtime directories
 RUN mkdir -p /recordings /data && \

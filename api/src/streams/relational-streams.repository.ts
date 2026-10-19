@@ -4,7 +4,8 @@ import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { isUUID } from "class-validator";
 import { Mutex } from "async-mutex";
 import { DatabaseService } from "../database/database.service";
-import { creators, watchTargets, streams, recordings } from "../database/schema";
+import { creators, watchTargets, streams, recordings, workerEvents } from "../database/schema";
+import { ExecutionConfig, InternalEventDto } from "./dto/internal-event.dto";
 import { StreamsRepository } from "./streams.repository";
 import { Creator, WatchTarget, Stream, Recording, RecordingState } from "./domain.model";
 import { SessionDto } from "./dto/session.dto";
@@ -30,6 +31,66 @@ export class RelationalStreamsRepository extends StreamsRepository {
 
   private get db() {
     return this.databaseService.connection;
+  }
+
+  async getExecutionConfigs(): Promise<ExecutionConfig[]> {
+    const rows = await this.db.select().from(watchTargets).where(isNull(watchTargets.archivedAt));
+    return rows.map(row => ({ id: row.id, channel_name: row.channelName, platform: row.platform,
+      url: row.url, quality: row.quality, enabled: row.enabled,
+      ...(row.recordingSubdir === null ? {} : { recording_subdir: row.recordingSubdir }) }));
+  }
+
+  async handleWorkerEvent(dto: InternalEventDto, fingerprint: string): Promise<Record<string, unknown>> {
+    return this.db.transaction(async transaction => {
+      await transaction.execute(sql`select pg_advisory_xact_lock(hashtextextended(${dto.event_id}, 0))`);
+      const [event] = await transaction.select().from(workerEvents).where(eq(workerEvents.eventId, dto.event_id));
+      if (event) {
+        if (event.fingerprint !== fingerprint) throw new ConflictException("Event ID reuse with conflicting payload");
+        return event.responsePayload as Record<string, unknown>;
+      }
+      await transaction.execute(sql`select pg_advisory_xact_lock(hashtextextended(${dto.watch_target_id}, 1))`);
+      let response: Record<string, unknown>;
+      if (dto.event_type === "recording.start") {
+        const target = await this.lockTarget(transaction, dto.watch_target_id);
+        if (!target.enabled) throw new ConflictException("Watch target is disabled");
+        const [active] = await transaction.select().from(recordings).where(and(
+          eq(recordings.watchTargetId, dto.watch_target_id), isNull(recordings.finishedAt), isNull(recordings.legacyFinishedAtRaw)));
+        if (active) throw new ConflictException("Watch target already has an active Recording");
+        const stream = await this.insertStream(transaction, { id: dto.stream_id,
+          watchTargetId: dto.watch_target_id, startedAt: dto.occurred_at });
+        const recording = await this.insertRecording(transaction, { sessionId: dto.session_id,
+          watchTargetId: dto.watch_target_id, streamId: stream.id, startedAt: dto.occurred_at,
+          quality: dto.quality, outputFile: dto.output_file });
+        response = { acknowledged: true, stream_id: stream.id, session_id: recording.session_id };
+      } else if (dto.event_type === "recording.terminal") {
+        const [recording] = await transaction.select().from(recordings).where(eq(recordings.id, dto.session_id!)).for("update");
+        if (!recording) throw new ConflictException("Recording start must be acknowledged before terminal event");
+        if (recording.watchTargetId !== dto.watch_target_id || (dto.stream_id && dto.stream_id !== recording.streamId)) {
+          throw new ConflictException("Recording event relationship mismatch");
+        }
+        if (recording.finishedAt || recording.legacyFinishedAtRaw) {
+          throw new ConflictException("Recording is already terminal");
+        }
+        if (recording.startedAt && new Date(dto.occurred_at) < recording.startedAt) {
+          throw new BadRequestException("Terminal timestamp precedes start");
+        }
+        await this.updateRecording(transaction, recording.id, { state: dto.state,
+          finishedAt: dto.occurred_at, outputFile: dto.output_file });
+        response = { acknowledged: true, session_id: recording.id, state: dto.state };
+      } else {
+        const [active] = await transaction.select().from(recordings).where(and(
+          eq(recordings.watchTargetId, dto.watch_target_id), isNull(recordings.finishedAt), isNull(recordings.legacyFinishedAtRaw)));
+        const [stream] = await transaction.select().from(streams).where(and(
+          eq(streams.watchTargetId, dto.watch_target_id), isNull(streams.finishedAt), isNull(streams.legacyFinishedAtRaw)));
+        if (dto.stream_id && stream && dto.stream_id !== stream.id) throw new ConflictException("Offline Stream mismatch");
+        const finalized = !!stream && !active && (!stream.startedAt || new Date(dto.occurred_at) >= stream.startedAt);
+        if (finalized) await this.updateStream(transaction, stream.id, { finishedAt: dto.occurred_at });
+        response = { acknowledged: true, finalized };
+      }
+      await transaction.insert(workerEvents).values({ eventId: dto.event_id, eventType: dto.event_type,
+        fingerprint, responsePayload: response });
+      return response;
+    });
   }
 
   private timestamp(value: Date | string): Date {
@@ -141,7 +202,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
     return target;
   }
 
-  private async insertStream(transaction: Transaction, data: StreamInput): Promise<Stream> {
+  async insertStream(transaction: Transaction, data: StreamInput): Promise<Stream> {
     const start = this.startValues(data);
     await this.lockTarget(transaction, data.watchTargetId);
     const [active] = await transaction.select().from(streams).where(and(eq(streams.watchTargetId, data.watchTargetId),
@@ -161,7 +222,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
     return this.db.transaction(transaction => this.insertStream(transaction, data));
   }
 
-  private async insertRecording(transaction: Transaction, data: RecordingInput): Promise<Recording> {
+  async insertRecording(transaction: Transaction, data: RecordingInput): Promise<Recording> {
     const start = this.startValues(data);
     const target = await this.lockTarget(transaction, data.watchTargetId);
     if (data.streamId != null) {
@@ -190,7 +251,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
     });
   }
 
-  private async updateStream(transaction: Transaction, id: string, data: FinishInput): Promise<Stream> {
+  async updateStream(transaction: Transaction, id: string, data: FinishInput): Promise<Stream> {
     if (!isUUID(id)) throw new NotFoundException("Stream not found");
     const [row] = await transaction.update(streams).set(this.finishValues(data)).where(eq(streams.id, id)).returning();
     if (!row) throw new NotFoundException("Stream not found");
@@ -201,7 +262,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
     return this.db.transaction(transaction => this.updateStream(transaction, id, data));
   }
 
-  private async updateRecording(transaction: Transaction, id: string, data: FinishInput & { outputFile?: string }): Promise<Recording> {
+  async updateRecording(transaction: Transaction, id: string, data: FinishInput & { outputFile?: string }): Promise<Recording> {
     if (!isUUID(id)) throw new NotFoundException("Recording not found");
     const [row] = await transaction.update(recordings).set({ ...this.finishValues(data), outputFile: data.outputFile })
       .where(eq(recordings.id, id)).returning();

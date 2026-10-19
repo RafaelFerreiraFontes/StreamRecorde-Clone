@@ -15,6 +15,13 @@
       "when": 1792195200000,
       "tag": "0001_recording_context",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792281600000,
+      "tag": "0002_worker_events",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ import {
   check,
   foreignKey,
   index,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -11,6 +12,14 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+
+export const workerEvents = pgTable("worker_events", {
+  eventId: uuid("event_id").primaryKey(),
+  eventType: text("event_type").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  responsePayload: jsonb("response_payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const creators = pgTable(
   "creators",

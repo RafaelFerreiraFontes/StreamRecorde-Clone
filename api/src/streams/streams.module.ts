@@ -13,11 +13,15 @@ import { StreamController } from "./streams.controller";
 
 import { RecordingsFilesystemService } from "./recordings-filesystem.service";
 import { RecordingsFilesystemController } from "./recordings-filesystem.controller";
+import { InternalStreamsController, InternalTokenGuard } from "./internal-streams.controller";
+import { InternalEventsService } from "./internal-events.service";
 
 @Module({
   imports: [DatabaseModule],
-  controllers: [RecordingsFilesystemController, StreamController],
+  controllers: [RecordingsFilesystemController, StreamController, InternalStreamsController],
   providers: [
+    InternalEventsService,
+    InternalTokenGuard,
     RecordingsFilesystemService,
     {
       provide: StreamsRepository,

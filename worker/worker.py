@@ -29,10 +29,30 @@ import tempfile
 import threading
 import time
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping, Optional
+
+try:
+    from worker.outbox import Outbox
+except ModuleNotFoundError:
+    from outbox import Outbox
+
+bridge = None
+
+
+def bridge_enabled():
+    return os.environ.get("PERSISTENCE_MODE") == "bridge" or bool(os.environ.get("PERSISTENCE_BRIDGE_URL", "").strip())
+
+
+def get_bridge():
+    global bridge
+    if bridge is None:
+        directory = os.environ.get("OUTBOX_DIR") or str(pathlib.Path(_resolve_all_paths()["channels_status"]).parent / "outbox")
+        bridge = Outbox(directory, os.environ.get("PERSISTENCE_BRIDGE_URL") or "http://api:3000",
+                        os.environ.get("INTERNAL_API_TOKEN"))
+    return bridge
 
 try:
     from worker.json_adapters import (
@@ -187,7 +207,7 @@ def initialize_runtime_files(paths: dict) -> None:
         "streams": [],
     }
 
-    for key in ("watchlist", "channels_status", "sessions", "streams"):
+    for key in paths:
         file_path_str = paths[key]
         file_path = pathlib.Path(file_path_str)
         parent_dir = file_path.parent
@@ -217,6 +237,9 @@ def ensure_runtime_dirs() -> None:
 
     # Get config directory and paths
     paths = _resolve_all_paths()
+
+    if bridge_enabled():
+        paths = {"channels_status": paths["channels_status"]}
 
     # ─── Stale temp sweep ───────────────────────────────────────────────────
     # Remove any lingering atomic-write temp files from previous crashed runs.
@@ -444,6 +467,8 @@ shutdown_event = threading.Event()
 
 
 def load_watchlist():
+    if bridge_enabled():
+        return get_bridge().configs()
     return WatchTargetJsonAdapter.read(CONFIG_PATH)
 
 
@@ -459,6 +484,8 @@ def load_channels_status():
 
 
 def load_sessions():
+    if bridge_enabled():
+        return []
     return RecordingJsonAdapter.read(SESSIONS_PATH)
 
 
@@ -479,14 +506,20 @@ def load_recordings():
 
 
 def save_recordings():
+    if bridge_enabled():
+        return
     RecordingJsonAdapter.write(SESSIONS_PATH, recordings)
 
 
 def load_streams():
+    if bridge_enabled():
+        return []
     return StreamJsonAdapter.read(STREAMS_PATH)
 
 
 def save_streams():
+    if bridge_enabled():
+        return
     StreamJsonAdapter.write(STREAMS_PATH, streams_data)
 
 
@@ -516,6 +549,11 @@ def finalize_stream(watch_target_id: str):
     """Finalize the active stream for a watch target if no recording is active."""
     if watch_target_id in active_recordings:
         return None
+    if bridge_enabled():
+        outbox = get_bridge()
+        outbox.enqueue(outbox.event("stream.offline", watch_target_id))
+        if not outbox.replay():
+            return None
     stream = find_active_stream(watch_target_id)
     if stream:
         stream["finished_at"] = datetime.now().isoformat()
@@ -915,11 +953,21 @@ def start_recording(entry: dict, stream_id: str | None = None, quality: str = "b
         str(out_path),
     ]
 
+    checkpoint = None
+    if bridge_enabled():
+        checkpoint = get_bridge().start(watch_target_id, session_id, stream_id, str(out_path), entry.get("quality", quality))
+        stream_id = checkpoint["stream_id"]
+        current_stream = find_active_stream(watch_target_id)
+        if current_stream:
+            current_stream["id"] = stream_id
+
     try:
         process = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
         )
     except Exception as error:
+        if checkpoint:
+            get_bridge().terminal(checkpoint, "error", str(out_path), reason="launch_failure")
         log.error(
             "Recording launch failed (watch_target_id=%s, exception_type=%s)",
             _safe_identifier(watch_target_id),
@@ -927,10 +975,26 @@ def start_recording(entry: dict, stream_id: str | None = None, quality: str = "b
         )
         raise
 
-    started_at = datetime.now().isoformat()
+    if checkpoint:
+        try:
+            get_bridge().launched(checkpoint, process)
+        except Exception:
+            _stop_launched_process(process)
+            get_bridge().terminal(checkpoint, "error", str(out_path), reason="checkpoint_failure")
+            raise
+
+    started_at = checkpoint["started_at"] if checkpoint else datetime.now().isoformat()
     with lock:
-        prior_state = channels_status[watch_target_id].get("state")
-        channels_status[watch_target_id]["state"] = "recording"
+        target_status = channels_status.setdefault(
+            watch_target_id,
+            {
+                "channel_name": channel_name,
+                "platform": platform,
+                "state": "idle",
+            },
+        )
+        prior_state = target_status.get("state")
+        target_status["state"] = "recording"
         recording_entry = {
             "session_id": session_id,
             "watch_target_id": watch_target_id,
@@ -949,6 +1013,8 @@ def start_recording(entry: dict, stream_id: str | None = None, quality: str = "b
             recordings.remove(recording_entry)
             channels_status[watch_target_id]["state"] = prior_state
             _stop_launched_process(process)
+            if checkpoint:
+                get_bridge().terminal(checkpoint, "error", str(out_path), reason="checkpoint_failure")
             try:
                 save_status()
             except Exception:
@@ -970,6 +1036,7 @@ def start_recording(entry: dict, stream_id: str | None = None, quality: str = "b
             "url": url,
             "session_id": session_id,
             "stream_id": stream_id,
+            **({"checkpoint": checkpoint} if checkpoint else {}),
         }
 
     log.info(
@@ -1041,6 +1108,15 @@ def _persist_terminal_recording(id: str) -> bool:
     if not terminal:
         return False
 
+    if bridge_enabled():
+        try:
+            if not get_bridge().terminal(info["checkpoint"], terminal["state"], terminal["output_file"], terminal["finished_at"]):
+                return False
+        except Exception as error:
+            log.error("Terminal bridge persistence pending (watch_target_id=%s, exception_type=%s)",
+                      _safe_identifier(id), type(error).__name__)
+            return False
+
     recording_index = next(
         (i for i, recording in enumerate(recordings)
          if recording["session_id"] == info["session_id"]),
@@ -1050,10 +1126,18 @@ def _persist_terminal_recording(id: str) -> bool:
         log.warning("Open session not found for channel %s", id)
         return False
 
-    prior_status = channels_status[id].get("state")
+    target_status = channels_status.setdefault(
+        id,
+        {
+            "channel_name": info.get("channel_name", id),
+            "platform": info.get("platform", "unknown"),
+            "state": "idle",
+        },
+    )
+    prior_status = target_status.get("state")
     recording = recordings[recording_index]
     prior_recording = dict(recording)
-    channels_status[id]["state"] = terminal["state"]
+    target_status["state"] = terminal["state"]
     recording.update({
         "state": terminal["state"],
         "finished_at": terminal["finished_at"],
@@ -1098,7 +1182,7 @@ def monitor_recording(id: str):
         if not info:
             return
 
-        finished_at = datetime.now().isoformat()
+        finished_at = datetime.now(timezone.utc).isoformat() if bridge_enabled() else datetime.now().isoformat()
 
         output_file = info["output_file"]
         shutdown_interrupted = info.get("shutdown_requested", False)
@@ -1123,6 +1207,8 @@ def poll_loop():
     global active_recordings, channels_status, recordings, streams_data, lock
 
     while not shutdown_event.is_set():
+        if bridge_enabled():
+            get_bridge().replay()
         with lock:
             for channel_id in list(active_recordings):
                 if active_recordings[channel_id].get("pending_terminal"):
@@ -1186,6 +1272,9 @@ def poll_loop():
                     "Invalid watch target (watch_target_id=%s, missing_fields=id)",
                     _safe_identifier(id),
                 )
+                continue
+
+            if bridge_enabled() and not get_bridge().ready(id):
                 continue
 
             # Keep active captures and their terminal persistence independent of disable.
@@ -1280,6 +1369,8 @@ def poll_loop():
                     if refreshed_entry["url"] != url:
                         log.warning("Watch target URL changed during probe (watch_target_id=%s)", safe_target_id)
                         continue
+                    if bridge_enabled() and not get_bridge().ready(id):
+                        continue
 
                     preferred_quality = refreshed_entry.get("quality", "best")
                     available_qualities = list((probe_result.streams or {}).keys())
@@ -1355,6 +1446,9 @@ def poll_loop():
                 )
                 continue
 
+            if bridge_enabled():
+                continue
+
             try:
                 new_watchlist_lastmodified = os.path.getmtime(CONFIG_PATH)
                 if (
@@ -1398,6 +1492,24 @@ def handle_shutdown(signum, frame):
 
 def shutdown_worker():
     log.info("Shutting down worker... finishing ongoing recordings.")
+    if bridge_enabled():
+        with lock:
+            active_procs = list(active_recordings.items())
+            for channel_id, info in active_procs:
+                info["shutdown_requested"] = True
+                if not info.get("pending_terminal"):
+                    try:
+                        info["process"].terminate()
+                    except OSError:
+                        log.warning("Capture already exited during shutdown (watch_target_id=%s)", _safe_identifier(channel_id))
+        for channel_id, info in active_procs:
+            _wait_for_process(info["process"])
+            with lock:
+                if channel_id in active_recordings:
+                    info.setdefault("pending_terminal", {"state": "error", "finished_at": datetime.now(timezone.utc).isoformat(),
+                                    "output_file": info["output_file"], "returncode": info["process"].returncode})
+                    _persist_terminal_recording(channel_id)
+        return
     with lock:
         # Snapshot active processes before terminating
         active_procs = [
@@ -1496,6 +1608,12 @@ def run_worker() -> int:
         OUTPUT_DIR,
     )
     try:
+        if bridge_enabled():
+            try:
+                get_bridge().recover()
+            except Exception as error:
+                log.error("Worker bridge recovery failed; refusing launches (exception_type=%s)", type(error).__name__)
+                return 1
         poll_loop()
     finally:
         shutdown_worker()
