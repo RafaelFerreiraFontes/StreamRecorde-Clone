@@ -43,36 +43,36 @@ Avoid enterprise complexity, patterns, dependencies, and infrastructure adopted 
 
 ## 4. Current Verified Architecture
 
-The Wave 04.75 baseline is:
+Wave 05 establishes dual persistence architectures: default shared JSON compatibility and opt-in PostgreSQL 17 domain persistence with the Option A Worker bridge:
 
 ```text
-Browser -> Next.js Frontend / API proxy -> NestJS REST API
-                                               |
-                                      Shared JSON adapters
-                                               |
-                                    Python polling Worker
-                                               |
-                                           Streamlink
-                                               |
-                                      Local recording files
+Default Mode (Legacy JSON):
+Browser -> Next.js Frontend / API proxy -> NestJS REST API -> Shared JSON adapters
+Python polling Worker -> Shared JSON files -> Streamlink -> Local recording files
+
+Relational Bridge Mode (PostgreSQL + Bridge):
+Browser -> Next.js Frontend / API proxy -> NestJS REST API -> PostgreSQL 17 (Drizzle ORM)
+Python polling Worker -> Internal REST API (/internal/v1/*) -> PostgreSQL 17
+Worker -> Durable Disk Outbox (pending/ & active/) -> Internal Events
+Streamlink -> Local recording files
 ```
 
-The Worker is an independent process that reads shared configuration and writes operational state/history. The API does not currently dispatch Recording Jobs.
+The Worker is an independent process that reads configuration and writes operational state/history. The API does not currently dispatch Recording Jobs.
 
-Compose runs only frontend, api, and worker. API and Worker share runtime-data at /data. Worker writes /recordings; API mounts it read-only. The frontend has no filesystem mount.
+Compose runs postgres, frontend, api, and worker using `wave-05` application images. API and Worker share runtime-data at /data. Worker writes /recordings; API mounts it read-only. The frontend has no filesystem mount. Host ports are bound to loopback `127.0.0.1` by default.
 
 | Shared file | Current responsibility |
 | --- | --- |
-| watchlist.json | WatchTarget configuration and name-based Creator identity |
+| watchlist.json | WatchTarget configuration and name-based Creator identity (JSON mode) |
 | channels_status.json | Operational/runtime snapshot merged into API responses |
 | streams.json | Detected Stream history |
 | sessions.json | Legacy Recording history; channel_id maps to watch_target_id |
 
-Shared JSON is transitional persistence and communication for the initial local MVP. Atomic replacement and process-local locks do not provide cross-process transactions, distributed locks, or multi-worker coordination.
+Shared JSON remains default transitional persistence and communication. In relational mode, PostgreSQL is the primary domain authority, and `channels_status.json` survives as a replaceable operational snapshot.
 
 The Worker image pins streamlink==8.6.1 and installs FFmpeg. Capture directly invokes Streamlink with an .mp4 output path; no separate FFmpeg finalization step is explicitly invoked. A suffix or fake test output is not proof of playable MP4 media.
 
-The dashboard, target editing, adaptive quality, and recording location browser are implemented. PostgreSQL, persisted User, authentication, Redis/BullMQ, queue-backed Recording Jobs, SSE, Worker heartbeat, cloud integrations, and Tauri are not implemented. Use code to resolve stale statements in historical documentation.
+The dashboard, target editing, adaptive quality, recording location browser, PostgreSQL 17 relational persistence, Drizzle ORM, Option A Worker bridge, durable outbox, and legacy JSON migration CLI are implemented. Persisted User, authentication, Redis/BullMQ, queue-backed Recording Jobs, SSE, Worker heartbeat, cloud integrations, and Tauri are not implemented. Use code to resolve stale statements in historical documentation.
 
 ## 5. Target Architecture
 
@@ -302,20 +302,20 @@ Waves 07/07.5 extend existing local capture/browser functionality with deliberat
 
 ## 16. PostgreSQL Principles
 
-**Current:** shared JSON persistence. **Wave 05 target:** PostgreSQL as the primary domain database for Creator, WatchTarget, Stream, and Recording.
+Wave 05 implements PostgreSQL 17 as the primary domain database for Creator, WatchTarget, Stream, and Recording in relational mode, using Drizzle ORM and checked-in migrations (`0000`–`0003`). Default mode remains shared JSON until operator cutover.
 
 - Use normalized entities and explicit relationships.
-- Enforce meaningful integrity with foreign keys/constraints where appropriate.
-- Index actual lookup, filter, join, status, and later job-processing queries.
-- Avoid needless duplication while retaining justified immutable historical context.
-- Use reproducible migrations and test clean setup, upgrades, restart persistence, and failures.
-- Define timestamp interpretation, identifier compatibility, nullability, transactions, and deletion policies explicitly.
+- Enforce meaningful integrity with foreign keys/constraints (e.g. composite foreign key `(stream_id, watch_target_id)`).
+- Index actual lookup, filter, join, status, and execution-config queries.
+- Avoid needless duplication while retaining justified immutable historical context (`channel_name`, `platform`, `quality`).
+- Use reproducible checked-in SQL migrations and test clean setup, upgrades, restart persistence, and failures.
+- Define timestamp interpretation (typed UTC `timestamptz` for new rows; raw string preservation for legacy rows), identifier compatibility, nullability, transactions, and history-safe deletion policies explicitly.
 
-No ORM/query layer is currently selected. Compare Prisma, Drizzle, TypeORM, and direct SQL/query builder using solo maintenance, migrations, type safety, NestJS/PostgreSQL integration, overhead, testability, and future ownership/Tags. Record a justified choice.
+Drizzle ORM is the selected schema and query layer, providing TypeScript type safety with explicit SQL migrations and zero generated client binaries.
 
-Separate domain persistence from operational runtime communication. channels_status.json may remain operational during transition; not every JSON must disappear simultaneously.
+Separate domain persistence from operational runtime communication. channels_status.json remains operational during transition; not every JSON must disappear simultaneously.
 
-Reuse StreamsRepository and adapters where useful. Declare one primary authority per entity, avoid uncontrolled dual writes, and preserve ongoing Worker updates. Migration needs backup, explicit import policy, idempotence, malformed-data handling, and rollback. Follow the Wave 05 plan for concrete acceptance.
+Reuse StreamsRepository and adapters where useful. Declare one primary authority per entity, avoid uncontrolled dual writes, and preserve ongoing Worker updates. Migration uses the built-in CLI (`dry-run`, `backup`, `import`, `verify`, `cutover-check`) with backup, explicit import policy, idempotence, and forward repair. Post-cutover rollback rejects reverse export to legacy JSON because the legacy schema lacks `stream_id` and immutable context.
 
 Do not add a fictional/nullable user_id merely to anticipate Wave 05.5, or implement Tags, queue infrastructure, or cloud entities in this wave.
 
