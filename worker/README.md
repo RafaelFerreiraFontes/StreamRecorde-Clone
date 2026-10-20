@@ -1,5 +1,43 @@
 # Worker — StreamRecorder Clone
 
+## Wave 05 Persistence Bridge
+
+The default `PERSISTENCE_MODE=direct_json` preserves the JSON lifecycle described
+in the bilingual sections below. For relational operation set:
+
+```env
+PERSISTENCE_MODE=bridge
+PERSISTENCE_BRIDGE_URL=http://api:3000
+OUTBOX_DIR=/outbox
+```
+
+Provide a private non-empty `INTERNAL_API_TOKEN` matching the API, and configure
+the API with `RELATIONAL_STORAGE=true`, `PERSISTENCE_MODE=bridge` and its
+`DATABASE_URL`. Never run direct JSON and relational writers as parallel
+authorities. A non-empty bridge URL also enables bridge selection; remove it
+when returning to direct JSON before any post-cutover writes.
+
+`outbox.py` retrieves `/internal/v1/watch-targets/execution-configs`, submits
+idempotent lifecycle events to `/internal/v1/events`, and owns durable `pending/`
+events plus `active/` capture checkpoints under `OUTBOX_DIR`. Persist this directory
+across container recreation; one Worker owns it. The Worker does not connect
+directly to PostgreSQL. Domain history is committed by the API, not JSON fallback.
+
+Execution fails closed when configuration/start acknowledgement is unavailable.
+An outage during capture does not discard local media: pending terminal events
+and active checkpoints survive for replay, and success is not durable until the
+API acknowledges it. Recovery checks process identity; live/uncertain checkpoints
+block unsafe duplicate launch, while confirmed interrupted captures reconcile
+through a terminal event. Never delete pending/active files to force recovery.
+Disabling a target prevents new launches without abandoning active persistence.
+
+Use `node scripts/docker-bridge-smoke.mjs` from the root for real isolated
+containers and fake Streamlink. It checks capture persistence and restart, not
+playable media or the entire outage matrix. See the
+[database operations runbook](../api/README.database.md) for recovery, import,
+cutover and forward repair after new relational writes. Historical test counts
+below describe earlier JSON evidence, not the current candidate.
+
 ## Language / Idioma
 
 - [English](#english)
@@ -399,7 +437,7 @@ Known limitations verified in the current code:
 
 - no external queue;
 - no Redis;
-- no PostgreSQL;
+- no direct PostgreSQL connection in the Worker; bridge mode persists through the API;
 - no distributed locking;
 - `Recording → Stream` is not fully persisted in legacy `sessions.json`;
 - no final cloud upload;

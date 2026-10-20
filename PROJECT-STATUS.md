@@ -2,8 +2,7 @@
 
 ## Current Milestone
 
-Wave 04.75 is integrated on master. Wave 05 is planned, not implemented.
-Baseline inspected: b13a24d10e2ac31a6ca0a442edc2d86341210858.
+Wave 05 persistence implementation, live Docker integration QA, and documentation (Tasks 01-07) are complete and approved on branch `wave-05-postgresql-persistence`. Existing installations remain JSON-authoritative until explicit migration/cutover; no automatic user data migration has occurred.
 
 ## Product Direction
 
@@ -13,8 +12,13 @@ Cloud export to Google Drive, Dropbox, and OneDrive is secondary. A valid local 
 
 ## Current Architecture
 
-Next.js browser/proxy -> NestJS REST API -> shared JSON adapters.
-Independent Python Worker polls the same configuration/history and writes local recordings using Streamlink. FFmpeg is installed in its image; no explicit standalone finalization step is currently invoked. Compose runs frontend, api, and worker only.
+Next.js browser/proxy -> NestJS REST API -> shared JSON adapters (default) or
+Drizzle/PostgreSQL domain repositories (opt-in). In relational bridge mode the
+independent Python Worker reads execution configuration and submits lifecycle
+events through token-protected internal API routes with a durable local outbox.
+Compose includes PostgreSQL, frontend, API and Worker, using wave-05 application
+images. Streamlink writes private local recordings; FFmpeg is installed, but no
+explicit standalone finalization step is invoked.
 
 ## Implemented
 
@@ -28,7 +32,7 @@ Independent Python Worker polls the same configuration/history and writes local 
 ### API
 
 - NestJS REST domain: Creator, WatchTarget, Stream, Recording.
-- Creator grouping/read routes; identity derived from names, not independent persisted CRUD.
+- JSON Creator grouping/read routes; relational mode adds stable persisted Creator CRUD.
 - WatchTarget create/read/delete and PATCH enabled, recording_subdir, quality, URL.
 - Stream/Recording reads and Recording target filter; legacy /streamer and /session compatibility.
 - Safe read-only recording location/directory browser.
@@ -42,14 +46,14 @@ Independent Python Worker polls the same configuration/history and writes local 
 
 ### Infrastructure
 
-- Three-service local Docker Compose; API/frontend HTTP healthchecks, non-root Worker.
+- Four-service local Docker Compose including PostgreSQL; API/frontend HTTP healthchecks, non-root Worker.
 - Shared runtime-data bind mount; Worker recording write mount and API read-only mount.
 - Frontend proxy without direct filesystem access.
 
 ### Testing
 
-Repository contains deterministic Worker unittest/pytest coverage, API Jest tests, frontend component/proxy tests, and isolated fake-Streamlink Docker smoke.
-Wave task records document prior validation; runtime suites were not rerun for this documentation-only update. Fake media does not prove real capture/playability.
+Repository contains deterministic Worker unittest/pytest coverage, API Jest tests, frontend component/proxy tests, isolated fake-Streamlink Docker smoke (Scenario A: 18 gates, Scenario B: relational bridge), and isolated migration/rehearsal harness (7 phases).
+Task 07 verification: API 157 passed / 37 DB-gated skipped (all 43 database tests passed in isolated PostgreSQL test harness); frontend 25 passed; Worker unittest 198 passed; Worker pytest 198 passed; API/frontend typechecks and production builds passed; Docker smoke Scenarios A and B passed in isolated containers. Fake media verifies process mechanics and does not prove playable MP4 or live platform recovery.
 
 ## Transitional Architecture / Technical Debt
 
@@ -60,24 +64,31 @@ Wave task records document prior validation; runtime suites were not rerun for t
 | streams.json | Stream history |
 | sessions.json | Legacy Recording history (channel_id compatibility) |
 
-Shared JSON is transitional between API and Worker. Atomic replacement and process-local mutexes/locks do not provide cross-process transactions. Do not remove runtime communication just to migrate domain persistence.
+The table describes default JSON mode. In relational bridge mode PostgreSQL is
+domain authority and channels_status.json is a replaceable operational snapshot.
+Atomic JSON replacement and process-local locks do not provide cross-process
+transactions. Domain event acknowledgement is transactional in PostgreSQL.
 
-Recording.stream_id is dropped by both sessions adapters. Historical links cannot be recovered by assertion. Removing targets leaves history; future FKs/deletion policy must account for this. Creator IDs depend on display-name conventions.
+Legacy sessions omit Recording.stream_id; import preserves unknown links as
+NULL. New bridge recordings persist the Stream relationship and originating
+target context. Relational Creator IDs are stable; JSON grouping remains
+name-derived. Relational archival/deletion preserves history.
 
 ## Not Implemented Yet
 
-PostgreSQL; persisted User/local profile; authentication; ownership; Redis/BullMQ; queue-backed Recording Jobs; Tags; SSE; Worker heartbeat; Tauri; Google Drive/Dropbox/OneDrive integrations; cloud OAuth; CloudStorageConnection; optional CloudExport; automatic retention/storage limits; hosted deployment; invite-only.
+Persisted User/local profile; authentication; ownership; Redis/BullMQ; queue-backed Recording Jobs; Tags; SSE; Worker heartbeat; Tauri; Google Drive/Dropbox/OneDrive integrations; cloud OAuth; CloudStorageConnection; optional CloudExport; automatic retention/storage limits; hosted deployment; invite-only.
 
 ## Roadmap
 
 ### Completed Waves
 
-The inspected Wave 04, 04.5, and 04.75 task frontmatter is done:
-Worker reliability/probe corrections; enabled and recording-folder/browser controls; quality/URL editing and adaptive quality integration. Historical planning text is not current implementation evidence.
+The inspected Wave 04, 04.5, 04.75, and 05 task frontmatter is done:
+- Wave 04/04.5/04.75: Worker reliability/probe corrections; enabled and recording-folder/browser controls; quality/URL editing and adaptive quality integration.
+- Wave 05 ([PostgreSQL + Definitive Domain Persistence](.github/tasks/wave-05/README.md)): Architecture decisions (T01), PostgreSQL 17 + Drizzle foundation (T02), Creator & WatchTarget relational persistence (T03), Stream & Recording persistence with composite foreign key (T04), Option A Worker bridge with durable outbox and fail-closed checkpoints (T05), Legacy JSON migration CLI with transactional import and SHA-256 manifests (T06), and Docker live integration QA (Scenarios A and B) and documentation (T07).
 
-### Current Wave
+### Next Wave
 
-[Wave 05 — PostgreSQL + Definitive Domain Persistence](.github/tasks/wave-05/README.md): planned. Creator, WatchTarget, Stream, Recording become durable relational entities through an incremental transition.
+Wave 05.5 — User + authentication + ownership: planned. Local profile/account, password hashing (Argon2/bcrypt), token/session handling, and user isolation.
 
 ### Planned Waves
 
@@ -122,4 +133,4 @@ Optional hosted operation with ownership, authentication, invite limits, deploym
 
 ## Last Updated
 
-2026-10-02 — code/task inspection at the baseline above; documentation and Wave 05 planning only.
+2026-10-19: Wave 05 Task 07 implementation and host validation; Docker and pytest blockers remain explicit.

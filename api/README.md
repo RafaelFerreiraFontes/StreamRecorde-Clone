@@ -1,5 +1,36 @@
 # API — StreamRecorder Clone
 
+## Wave 05 Mode Selection
+
+The API supports JSON compatibility mode (default) and opt-in PostgreSQL mode.
+`RELATIONAL_STORAGE=true` selects relational Creator, WatchTarget, Stream and
+Recording repositories. In bridge operation also set `PERSISTENCE_MODE=bridge`
+to retire watchlist projection; never run a direct-JSON Worker against relational
+writers. Without bridge mode, the transitional target projection remains enabled.
+
+Relational mode provides stable Creator GET/POST/PATCH/DELETE routes at
+`/creators` and `/creators/:id`; JSON mode retains name-derived grouping and
+read routes. WatchTargets remain independently configured siblings. Domain and
+legacy `/streamer` and `/session` compatibility routes remain available; legacy
+unknown Stream links are not invented. Relational deletion preserves history.
+
+The internal bridge exposes `GET /internal/v1/watch-targets/execution-configs`
+and `POST /internal/v1/events`. Both require `x-internal-token` matching a non-empty
+`INTERNAL_API_TOKEN`. Event acknowledgement follows transactional persistence;
+duplicate/replayed events are handled idempotently. Do not forward this token to
+the browser or log it. The public local console is still unauthenticated.
+
+`DatabaseService` owns PostgreSQL connections and Drizzle migrations. Configure
+`DATABASE_URL`, run `pnpm --dir api db:migrate`, then start the API. Startup does
+not import legacy data. The production image includes
+`node dist/database/migrate.js` and `node dist/migrator/cli.js`; local CLI entry
+points are `pnpm --dir api migrate:legacy dry-run|backup|import|verify|cutover-check`
+with explicit paths/options. See [README.database.md](README.database.md) for
+safe examples, the authority ledger, schema, outage behavior and rollback policy.
+
+The bilingual sections below describe JSON compatibility unless explicitly
+qualified. Historical test counts are not evidence for the current candidate.
+
 ## Language / Idioma
 
 - [English](#english)
@@ -61,7 +92,7 @@ The API currently exposes two groups of contracts:
   - Streamer
   - Session
 
-Persistence is still based on JSON files shared with the Worker rather than on a relational database or an external queue.
+Default persistence uses shared JSON; opt-in relational mode uses PostgreSQL and the internal Worker bridge. No external queue is required.
 
 ## Responsibilities
 
@@ -357,18 +388,18 @@ The tests cover:
 
 The current suite has 68 tests. Run `pnpm test` and `pnpm exec tsc --noEmit`; the repository-level `pnpm test:smoke` adds the isolated API/Worker cross-writer evidence.
 
-There are no tests for frontend, auth, cloud upload, Redis, PostgreSQL, external queue, or SSE in this layer.
+PostgreSQL repository, internal bridge and migrator tests supplement the API suites; frontend tests live in the frontend package. Auth, cloud, Redis, queues and SSE remain outside this wave.
 
 ## Known Limitations
 
 Known limitations verified in the current code:
 
-- persistence still depends on local JSON files;
-- `Creator.id` is derived from `display_name` and is not yet an independent persistent identity;
+- default JSON mode depends on local JSON files;
+- JSON-mode `Creator.id` is name-derived; relational mode has stable persisted identity and CRUD;
 - `Recording.stream_id` is not persisted in the legacy `sessions.json`;
-- `WatchTarget.enabled` is enforced by the Worker; the API exposes the persisted value but has no general update route beyond `recording_subdir`;
+- `WatchTarget.enabled` is enforced by the Worker; PATCH supports enabled, quality, URL and recording_subdir;
 - there is no authentication;
-- there is no PostgreSQL;
+- PostgreSQL activation requires explicit migration and coordinated mode selection;
 - there is no external Redis queue;
 - there are no cloud storage providers implemented;
 - there is no WebSocket/SSE;

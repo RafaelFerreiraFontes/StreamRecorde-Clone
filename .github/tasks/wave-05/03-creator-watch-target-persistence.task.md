@@ -4,14 +4,14 @@ wave: 05
 order: 03
 depends_on:
   - 02-postgresql-foundation-schema.task.md
-status: planned
+status: done
 ---
 
 # Wave 05 — Task 03 — Creator and WatchTarget Relational Persistence
 
 ## Status and Preconditions
 
-planned — execution has not started. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
+done — Creator and WatchTarget relational persistence implemented, validated, independently reviewed, and accepted by human gate for downstream Wave 05 work. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
 
 ## Context / Objective
 
@@ -38,14 +38,14 @@ Do not import user JSON or perform Stream/Recording authority cutover here. This
 
 ## Acceptance Criteria
 
-- [ ] Creator has stable independently persisted identity and bounded domain/API CRUD.
-- [ ] Name mapping, collisions, rename, and delete/history behavior are explicit and tested.
-- [ ] WatchTarget fields/IDs/relationships survive round trips and restart.
-- [ ] Required modern/legacy API and existing frontend creation flow remain compatible.
-- [ ] Three targets under one Creator remain independent after edit, disable, and delete.
-- [ ] Required transitional configuration reaches the existing Worker without silently creating dual primaries.
-- [ ] DB/configuration-projection failures are explicit and do not falsely report successful durable mutation.
-- [ ] No Stream/Recording authority switch, user-data import, or frontend redesign occurred.
+- [x] Creator has stable independently persisted identity and bounded domain/API CRUD.
+- [x] Name mapping, collisions, rename, and delete/history behavior are explicit and tested.
+- [x] WatchTarget fields/IDs/relationships survive round trips and restart.
+- [x] Required modern/legacy API and existing frontend creation flow remain compatible.
+- [x] Three targets under one Creator remain independent after edit, disable, and delete.
+- [x] Required transitional configuration reaches the existing Worker without silently creating dual primaries.
+- [x] DB/configuration-projection failures are explicit and do not falsely report successful durable mutation.
+- [x] No Stream/Recording authority switch, user-data import, or frontend redesign occurred.
 
 ## Automated Tests / Verification
 

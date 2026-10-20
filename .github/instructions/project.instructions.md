@@ -43,36 +43,36 @@ Avoid enterprise complexity, patterns, dependencies, and infrastructure adopted 
 
 ## 4. Current Verified Architecture
 
-The Wave 04.75 baseline is:
+Wave 05 establishes dual persistence architectures: default shared JSON compatibility and opt-in PostgreSQL 17 domain persistence with the Option A Worker bridge:
 
 ```text
-Browser -> Next.js Frontend / API proxy -> NestJS REST API
-                                               |
-                                      Shared JSON adapters
-                                               |
-                                    Python polling Worker
-                                               |
-                                           Streamlink
-                                               |
-                                      Local recording files
+Default Mode (Legacy JSON):
+Browser -> Next.js Frontend / API proxy -> NestJS REST API -> Shared JSON adapters
+Python polling Worker -> Shared JSON files -> Streamlink -> Local recording files
+
+Relational Bridge Mode (PostgreSQL + Bridge):
+Browser -> Next.js Frontend / API proxy -> NestJS REST API -> PostgreSQL 17 (Drizzle ORM)
+Python polling Worker -> Internal REST API (/internal/v1/*) -> PostgreSQL 17
+Worker -> Durable Disk Outbox (pending/ & active/) -> Internal Events
+Streamlink -> Local recording files
 ```
 
-The Worker is an independent process that reads shared configuration and writes operational state/history. The API does not currently dispatch Recording Jobs.
+The Worker is an independent process that reads configuration and writes operational state/history. The API does not currently dispatch Recording Jobs.
 
-Compose runs only frontend, api, and worker. API and Worker share runtime-data at /data. Worker writes /recordings; API mounts it read-only. The frontend has no filesystem mount.
+Compose runs postgres, frontend, api, and worker using `wave-05` application images. API and Worker share runtime-data at /data. Worker writes /recordings; API mounts it read-only. The frontend has no filesystem mount. Host ports are bound to loopback `127.0.0.1` by default.
 
 | Shared file | Current responsibility |
 | --- | --- |
-| watchlist.json | WatchTarget configuration and name-based Creator identity |
+| watchlist.json | WatchTarget configuration and name-based Creator identity (JSON mode) |
 | channels_status.json | Operational/runtime snapshot merged into API responses |
 | streams.json | Detected Stream history |
 | sessions.json | Legacy Recording history; channel_id maps to watch_target_id |
 
-Shared JSON is transitional persistence and communication for the initial local MVP. Atomic replacement and process-local locks do not provide cross-process transactions, distributed locks, or multi-worker coordination.
+Shared JSON remains default transitional persistence and communication. In relational mode, PostgreSQL is the primary domain authority, and `channels_status.json` survives as a replaceable operational snapshot.
 
 The Worker image pins streamlink==8.6.1 and installs FFmpeg. Capture directly invokes Streamlink with an .mp4 output path; no separate FFmpeg finalization step is explicitly invoked. A suffix or fake test output is not proof of playable MP4 media.
 
-The dashboard, target editing, adaptive quality, and recording location browser are implemented. PostgreSQL, persisted User, authentication, Redis/BullMQ, queue-backed Recording Jobs, SSE, Worker heartbeat, cloud integrations, and Tauri are not implemented. Use code to resolve stale statements in historical documentation.
+The dashboard, target editing, adaptive quality, recording location browser, PostgreSQL 17 relational persistence, Drizzle ORM, Option A Worker bridge, durable outbox, and legacy JSON migration CLI are implemented. Persisted User, authentication, Redis/BullMQ, queue-backed Recording Jobs, SSE, Worker heartbeat, cloud integrations, and Tauri are not implemented. Use code to resolve stale statements in historical documentation.
 
 ## 5. Target Architecture
 
@@ -302,20 +302,20 @@ Waves 07/07.5 extend existing local capture/browser functionality with deliberat
 
 ## 16. PostgreSQL Principles
 
-**Current:** shared JSON persistence. **Wave 05 target:** PostgreSQL as the primary domain database for Creator, WatchTarget, Stream, and Recording.
+Wave 05 implements PostgreSQL 17 as the primary domain database for Creator, WatchTarget, Stream, and Recording in relational mode, using Drizzle ORM and checked-in migrations (`0000`–`0003`). Default mode remains shared JSON until operator cutover.
 
 - Use normalized entities and explicit relationships.
-- Enforce meaningful integrity with foreign keys/constraints where appropriate.
-- Index actual lookup, filter, join, status, and later job-processing queries.
-- Avoid needless duplication while retaining justified immutable historical context.
-- Use reproducible migrations and test clean setup, upgrades, restart persistence, and failures.
-- Define timestamp interpretation, identifier compatibility, nullability, transactions, and deletion policies explicitly.
+- Enforce meaningful integrity with foreign keys/constraints (e.g. composite foreign key `(stream_id, watch_target_id)`).
+- Index actual lookup, filter, join, status, and execution-config queries.
+- Avoid needless duplication while retaining justified immutable historical context (`channel_name`, `platform`, `quality`).
+- Use reproducible checked-in SQL migrations and test clean setup, upgrades, restart persistence, and failures.
+- Define timestamp interpretation (typed UTC `timestamptz` for new rows; raw string preservation for legacy rows), identifier compatibility, nullability, transactions, and history-safe deletion policies explicitly.
 
-No ORM/query layer is currently selected. Compare Prisma, Drizzle, TypeORM, and direct SQL/query builder using solo maintenance, migrations, type safety, NestJS/PostgreSQL integration, overhead, testability, and future ownership/Tags. Record a justified choice.
+Drizzle ORM is the selected schema and query layer, providing TypeScript type safety with explicit SQL migrations and zero generated client binaries.
 
-Separate domain persistence from operational runtime communication. channels_status.json may remain operational during transition; not every JSON must disappear simultaneously.
+Separate domain persistence from operational runtime communication. channels_status.json remains operational during transition; not every JSON must disappear simultaneously.
 
-Reuse StreamsRepository and adapters where useful. Declare one primary authority per entity, avoid uncontrolled dual writes, and preserve ongoing Worker updates. Migration needs backup, explicit import policy, idempotence, malformed-data handling, and rollback. Follow the Wave 05 plan for concrete acceptance.
+Reuse StreamsRepository and adapters where useful. Declare one primary authority per entity, avoid uncontrolled dual writes, and preserve ongoing Worker updates. Migration uses the built-in CLI (`dry-run`, `backup`, `import`, `verify`, `cutover-check`) with backup, explicit import policy, idempotence, and forward repair. Post-cutover rollback rejects reverse export to legacy JSON because the legacy schema lacks `stream_id` and immutable context.
 
 Do not add a fictional/nullable user_id merely to anticipate Wave 05.5, or implement Tags, queue infrastructure, or cloud entities in this wave.
 
@@ -789,3 +789,26 @@ Summarize large outputs, reference specific files/ranges, and do not resend unre
 Terra's limit is three directed diagnostic attempts for the same cause before `coordinator-review`. Luna's separate limit is three formal `review/QA -> fixing -> Coordinator validation -> review/QA` cycles before `coordinator-review`. Never combine these counters.
 
 Luna performs independent QA without editing implementation and focuses on acceptance criteria, regressions, architecture, compatibility, final diff, and validation results. After a green Coordinator gate, Luna does not reconstruct Terra's entire investigation; any additional investigation must be narrowly targeted at the suspected point.
+
+## 40.6 Contextual Skill Discovery and Use
+
+Discover repository skills in `.agents/skills/*/SKILL.md` using the environment's skill catalog or a targeted filesystem listing. Read the frontmatter `name` and `description` to select skills matching the task, affected boundaries, and current workflow stage. Read and follow the selected skill's relevant instructions and referenced resources before applying it. Use relevant skills when available in the environment; do not load every skill body or follow every reference indiscriminately. Reassess selection when the plan, diff, or review findings reveal another affected boundary.
+
+Current skill entry points, selected by relevance rather than as a mandatory checklist:
+
+| Task or boundary | Skill name under `.agents/skills/` |
+| --- | --- |
+| Scope, Git ownership, baseline, and validation planning | `streamrecorder-task-preflight` |
+| Domain identity, relationships, and legacy mappings | `streamrecorder-domain-contracts` |
+| PostgreSQL schema, migrations, repositories, import, and authority | `streamrecorder-postgres-persistence` |
+| Worker polling, probe, capture, recovery, and shutdown | `streamrecorder-worker-lifecycle` |
+| API contracts, proxy, dashboard, and filesystem browsing | `streamrecorder-api-frontend` |
+| Isolated containers, mounts, volumes, and smoke validation | `streamrecorder-docker-validation` |
+| Privacy, secrets, paths, platform access, and exposure | `streamrecorder-security-compliance` |
+| Independent diff, acceptance-criteria, and validation audit | `streamrecorder-review-gate` |
+
+Coordinator (including Delegate Coordinator in the reserve workflow) identifies relevant available skills during preflight. Sol consults architectural skills applicable to the plan; Terra applies implementation and testing skills appropriate to the approved scope; Luna selects review skills from the actual diff and independently verifies the evidence. Direct agent sessions also discover and select skills for their role.
+
+Keep handoffs compact: include selected skill names/paths and a brief reason within existing fields such as `RELEVANT FILES`, `CONSTRAINTS`, `VALIDATION COMMANDS`, or `KNOWN LIMITATIONS`. Recipients verify applicability and availability; references do not prove that a procedure or check was executed. Do not copy whole skill bodies into agent files or handoffs. If a relevant skill is unavailable, report the gap and continue under permanent instructions where required evidence can still be obtained; use existing blocking rules if required validation cannot be completed.
+
+Skills complement permanent project/MVP instructions and the authorized task; they do not override them, expand scope, authorize later tasks, or replace validation gates. Preserve current models, tools, automatic handoffs, task states, `AGENT_RESULT` protocols, review/debugging limits, Coordinator validation, and the final human gate. Skill use grants no commit or push authority. Do not edit skill contents without an objective task-related reason.

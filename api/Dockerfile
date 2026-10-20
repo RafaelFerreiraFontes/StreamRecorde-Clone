@@ -10,9 +10,10 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY tsconfig.build.json tsconfig.json nest-cli.json ./
 COPY src ./src
+COPY drizzle ./drizzle
 
 # Install dependencies (including dev) and build
-RUN pnpm install --frozen-lockfile && pnpm build
+RUN pnpm install --frozen-lockfile --ignore-scripts && pnpm build
 
 # Prune dev dependencies in builder to produce lean production node_modules
 RUN pnpm prune --prod && \
@@ -28,6 +29,7 @@ WORKDIR /app
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/package.json ./package.json
+COPY --from=builder --chown=node:node /app/drizzle ./drizzle
 
 # Create config directory for runtime JSON files
 RUN mkdir -p /data && chown node:node /data && chmod 2775 /data

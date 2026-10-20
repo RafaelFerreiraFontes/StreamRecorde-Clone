@@ -4,14 +4,14 @@ wave: 05
 order: 04
 depends_on:
   - 03-creator-watch-target-persistence.task.md
-status: planned
+status: done
 ---
 
 # Wave 05 — Task 04 — Stream and Recording Relational Persistence
 
 ## Status and Preconditions
 
-planned — execution has not started. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
+done — Stream and Recording relational persistence implemented, validated, independently reviewed, and accepted by human gate for downstream Wave 05 work. Live migration upgrade (0000 → 0001) with pre-existing data preservation, composite FK integrity, and official Drizzle migrator idempotency verified. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
 
 ## Context / Objective
 
@@ -37,14 +37,14 @@ A passing repository/API suite does not prove ongoing Worker activity reaches Po
 
 ## Acceptance Criteria
 
-- [ ] Stream and Recording CRUD/lifecycle repository operations persist correctly with approved transactions.
-- [ ] Modern/legacy API history, filters, identifiers, local output metadata, and states remain compatible.
-- [ ] New stream_id links are durable and target-consistent; invalid references/mismatches are rejected.
-- [ ] Multiple attempts, Stream reuse/later broadcasts, timestamps, and restart persistence are tested.
-- [ ] Unknown historical links remain unknown under explicit policy.
-- [ ] Deletion/orphan handling preserves history and local files according to 05-T01.
-- [ ] DB read/write failure and transactional rollback behavior are explicit at this repository boundary.
-- [ ] No claim or implementation of complete Worker bridge or live-installation cutover occurs.
+- [x] Stream and Recording CRUD/lifecycle repository operations persist correctly with approved transactions.
+- [x] Modern/legacy API history, filters, identifiers, local output metadata, and states remain compatible.
+- [x] New stream_id links are durable and target-consistent; invalid references/mismatches are rejected.
+- [x] Multiple attempts, Stream reuse/later broadcasts, timestamps, and restart persistence are tested.
+- [x] Unknown historical links remain unknown under explicit policy.
+- [x] Deletion/orphan handling preserves history and local files according to 05-T01.
+- [x] DB read/write failure and transactional rollback behavior are explicit at this repository boundary.
+- [x] No claim or implementation of complete Worker bridge or live-installation cutover occurs.
 
 ## Automated Tests / Verification
 

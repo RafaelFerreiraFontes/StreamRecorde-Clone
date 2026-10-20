@@ -13,6 +13,7 @@ import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
 import { CreateStreamerDto, StreamerDto } from "./dto/streamer.dto";
 import { CreateWatchTargetDto } from "./dto/watch-target.dto";
+import { CreateCreatorDto, PatchCreatorDto } from "./dto/creator.dto";
 import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
 import {
   RecordingJsonAdapter,
@@ -46,6 +47,18 @@ function getConfigPaths() {
 
 @Injectable()
 export class StreamsRepository {
+  async createCreator(_dto: CreateCreatorDto): Promise<Creator> {
+    throw new BadRequestException("Creator mutations require relational storage");
+  }
+
+  async updateCreator(_id: string, _dto: PatchCreatorDto): Promise<Creator> {
+    throw new BadRequestException("Creator mutations require relational storage");
+  }
+
+  async removeCreator(_id: string): Promise<void> {
+    throw new BadRequestException("Creator mutations require relational storage");
+  }
+
   /** Serializes read-modify-write operations inside this Node process only. */
   private readonly mutex = new Mutex();
 

@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792108800000,
+      "tag": "0000_database_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792195200000,
+      "tag": "0001_recording_context",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792281600000,
+      "tag": "0002_worker_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792445810601,
+      "tag": "0003_migration_manifests",
+      "breakpoints": true
+    }
+  ]
+}

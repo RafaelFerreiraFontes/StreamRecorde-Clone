@@ -4,14 +4,14 @@ wave: 05
 order: 05
 depends_on:
   - 04-stream-recording-persistence.task.md
-status: planned
+status: done
 ---
 
 # Wave 05 — Task 05 — Worker Persistence Bridge
 
 ## Status and Preconditions
 
-planned — execution has not started. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
+done — Worker persistence bridge implemented, validated, independently reviewed, and accepted by human gate for downstream Wave 05 work. Live cross-process HTTP integration (Worker Python → HTTP → API NestJS → PostgreSQL), durable outbox and fail-closed active checkpoint recovery, token fail-closed authentication, and outage matrix verified. Read the [wave specification](README.md) and complete the predecessor's independent validation/review and human acceptance gate before starting. The shared scope, security, testing, and lifecycle constraints apply to this task.
 
 ## Context / Objective
 
@@ -60,14 +60,14 @@ No legacy migrator, installation-wide cutover, Redis, BullMQ, Recording Jobs, he
 
 ## Acceptance Criteria
 
-- [ ] Selected persistence strategy is implemented and traceable to 05-T01.
-- [ ] New fake-platform Worker Stream/Recording activity is stored in PostgreSQL with valid IDs/relationships.
-- [ ] Configuration refresh, enabled, URL, quality, Stream reuse, attempts, and subprocess behavior remain compatible.
-- [ ] Every outage/restart/replay matrix row has deterministic evidence with isolated real PostgreSQL.
-- [ ] Terminal persistence recovers without false durable success, lost valid local output, or duplicate capture/records.
-- [ ] One primary authority and compatibility/runtime representation ownership are explicit.
-- [ ] channels_status.json treatment follows the approved operational policy.
-- [ ] No user installation is automatically migrated/cut over and no queue/auth/cloud feature is added.
+- [x] Selected persistence strategy is implemented and traceable to 05-T01.
+- [x] New fake-platform Worker Stream/Recording activity is stored in PostgreSQL with valid IDs/relationships.
+- [x] Configuration refresh, enabled, URL, quality, Stream reuse, attempts, and subprocess behavior remain compatible.
+- [x] Every outage/restart/replay matrix row has deterministic evidence with isolated real PostgreSQL.
+- [x] Terminal persistence recovers without false durable success, lost valid local output, or duplicate capture/records.
+- [x] One primary authority and compatibility/runtime representation ownership are explicit.
+- [x] channels_status.json treatment follows the approved operational policy.
+- [x] No user installation is automatically migrated/cut over and no queue/auth/cloud feature is added.
 
 ## Automated Tests / Verification Commands
 
@@ -76,6 +76,19 @@ Use fake Streamlink/probe/process behavior, temporary media/storage, and isolate
 Run python -m unittest discover -s worker -p test_worker.py; python -m pytest worker/test_worker.py -q; API regression/typecheck/build when its boundary changes; docker compose config --quiet; pnpm test:smoke; selected DB outage/restart/replay commands; git diff --check.
 
 No automated platform or live-stream dependency. Fake media is not proof of playable MP4. Record exact commands and unsupported environmental checks honestly.
+
+### Evidence Breakdown & Task 07 Opportunities
+
+- **API regression suite:** 140 tests passed.
+- **Worker unit suite:** 198 tests passed.
+- **PostgreSQL test harness:** 38 tests executed (32 database-dependent tests + 6 unit tests).
+- **Cross-process integration:** Real Python Worker in bridge mode -> HTTP -> NestJS API (`RELATIONAL_STORAGE=true`) -> isolated PostgreSQL container demonstrated across all lifecycle stages.
+- **Recovery & Security:** Pending terminal recovery across database restart and process restart verified; replay idempotency verified; internal endpoint token authentication verified fail-closed.
+- **Known environment limitations:** `pnpm test:smoke` requires stopped normal-stack containers (`streamrecorder-api-1` / `streamrecorder-worker-1`) and was not executed; host `pytest` is not installed on system Python (standard `unittest` passed all 198 tests).
+- **Identified opportunities for Task 07 (Wave Integration QA):**
+  1. Automated test fixture simulating lost HTTP response after commit with automatic Worker retry.
+  2. Targeted race condition test between probe and pre-launch refresh.
+  3. Standalone bridge smoke test harness independent of normal-stack user containers.
 
 ## Risks / Rollback
 

@@ -2,7 +2,9 @@
 
 ## Status and Objective
 
-Planning only: all seven tasks are planned. No PostgreSQL code, dependency, schema, migration, or Compose change is implemented by this reorganization.
+Completed: Tasks 01 through 07 are done. Wave 05 is formally completed on branch `wave-05-postgresql-persistence`. Existing installations remain JSON-authoritative until explicit operator cutover; code completion does not attest an automatic installation cutover.
+
+Scenario A: `pnpm test:smoke` uses synthetic JSON by default, without normal containers/data. Scenario B: `node scripts/docker-bridge-smoke.mjs` uses real PostgreSQL/API/Worker/frontend containers, fake Streamlink, random loopback ports and project-owned disposable volumes. See the [database runbook](../../../api/README.database.md) for import/replay/outage and rollback matrix coverage beyond this focused smoke. Both require successful image preparation; fake captures do not prove playable media.
 
 Progressively replace shared JSON as primary domain persistence for Creator, WatchTarget, Stream, and Recording while preserving the functional Wave 04.75 local baseline. Local Recording Storage remains primary; no cloud account or hosted service is required.
 
@@ -25,13 +27,13 @@ Domain persistence and runtime communication must be investigated separately. ch
 
 | Order | Task | Dependency | Status |
 | --- | --- | --- | --- |
-| 01 | [Persistence Architecture and Cutover Decisions](01-persistence-architecture-decisions.task.md) | [Wave 04.75 integration QA](../wave-04.75/05-wave-integration-qa-documentation.task.md) | planned |
-| 02 | [PostgreSQL Foundation and Schema](02-postgresql-foundation-schema.task.md) | 05-T01 | planned |
-| 03 | [Creator and WatchTarget Relational Persistence](03-creator-watch-target-persistence.task.md) | 05-T02 | planned |
-| 04 | [Stream and Recording Relational Persistence](04-stream-recording-persistence.task.md) | 05-T03 | planned |
-| 05 | [Worker Persistence Bridge](05-worker-persistence-bridge.task.md) | 05-T04 | planned |
-| 06 | [Legacy JSON Migration and Authority Cutover](06-legacy-json-migration-cutover.task.md) | 05-T05 | planned |
-| 07 | [Wave Integration QA and Documentation](07-wave-integration-qa-documentation.task.md) | 05-T06 | planned |
+| 01 | [Persistence Architecture and Cutover Decisions](01-persistence-architecture-decisions.task.md) ([decisions](persistence-architecture-decisions.md)) | [Wave 04.75 integration QA](../wave-04.75/05-wave-integration-qa-documentation.task.md) | done |
+| 02 | [PostgreSQL Foundation and Schema](02-postgresql-foundation-schema.task.md) | 05-T01 | done |
+| 03 | [Creator and WatchTarget Relational Persistence](03-creator-watch-target-persistence.task.md) | 05-T02 | done |
+| 04 | [Stream and Recording Relational Persistence](04-stream-recording-persistence.task.md) | 05-T03 | done |
+| 05 | [Worker Persistence Bridge](05-worker-persistence-bridge.task.md) | 05-T04 | done |
+| 06 | [Legacy JSON Migration and Authority Cutover](06-legacy-json-migration-cutover.task.md) | 05-T05 | done |
+| 07 | [Wave Integration QA and Documentation](07-wave-integration-qa-documentation.task.md) | 05-T06 | done |
 
 ```text
 05-T01 Decisions -> 05-T02 Foundation -> 05-T03 Creator/WatchTarget
@@ -81,19 +83,19 @@ Out of scope: User persistence, authentication, password hashing, JWT, ownership
 
 These criteria require the complete wave, not task 05-T01 alone:
 
-- [ ] PostgreSQL is primary for Creator, WatchTarget, Stream, and Recording; the four concepts remain separate.
-- [ ] New Worker lifecycle activity reaches PostgreSQL with valid durable relationships, not only imported snapshots.
-- [ ] Stable Creator identity, independent WatchTargets, compatible IDs/configuration, and history-safe deletion are verified.
-- [ ] Current modern/legacy API behavior is compatible where required, including filtering, validation, filesystem locations, and frontend use.
-- [ ] New stream_id links are durable and historical unknown links/timestamps are handled according to explicit policy.
-- [ ] Existing local installations migrate through opt-in dry-run, backup, verification, restart, idempotent replay, and rollback rehearsal.
-- [ ] Schema/migrations are reproducible for clean and existing installations; DB/service restarts preserve domain state and valid local media.
-- [ ] One primary authority per entity is explicit; no uncontrolled dual primary or silent stale-DB fallback remains.
-- [ ] DB outage before/during capture and terminal write, plus service restart/replay, has tested failure/recovery behavior without false durable success or blind duplicate capture.
-- [ ] Docker Desktop/Windows local Compose, persistent volume, health/readiness, configuration, and isolated test DB work without real committed secrets.
-- [ ] Local recordings remain primary/private and valid media is not discarded by persistence/export failures; no cloud is required.
-- [ ] No out-of-scope future feature is introduced.
-- [ ] Final API, Worker, frontend, database, migration, Docker/integration, and documentation QA passes with reproducible evidence.
+- [x] PostgreSQL is primary for Creator, WatchTarget, Stream, and Recording; the four concepts remain separate.
+- [x] New Worker lifecycle activity reaches PostgreSQL with valid durable relationships, not only imported snapshots.
+- [x] Stable Creator identity, independent WatchTargets, compatible IDs/configuration, and history-safe deletion are verified.
+- [x] Current modern/legacy API behavior is compatible where required, including filtering, validation, filesystem locations, and frontend use.
+- [x] New stream_id links are durable and historical unknown links/timestamps are handled according to explicit policy.
+- [x] Existing local installations migrate through opt-in dry-run, backup, verification, restart, idempotent replay, and rollback rehearsal.
+- [x] Schema/migrations are reproducible for clean and existing installations; DB/service restarts preserve domain state and valid local media.
+- [x] One primary authority per entity is explicit; no uncontrolled dual primary or silent stale-DB fallback remains.
+- [x] DB outage before/during capture and terminal write, plus service restart/replay, has tested failure/recovery behavior without false durable success or blind duplicate capture.
+- [x] Docker Desktop/Windows local Compose, persistent volume, health/readiness, configuration, and isolated test DB work without real committed secrets.
+- [x] Local recordings remain primary/private and valid media is not discarded by persistence/export failures; no cloud is required.
+- [x] No out-of-scope future feature is introduced.
+- [x] Final API, Worker, frontend, database, migration, Docker/integration, and documentation QA passes with reproducible evidence.
 
 ## Validation and Workflow
 

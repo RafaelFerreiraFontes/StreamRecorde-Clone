@@ -4,8 +4,18 @@ This is a technical API + Worker testing console, not the final product UI. It p
 
 ## Architecture
 
-Browser → Next.js `/api/backend/*` → NestJS → shared JSON adapters.
-The independent Python Worker reads `watchlist.json` and persists runtime state to `channels_status.json`, `streams.json`, and `sessions.json`. NestJS translates these into domain responses. The frontend never reads these files, starts the Worker, invokes media tools, or serves recorded media.
+Browser → Next.js `/api/backend/*` → NestJS → JSON adapters (default) or PostgreSQL repositories (opt-in relational mode).
+In JSON mode the independent Python Worker reads `watchlist.json` and persists runtime state/history in shared JSON. In bridge mode it obtains execution configuration and submits durable events through the internal API, backed by PostgreSQL and its local outbox. The frontend never reads these files, connects to PostgreSQL, starts the Worker, invokes media tools, or serves recorded media.
+
+Wave 05 relational mode makes stable Creator CRUD available in the API. The
+existing frontend remains a grouping/target-management console, not a standalone
+Creator CRUD interface. It must not infer relational capability from API liveness
+or claim a name-derived JSON identity is a stable relational UUID. The public
+proxy does not expose `/internal/v1/*` or forward `INTERNAL_API_TOKEN`.
+Polling, independent collection errors/stale data and mutation reconciliation
+remain unchanged across persistence modes. Use
+`node scripts/docker-bridge-smoke.mjs` from the root for isolated bridge frontend
+health checks; this is not browser interaction coverage of every relational flow.
 
 Next.js App Router, TypeScript, React, Tailwind CSS and native fetch. A shared provider polls the four domain collections every 5 seconds while the document is visible. Navigation reuses the same provider. Overlapping refreshes are deduplicated; mutations wait for an in-flight refresh and then request fresh data. Each collection has independent loading/error/stale-data handling. Request diagnostics retain the latest 80 requests in memory.
 
@@ -61,7 +71,7 @@ Diagnostics only: `GET /streamer` and `GET /session`. Individual entity GET rout
 
 ## Current limitations
 
-- Creator identity is derived from display name. The selected/new name is submitted as `creator_id` and translated at the legacy boundary; no Creator mutation exists.
+- In JSON mode Creator identity is derived from display name. The existing create-target form submits the selected/new name as `creator_id`; relational API Creator CRUD is available separately, but a complete relational Creator-management UI is not implemented.
 - `enabled` is enforced by the Worker, and can be changed using the row-level Enabled switch.
 - There is no Worker heartbeat. API success cannot prove the Worker process is alive, and persisted recording state can be stale.
 - Worker polling defaults to 60 seconds plus probe time; faster browser refreshes do not speed up detection. No WebSocket or SSE is used.

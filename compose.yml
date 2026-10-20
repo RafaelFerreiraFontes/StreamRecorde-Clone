@@ -1,14 +1,32 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-streamrecorder}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-streamrecorder_dev_local}"
+      POSTGRES_DB: "${POSTGRES_DB:-streamrecorder}"
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-streamrecorder} -d ${POSTGRES_DB:-streamrecorder}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   frontend:
     build:
       context: ./frontend
-    image: streamrecorder-frontend:wave-04.75
+    image: streamrecorder-frontend:wave-05
     restart: unless-stopped
     environment:
       PORT: "3001"
       API_BASE_URL: http://api:3000
     ports:
-      - "${FRONTEND_HOST_PORT:-3001}:3001"
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-3001}:3001"
     depends_on:
       - api
     healthcheck:
@@ -21,14 +39,16 @@ services:
   api:
     build:
       context: ./api
-    image: streamrecorder-api:wave-04.75
+    image: streamrecorder-api:wave-05
     restart: unless-stopped
     environment:
       PORT: "3000"
       CONFIG_DIR: /data
       RECORDINGS_ROOT: /recordings
+      RELATIONAL_STORAGE: "false"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-streamrecorder}:${POSTGRES_PASSWORD:-streamrecorder_dev_local}@postgres:5432/${POSTGRES_DB:-streamrecorder}"
     ports:
-      - "${API_HOST_PORT:-3000}:3000"
+      - "127.0.0.1:${API_HOST_PORT:-3000}:3000"
     volumes:
       - ${RUNTIME_DATA_DIR:-./runtime-data}:/data
       - ${RECORDINGS_DIR:-./recordings}:/recordings:ro
@@ -42,13 +62,17 @@ services:
   worker:
     build:
       context: ./worker
-    image: streamrecorder-worker:wave-04.75
+    image: streamrecorder-worker:wave-05
     restart: unless-stopped
     init: true
     environment:
       CONFIG_DIR: /data
       OUTPUT_DIR: /recordings
+      PERSISTENCE_MODE: direct_json
       POLL_INTERVAL: "${WORKER_POLL_INTERVAL:-60}"
     volumes:
       - ${RUNTIME_DATA_DIR:-./runtime-data}:/data
       - ${RECORDINGS_DIR:-./recordings}:/recordings
+
+volumes:
+  postgres_data:

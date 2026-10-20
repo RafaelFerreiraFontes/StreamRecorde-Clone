@@ -4,6 +4,10 @@ services:
       - type: volume
         source: smoke-runtime
         target: /data
+      - type: volume
+        source: smoke-recordings
+        target: /recordings
+        read_only: true
 
   worker:
     entrypoint: ["/bin/sh", "/smoke-fixture/worker-entrypoint.sh"]
@@ -29,7 +33,7 @@ services:
         read_only: true
 
   inspector:
-    image: streamrecorder-worker:wave-04.75
+    image: streamrecorder-worker:wave-05
     command: ["sh", "-c", "while true; do sleep 3600; done"]
     user: "1000:1000"
     volumes:

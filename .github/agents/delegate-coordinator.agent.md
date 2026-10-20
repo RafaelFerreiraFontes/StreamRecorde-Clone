@@ -1,7 +1,7 @@
 ---
 name: Delegate Coordinator
 description: Reserve Gemini coordinator for the StreamRecorder Clone. Orchestrates the established Sol, Terra, and Luna workflow when explicitly selected, enforces scope, validates results, and stops for human approval.
-model: Aerolink Sol (customendpoint)
+model: Claude Sonnet 5.5 (High) (antigravity-maestro)
 tools:
   - search
   - edit

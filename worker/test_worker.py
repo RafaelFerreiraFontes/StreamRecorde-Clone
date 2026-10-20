@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 import io
+import uuid
 from typing import Any
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -58,6 +59,142 @@ class FakeProcess:
     def poll(self):
         """Check if process has terminated."""
         return self.returncode if self._wait_called else None
+
+
+class OutboxTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.target = str(uuid.uuid4())
+        self.session = str(uuid.uuid4())
+        self.stream = str(uuid.uuid4())
+        self.delivered = []
+        self.now = 100.0
+        self.box = worker.Outbox(self.directory.name, "http://example.test", "test-token",
+                                transport=self.transport, clock=lambda: self.now, jitter=lambda: 0.5)
+
+    def transport(self, method, path, payload=None):
+        self.delivered.append(payload)
+        if payload["event_type"] == "recording.start":
+            return {"acknowledged": True, "session_id": payload["session_id"], "stream_id": self.stream}
+        return {"acknowledged": True, "session_id": payload.get("session_id"), "state": payload.get("state")}
+
+    def checkpoint(self, pid=None):
+        checkpoint = {"session_id": self.session, "stream_id": self.stream, "watch_target_id": self.target,
+                      "event_id": str(uuid.uuid4()), "started_at": "2026-10-19T10:00:00Z",
+                      "output_file": "private.mp4", "phase": "capturing", "pid": pid, "create_time": None}
+        self.box.checkpoint(checkpoint)
+        return checkpoint
+
+    def test_atomic_fifo_and_saturation(self):
+        first = self.box.event("stream.offline", self.target)
+        second = self.box.event("stream.offline", self.target)
+        self.box.enqueue(first)
+        self.box.enqueue(second)
+        self.assertEqual(len(self.box.files()), 2)
+        self.assertFalse(list(self.box.pending.glob(".tmp-*")))
+        self.assertFalse(self.box.ready(self.target))
+        self.assertTrue(self.box.replay())
+        self.assertEqual(self.delivered, [first, second])
+        with patch.object(self.box, "files", return_value=[Path("0000000000000001_000000000001_event.json")] * 1000):
+            with self.assertRaisesRegex(RuntimeError, "saturated"):
+                self.box.enqueue(self.box.event("stream.offline", self.target))
+
+    def test_retry_backoff_keeps_immutable_event(self):
+        event = self.box.event("stream.offline", self.target)
+        self.box.enqueue(event)
+        with patch.object(self.box, "transport", side_effect=OSError("unavailable")) as transport:
+            self.assertFalse(self.box.replay())
+            self.assertFalse(self.box.replay())
+            self.assertEqual(transport.call_count, 1)
+        self.assertEqual(self.box._read(self.box.files()[0]), event)
+        self.now += 3
+        self.assertTrue(self.box.replay())
+
+    def test_start_ack_checkpoint_and_terminal_ack_cleanup(self):
+        checkpoint = self.box.start(self.target, self.session, None, "private.mp4", "720p")
+        self.assertEqual(checkpoint["phase"], "start_committed")
+        self.assertEqual(checkpoint["stream_id"], self.stream)
+        self.box.launched(checkpoint, FakeProcess())
+        self.assertTrue(self.box.terminal(checkpoint, "finished", "private.mp4"))
+        self.assertFalse(list(self.box.active.glob("*.json")))
+        self.assertTrue(self.box.ready(self.target))
+
+    def test_missing_alive_and_ambiguous_pid_fail_closed(self):
+        for pid in (None, os.getpid(), -1):
+            with self.subTest(pid=pid):
+                self.checkpoint(pid)
+                self.box.recover()
+                self.assertIn(self.target, self.box.blocked_targets)
+                self.assertTrue((self.box.active / (self.session + ".json")).exists())
+                self.assertFalse(self.delivered)
+
+    def test_verified_dead_pid_emits_restart_error(self):
+        self.checkpoint(987654)
+        module = __import__(worker.Outbox.__module__, fromlist=["pid_is_dead"])
+        with patch.object(module, "pid_is_dead", return_value=True):
+            self.box.recover()
+        self.assertEqual(self.delivered[0]["state"], "error")
+        self.assertEqual(self.delivered[0]["reason"], "worker_restart_interruption")
+        self.assertFalse(list(self.box.active.glob("*.json")))
+
+    def test_atomic_replace_failure_keeps_prior_checkpoint(self):
+        checkpoint = self.checkpoint()
+        module = __import__(worker.Outbox.__module__, fromlist=["os"])
+        with patch.object(module.os, "replace", side_effect=OSError("disk unavailable")):
+            with self.assertRaises(OSError):
+                self.box.checkpoint({**checkpoint, "phase": "capturing"})
+        self.assertEqual(self.box._read(self.box.active / (self.session + ".json")), checkpoint)
+        self.assertFalse(list(self.box.active.glob(".tmp-*")))
+
+    def test_permission_uncertainty_does_not_signal_or_unblock_other_targets(self):
+        module = __import__(worker.Outbox.__module__, fromlist=["pid_is_dead"])
+        if os.name != "nt":
+            with patch.object(module.os, "kill", side_effect=PermissionError) as signal_check:
+                self.assertFalse(module.pid_is_dead(123))
+            signal_check.assert_called_once_with(123, 0)
+        self.checkpoint(os.getpid())
+        self.box.recover()
+        self.assertFalse(self.box.ready(self.target))
+        self.assertTrue(self.box.ready(str(uuid.uuid4())))
+
+    def test_lost_start_ack_replays_same_identity_and_blocks_unlaunched_attempt(self):
+        with patch.object(self.box, "transport", side_effect=OSError("lost acknowledgement")):
+            with self.assertRaises(RuntimeError):
+                self.box.start(self.target, self.session, self.stream, "private.mp4", "best")
+        event_id = self.box._read(self.box.files()[0])["event_id"]
+        restarted = worker.Outbox(self.directory.name, "http://example.test", "test-token", transport=self.transport)
+        restarted.recover()
+        self.assertEqual(self.delivered[-1]["event_id"], event_id)
+        self.assertIn(self.target, restarted.blocked_targets)
+        self.assertTrue((restarted.active / (self.session + ".json")).exists())
+
+    def test_config_outage_backs_off_without_json_fallback(self):
+        with patch.object(self.box, "transport", side_effect=OSError("unavailable")) as transport:
+            with self.assertRaises(OSError):
+                self.box.configs()
+            with self.assertRaisesRegex(RuntimeError, "backoff"):
+                self.box.configs()
+        self.assertEqual(transport.call_count, 1)
+
+    def test_malformed_event_is_retained_and_blocks_new_launches(self):
+        event = self.box.event("stream.offline", self.target)
+        self.box.enqueue(event)
+        self.box.files()[0].write_text("{invalid", encoding="utf-8")
+        self.assertFalse(self.box.replay())
+        self.assertFalse(self.box.ready(self.target))
+        self.assertEqual(len(self.box.files()), 1)
+
+    def test_terminal_outage_survives_restart_with_same_event_id(self):
+        checkpoint = self.checkpoint(123)
+        with patch.object(self.box, "transport", side_effect=OSError("unavailable")):
+            self.assertFalse(self.box.terminal(checkpoint, "finished", "private.mp4"))
+        event_id = checkpoint["terminal_event"]["event_id"]
+        restarted = worker.Outbox(self.directory.name, "http://example.test", "test-token", transport=self.transport)
+        restarted.recover()
+        self.assertEqual(self.delivered[-1]["event_id"], event_id)
+        self.assertEqual(self.delivered[-1]["state"], "finished")
+        self.assertFalse(restarted.files())
 
 
 class ProbeClassificationTests(unittest.TestCase):
@@ -395,6 +532,18 @@ class ProbeObservabilityTests(unittest.TestCase):
 
 
 class WorkerLifecycleTests(unittest.TestCase):
+    def test_bridge_requires_explicit_internal_token(self):
+        for token in (None, "", "   "):
+            with self.subTest(token=token), tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, {"PERSISTENCE_MODE": "bridge", "OUTBOX_DIR": directory}):
+                    if token is None:
+                        os.environ.pop("INTERNAL_API_TOKEN", None)
+                    else:
+                        os.environ["INTERNAL_API_TOKEN"] = token
+                    with patch.object(worker, "bridge", None):
+                        with self.assertRaisesRegex(RuntimeError, "INTERNAL_API_TOKEN must be configured"):
+                            worker.get_bridge()
+
     def setUp(self):
         self.original_globals = {
             name: getattr(worker, name) for name in (
@@ -429,6 +578,113 @@ class WorkerLifecycleTests(unittest.TestCase):
     def restore_worker_globals(self):
         for name, value in self.original_globals.items():
             setattr(worker, name, value)
+
+    def bridge_fixture(self):
+        environment = patch.dict(os.environ, {"PERSISTENCE_MODE": "bridge"})
+        environment.start()
+        self.addCleanup(environment.stop)
+        target_id = str(uuid.uuid4())
+        entry = {"id": target_id, "channel_name": "fake", "platform": "twitch",
+                 "url": "https://example.test/fake", "quality": "1080p", "enabled": True}
+        events = []
+
+        def transport(method, path, event=None):
+            if method == "GET":
+                return [entry]
+            events.append(event)
+            return {"acknowledged": True, "session_id": event.get("session_id"),
+                    "stream_id": event.get("stream_id"), "state": event.get("state")}
+
+        outbox = worker.Outbox(Path(self.temp_dir.name) / "outbox", "http://example.test", "test-token", transport=transport)
+        bridge_patch = patch.object(worker, "bridge", outbox)
+        bridge_patch.start()
+        self.addCleanup(bridge_patch.stop)
+        worker.channels_status[target_id] = {"state": "idle"}
+        return entry, outbox, events
+
+    def test_bridge_acknowledges_before_child_and_never_writes_domain_json(self):
+        entry, outbox, events = self.bridge_fixture()
+
+        def launch(*args, **kwargs):
+            self.assertEqual(events[0]["event_type"], "recording.start")
+            self.assertFalse(outbox.files())
+            self.assertEqual(outbox._read(next(outbox.active.glob("*.json")))["phase"], "start_committed")
+            return FakeProcess()
+
+        with patch.object(worker.subprocess, "Popen", side_effect=launch), patch.object(worker.threading, "Thread"):
+            worker.start_recording(entry, quality="720p")
+        info = worker.active_recordings[entry["id"]]
+        self.assertEqual(events[0]["quality"], "1080p")
+        Path(info["output_file"]).write_bytes(b"fake-media")
+        worker.monitor_recording(entry["id"])
+        self.assertEqual(events[-1]["state"], "finished")
+        self.assertNotIn(entry["id"], worker.active_recordings)
+        self.assertEqual(Path(worker.SESSIONS_PATH).read_text(), "[]")
+        self.assertEqual(Path(worker.STREAMS_PATH).read_text(), "[]")
+
+    def test_bridge_start_outage_blocks_child_and_keeps_checkpoint(self):
+        entry, outbox, events = self.bridge_fixture()
+        with patch.object(outbox, "transport", side_effect=OSError("unavailable")), patch.object(worker.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(RuntimeError, "acknowledgement pending"):
+                worker.start_recording(entry)
+        launch.assert_not_called()
+        self.assertIn(entry["id"], outbox.blocked_targets)
+        self.assertEqual(len(list(outbox.active.glob("*.json"))), 1)
+        self.assertEqual(len(outbox.files()), 1)
+
+    def test_bridge_terminal_outage_retains_media_and_retries(self):
+        entry, outbox, events = self.bridge_fixture()
+        with patch.object(worker.subprocess, "Popen", return_value=FakeProcess()), patch.object(worker.threading, "Thread"):
+            worker.start_recording(entry)
+        info = worker.active_recordings[entry["id"]]
+        output = Path(info["output_file"])
+        output.write_bytes(b"retained-media")
+        with patch.object(outbox, "transport", side_effect=OSError("unavailable")):
+            worker.monitor_recording(entry["id"])
+        self.assertEqual(output.read_bytes(), b"retained-media")
+        self.assertEqual(worker.channels_status[entry["id"]]["state"], "recording")
+        self.assertIn("pending_terminal", info)
+        outbox.next_retry = 0
+        self.assertTrue(worker._persist_terminal_recording(entry["id"]))
+        self.assertEqual(worker.channels_status[entry["id"]]["state"], "finished")
+
+    def test_bridge_poll_refresh_and_blocked_target_guards(self):
+        entry, outbox, events = self.bridge_fixture()
+        with patch.object(worker.WatchTargetJsonAdapter, "read", side_effect=AssertionError("JSON read")):
+            self.assertEqual(worker.load_watchlist(), [entry])
+        with patch.object(outbox, "configs", side_effect=[[entry], [{**entry, "enabled": False}]]), patch.object(
+            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "available", streams={"best": {}})
+        ), patch.object(worker, "start_recording") as launch, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+        launch.assert_not_called()
+        outbox.blocked_targets.add(entry["id"])
+        with patch.object(worker, "is_live") as probe, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                worker.poll_loop()
+        probe.assert_not_called()
+
+    def test_bridge_launch_failure_is_terminal_and_does_not_keep_active_attempt(self):
+        entry, outbox, events = self.bridge_fixture()
+        with patch.object(worker.subprocess, "Popen", side_effect=OSError("launch failure")):
+            with self.assertRaises(OSError):
+                worker.start_recording(entry)
+        self.assertEqual(events[-1]["event_type"], "recording.terminal")
+        self.assertEqual(events[-1]["state"], "error")
+        self.assertEqual(events[-1]["reason"], "launch_failure")
+        self.assertFalse(worker.active_recordings)
+        self.assertFalse(list(outbox.active.glob("*.json")))
+
+    def test_bridge_shutdown_terminates_reaps_and_acknowledges_error(self):
+        entry, outbox, events = self.bridge_fixture()
+        process = FakeProcess()
+        with patch.object(worker.subprocess, "Popen", return_value=process), patch.object(worker.threading, "Thread"):
+            worker.start_recording(entry)
+        worker.shutdown_worker()
+        self.assertTrue(process._wait_called)
+        self.assertEqual(process.returncode, -15)
+        self.assertEqual(events[-1]["state"], "error")
+        self.assertFalse(worker.active_recordings)
 
     def test_start_recording_persists_recording_immediately(self):
         entry = {
