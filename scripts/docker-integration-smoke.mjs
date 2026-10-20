@@ -574,7 +574,16 @@ async function cleanup() {
 }
 
 async function main() {
-  environment = { ...process.env, SMOKE_RUNTIME_VOLUME: volumes.runtime, SMOKE_RECORDINGS_VOLUME: volumes.recordings, SMOKE_STATE_VOLUME: volumes.state, SMOKE_FIXTURE_DIR: resolve(root, "scripts", "docker-smoke") };
+  environment = {
+    ...process.env,
+    API_HOST_PORT: "0",
+    FRONTEND_HOST_PORT: "0",
+    POSTGRES_PORT: "0",
+    SMOKE_RUNTIME_VOLUME: volumes.runtime,
+    SMOKE_RECORDINGS_VOLUME: volumes.recordings,
+    SMOKE_STATE_VOLUME: volumes.state,
+    SMOKE_FIXTURE_DIR: resolve(root, "scripts", "docker-smoke"),
+  };
   if (!synthetic) {
   normalSnapshot = Object.fromEntries(await Promise.all(normalContainers.map(async (name) => [name, await inspectNormal(name)])));
   if (JSON.stringify(normalSnapshot[normalContainers[0]].audit) !== JSON.stringify(normalSnapshot[normalContainers[1]].audit)) throw new Error("Normal API and Worker canonical data audits differ");

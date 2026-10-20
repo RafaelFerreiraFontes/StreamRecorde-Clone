@@ -79,20 +79,66 @@ try {
 
   // 2. Worker Docker restart with pending outbox event recovery and zero duplicate captures:
   const restartTarget = await request("/watch-targets", "POST", { creator_id: creator.id, channel_name: "restart_target", platform: "twitch", url: "https://smoke.invalid/restart", quality: "best" });
-  compose("run", "--rm", "--no-deps", "worker", "python", "-c", "import json,pathlib; p=pathlib.Path('/smoke-state/scenarios.json'); data=json.loads(p.read_text()); data['https://smoke.invalid/restart']={'id':'restart_target','probes':['LIVE'],'captures':[{'mode':'success','capture_exit':True}]}; p.write_text(json.dumps(data))");
+  compose("run", "--rm", "--no-deps", "worker", "python", "-c", "import json,pathlib; p=pathlib.Path('/smoke-state/scenarios.json'); data=json.loads(p.read_text()); data['https://smoke.invalid/restart']={'id':'restart_target','probes':['LIVE','OFFLINE'],'captures':[{'mode':'hold-until-release','completion_gate':'pending-restart','capture_exit':True}]}; p.write_text(json.dumps(data))");
 
-  compose("restart", "worker");
-  const restartRecording = await eventually(async () => (await request("/recordings")).find((entry) => entry.watch_target_id === restartTarget.id && entry.state === "finished"), "Worker restart capture completion");
-  assert(restartRecording.stream_id);
+  // Start worker to pick up the new target and begin capture
+  compose("start", "worker");
+
+  // Worker detects LIVE, starts capture, recording.start is durably acknowledged
+  const activeRecording = await eventually(async () => (await request("/recordings")).find((entry) => entry.watch_target_id === restartTarget.id && entry.state === "recording"), "recording.start durably acknowledged");
+  assert(activeRecording.stream_id);
+  const initialSessionId = activeRecording.session_id;
+  const initialStreamId = activeRecording.stream_id;
+
+  // Interrupt API availability before the terminal event can be acknowledged
+  compose("stop", "api");
+
+  // Release fake Streamlink capture gate; Streamlink exits and writes media
+  compose("run", "--rm", "--no-deps", "worker", "python", "-c", "import pathlib; pathlib.Path('/smoke-state/release-pending-restart').touch()");
+
+  // Wait for worker polling cycle to detect process exit and enqueue terminal event in pending/
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+
+  // Confirm terminal event exists in the persistent outbox/pending/ volume with stable event UUID
+  const pendingFilesRaw = compose("run", "--rm", "--no-deps", "worker", "python", "-c", "import json,glob,pathlib; files=glob.glob('/outbox/pending/*.json'); print(json.dumps([json.loads(pathlib.Path(f).read_text()) for f in files]))").trim();
+  const pendingEvents = JSON.parse(pendingFilesRaw);
+  const terminalEvent = pendingEvents.find((e) => e.event_type === "recording.terminal" && e.session_id === initialSessionId);
+  assert(terminalEvent, "Terminal event must exist in outbox/pending/ while API is unavailable");
+  assert(terminalEvent.event_id, "Pending event must have event_id");
+  const originalEventId = terminalEvent.event_id;
+
+  // Stop Worker while preserving outbox volume
+  compose("stop", "worker");
+
+  // Recover API availability
+  compose("start", "api");
+  await eventually(() => request("/health"), "API recovered after interruption");
+
+  // Start Worker; Worker startup recover() replays the original pending event
+  compose("start", "worker");
+
+  // Confirm Worker replays original event and PostgreSQL finalizes the recording
+  const finalizedRecording = await eventually(async () => {
+    const list = await request("/recordings");
+    return list.find((entry) => entry.session_id === initialSessionId && entry.state === "finished");
+  }, "Worker replayed pending event and recording finalized");
+  assert.equal(finalizedRecording.stream_id, initialStreamId, "Stream identity must be preserved across restart replay");
+
+  // Verify outbox directories are cleanly drained after successful replay
+  await eventually(async () => {
+    const outboxRaw = compose("run", "--rm", "--no-deps", "worker", "python", "-c", "import json,glob; pending=glob.glob('/outbox/pending/*.json'); active=glob.glob('/outbox/active/*.json'); print(json.dumps({'pending':len(pending),'active':len(active)}))").trim();
+    const counts = JSON.parse(outboxRaw);
+    return counts.pending === 0 && counts.active === 0;
+  }, "outbox pending and active drained after replay");
 
   // Verify zero duplicate captures for restartTarget:
   const allRestartRecordings = (await request("/recordings")).filter((entry) => entry.watch_target_id === restartTarget.id);
   assert.equal(allRestartRecordings.length, 1, "Must not create duplicate recording attempts on restart recovery");
 
   // Verify local media file is intact in recordings volume:
-  const mediaVerification = compose("run", "--rm", "--no-deps", "worker", "python", "-c", `import os; assert os.path.exists('${restartRecording.output_file}'), 'Media file missing'; print('media-ok')`).trim();
+  const mediaVerification = compose("run", "--rm", "--no-deps", "worker", "python", "-c", `import os; assert os.path.exists('${finalizedRecording.output_file}'), 'Media file missing'; print('media-ok')`).trim();
   assert(mediaVerification.includes("media-ok"), "Local media file must be intact in recordings volume");
-  console.log("PASS bridge: Worker Docker restart recovery, PostgreSQL identity preservation, zero duplicates, and media integrity verified");
+  console.log("PASS bridge: Worker Docker restart with real pending outbox recovery, PostgreSQL identity preservation, zero duplicates, and media integrity verified");
 
   assert.equal(docker(["ps", "-aq", "--filter", "label=com.docker.compose.project=streamrecorder"]).trim(), normal);
   console.log("PASS bridge: migrations, Creator/target CRUD, real Worker fake capture, Stream link, frontend health, database/API restart durability; fake media is not playable-media evidence");

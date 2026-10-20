@@ -1,7 +1,5 @@
 services:
   api:
-    ports: !override
-      - "127.0.0.1::3000"
     volumes:
       - type: volume
         source: smoke-runtime
