@@ -1,4 +1,25 @@
-# PostgreSQL Foundation
+# Wave 05 PostgreSQL Persistence And Operations
+
+Tasks 01-06 implement the persistence transition: Drizzle/PostgreSQL schema,
+stable Creator/WatchTarget CRUD, relational Stream/Recording history, internal
+Worker events, durable outbox recovery, and explicit legacy migration/cutover.
+Task 07 integrates QA/documentation; implementation does not imply final wave
+acceptance or automatic activation of an existing installation.
+
+Default Compose remains JSON-authoritative (`RELATIONAL_STORAGE=false`, Worker
+`PERSISTENCE_MODE=direct_json`). Opt-in relational bridge mode makes PostgreSQL
+the single authority for all four domain entities; JSON is retained for backup
+and compatibility, not fallback. `channels_status.json` may remain operational,
+but is not imported as domain history. Media remains private local filesystem data.
+
+For a clean synthetic container rehearsal run
+`node scripts/docker-bridge-smoke.mjs` from the repository root. This uses real
+PostgreSQL/API/Worker/frontend containers, fake Streamlink, disposable named
+volumes and random loopback ports. It checks migrations, fresh capture/Stream
+linkage and database/API restart durability, not the full outage/migration matrix.
+Use `node scripts/test-db-foundation.mjs` for the isolated repository/import,
+failure/recovery and migration suites described below. Neither command may use
+normal runtime-data, recordings or database volumes.
 
 ## Legacy JSON Migration And Authority Cutover (Task 06)
 
@@ -147,10 +168,11 @@ It covers identity, raw timestamps, unknown Stream links, late-failure rollback,
 conflicts, verification and checkpoint preservation. The `migrator` Jest suites
 cover non-destructive parsing, duplicate keys, checksums and cutover failures.
 
-Wave 05 Task 02 adds an inert PostgreSQL foundation. The current JSON adapters
-and `StreamsRepository` remain the sole production authority until the explicit
-cutover task. The API starts without connecting to PostgreSQL; connection and
-migration failures are reported only when the database service is used.
+Task 02 originally introduced the inert foundation. Tasks 03-06 now provide
+opt-in relational repositories, bridge events and cutover tooling. JSON remains
+the default authority until explicit activation. The database service is lazy;
+HTTP liveness alone does not prove relational readiness. Check database-backed
+routes and authenticated execution configuration before launching the Worker.
 
 ## Local database
 

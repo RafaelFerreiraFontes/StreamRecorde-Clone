@@ -13,7 +13,7 @@ COPY src ./src
 COPY drizzle ./drizzle
 
 # Install dependencies (including dev) and build
-RUN pnpm install --frozen-lockfile && pnpm build
+RUN pnpm install --frozen-lockfile --ignore-scripts && pnpm build
 
 # Prune dev dependencies in builder to produce lean production node_modules
 RUN pnpm prune --prod && \

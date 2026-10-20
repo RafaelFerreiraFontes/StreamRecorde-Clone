@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: qa
+      POSTGRES_PASSWORD: qa_disposable_only
+      POSTGRES_DB: qa
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U qa -d qa]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  api:
+    image: streamrecorder-api:wave-05
+    build: ../../api
+    environment:
+      PORT: "3000"
+      CONFIG_DIR: /data
+      RECORDINGS_ROOT: /recordings
+      DATABASE_URL: postgresql://qa:qa_disposable_only@postgres:5432/qa
+      RELATIONAL_STORAGE: "true"
+      PERSISTENCE_MODE: bridge
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?Disposable test token required}
+    ports: ["127.0.0.1::3000"]
+    volumes:
+      - runtime:/data
+      - recordings:/recordings:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+  frontend:
+    image: streamrecorder-frontend:wave-05
+    build: ../../frontend
+    environment:
+      PORT: "3001"
+      API_BASE_URL: http://api:3000
+    ports: ["127.0.0.1::3001"]
+  worker:
+    image: streamrecorder-worker:wave-05
+    build: ../../worker
+    init: true
+    entrypoint: [/bin/sh, /smoke-fixture/worker-entrypoint.sh]
+    environment:
+      CONFIG_DIR: /data
+      OUTPUT_DIR: /recordings
+      POLL_INTERVAL: "2"
+      PERSISTENCE_MODE: bridge
+      PERSISTENCE_BRIDGE_URL: http://api:3000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?Disposable test token required}
+      OUTBOX_DIR: /outbox
+      PATH: /tmp/streamrecorder-smoke-bin:/usr/local/bin:/usr/bin:/bin
+      SMOKE_FIXTURE_SCENARIOS: /smoke-state/scenarios.json
+      SMOKE_FIXTURE_STATE_DIR: /smoke-state
+      SMOKE_FIXTURE_EVENTS_DIR: /smoke-state/events
+    volumes:
+      - runtime:/data
+      - recordings:/recordings
+      - outbox:/outbox
+      - state:/smoke-state
+      - ./:/smoke-fixture:ro
+volumes:
+  database:
+  runtime:
+  recordings:
+  outbox:
+  state:

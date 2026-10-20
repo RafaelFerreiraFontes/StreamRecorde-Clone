@@ -20,7 +20,7 @@ services:
   frontend:
     build:
       context: ./frontend
-    image: streamrecorder-frontend:wave-04.75
+    image: streamrecorder-frontend:wave-05
     restart: unless-stopped
     environment:
       PORT: "3001"
@@ -39,12 +39,13 @@ services:
   api:
     build:
       context: ./api
-    image: streamrecorder-api:wave-04.75
+    image: streamrecorder-api:wave-05
     restart: unless-stopped
     environment:
       PORT: "3000"
       CONFIG_DIR: /data
       RECORDINGS_ROOT: /recordings
+      RELATIONAL_STORAGE: "false"
       DATABASE_URL: "postgresql://${POSTGRES_USER:-streamrecorder}:${POSTGRES_PASSWORD:-streamrecorder_dev_local}@postgres:5432/${POSTGRES_DB:-streamrecorder}"
     ports:
       - "${API_HOST_PORT:-3000}:3000"
@@ -61,12 +62,13 @@ services:
   worker:
     build:
       context: ./worker
-    image: streamrecorder-worker:wave-04.75
+    image: streamrecorder-worker:wave-05
     restart: unless-stopped
     init: true
     environment:
       CONFIG_DIR: /data
       OUTPUT_DIR: /recordings
+      PERSISTENCE_MODE: direct_json
       POLL_INTERVAL: "${WORKER_POLL_INTERVAL:-60}"
     volumes:
       - ${RUNTIME_DATA_DIR:-./runtime-data}:/data

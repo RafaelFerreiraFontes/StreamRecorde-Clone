@@ -6,7 +6,9 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "test:smoke": "node scripts/docker-integration-smoke.mjs"
+    "test:smoke": "node scripts/docker-integration-smoke.mjs && node scripts/docker-bridge-smoke.mjs",
+    "test:smoke:json": "node scripts/docker-integration-smoke.mjs",
+    "test:smoke:bridge": "node scripts/docker-bridge-smoke.mjs"
   },
   "keywords": [],
   "author": "",

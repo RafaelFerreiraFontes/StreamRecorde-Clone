@@ -9,6 +9,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const project = `streamrecorder-smoke-${randomBytes(6).toString("hex")}`;
 const volumes = Object.fromEntries(["runtime", "recordings", "state"].map((kind) => [kind, `${project}-${kind}`]));
 const normalContainers = ["streamrecorder-api-1", "streamrecorder-worker-1"];
+const synthetic = !process.argv.includes("--normal-source");
 const canonicalFiles = ["watchlist.json", "channels_status.json", "sessions.json", "streams.json"];
 const gateBPollIntervalMilliseconds = 5000;
 const gateBPostReductionWaitMilliseconds = gateBPollIntervalMilliseconds + 500;
@@ -301,8 +302,8 @@ async function runGateC2() {
   const recording = initial.sessions[0];
   if (initial.counts.probe !== 1 || initial.counts.capture !== 1) throw new Error("Gate C2 initial fixture counts failed");
   const immutableSnapshot = JSON.stringify({ hashes: initial.hashes, bytes: initial.bytes });
-  await docker(["run", "--rm", "--user", "0:0", "-v", `${volumes.runtime}:/data`, "--entrypoint", "sh", "streamrecorder-worker:wave-03.5", "-ceu", "chown root:root /data /data/*.json; chmod 0555 /data; chmod 0444 /data/*.json"]);
-  await docker(["run", "--rm", "--user", "1000:1000", "-v", `${volumes.runtime}:/data`, "--entrypoint", "sh", "streamrecorder-worker:wave-03.5", "-ceu", "probe=/data/.c2-sibling-create-must-fail; if (: > \"$probe\") 2>/dev/null; then rm -f \"$probe\"; exit 1; fi"]);
+  await docker(["run", "--rm", "--user", "0:0", "-v", `${volumes.runtime}:/data`, "--entrypoint", "sh", "streamrecorder-worker:wave-05", "-ceu", "chown root:root /data /data/*.json; chmod 0555 /data; chmod 0444 /data/*.json"]);
+  await docker(["run", "--rm", "--user", "1000:1000", "-v", `${volumes.runtime}:/data`, "--entrypoint", "sh", "streamrecorder-worker:wave-05", "-ceu", "probe=/data/.c2-sibling-create-must-fail; if (: > \"$probe\") 2>/dev/null; then rm -f \"$probe\"; exit 1; fi"]);
   await releaseGate("c2-terminal");
   const terminalLogDeadline = Date.now() + 12000;
   while (Date.now() < terminalLogDeadline) {
@@ -317,10 +318,10 @@ async function runGateC2() {
   await delay(gateCPollOpportunityMilliseconds);
   const deniedAfterWait = await inspectorJson(cStateSource(identifier));
   if (JSON.stringify({ hashes: deniedAfterWait.hashes, bytes: deniedAfterWait.bytes }) !== immutableSnapshot || deniedAfterWait.counts.probe !== 1 || deniedAfterWait.counts.capture !== 1) throw new Error("Gate C2 denial did not preserve canonical bytes for a retry opportunity");
-  await docker(["run", "--rm", "--user", "0:0", "-v", `${volumes.runtime}:/data`, "--entrypoint", "python", "streamrecorder-worker:wave-03.5", "-c", "import json,os,tempfile; p='/data/watchlist.json'; v=json.load(open(p)); v[0]['enabled']=False; fd,t=tempfile.mkstemp(prefix='.watchlist.',dir='/data'); f=os.fdopen(fd,'w'); json.dump(v,f,separators=(',',':')); f.close(); os.chown(t,0,0); os.chmod(t,0o444); os.replace(t,p)"]);
+  await docker(["run", "--rm", "--user", "0:0", "-v", `${volumes.runtime}:/data`, "--entrypoint", "python", "streamrecorder-worker:wave-05", "-c", "import json,os,tempfile; p='/data/watchlist.json'; v=json.load(open(p)); v[0]['enabled']=False; fd,t=tempfile.mkstemp(prefix='.watchlist.',dir='/data'); f=os.fdopen(fd,'w'); json.dump(v,f,separators=(',',':')); f.close(); os.chown(t,0,0); os.chmod(t,0o444); os.replace(t,p)"]);
   await delay(gateCPollOpportunityMilliseconds);
-  await docker(["run", "--rm", "--user", "0:0", "-v", `${volumes.runtime}:/data`, "--entrypoint", "sh", "streamrecorder-worker:wave-03.5", "-ceu", "chown 1000:1000 /data /data/*.json; chmod 2775 /data; chmod 0664 /data/*.json"]);
-  await docker(["run", "--rm", "--user", "1000:1000", "-v", `${volumes.runtime}:/data`, "--entrypoint", "sh", "streamrecorder-worker:wave-03.5", "-ceu", "python -c 'import json,os,tempfile; p=\"/data/watchlist.json\"; v=json.load(open(p)); v[0][\"enabled\"]=False; fd,t=tempfile.mkstemp(prefix=\".watchlist.\",dir=\"/data\"); f=os.fdopen(fd,\"w\"); json.dump(v,f,separators=(\",\",\":\")); f.close(); os.replace(t,p)'; probe=/data/.c2-recovery-probe; printf c2 > \"$probe.tmp\"; mv \"$probe.tmp\" \"$probe\"; test \"$(cat \"$probe\")\" = c2; rm \"$probe\""]);
+  await docker(["run", "--rm", "--user", "0:0", "-v", `${volumes.runtime}:/data`, "--entrypoint", "sh", "streamrecorder-worker:wave-05", "-ceu", "chown 1000:1000 /data /data/*.json; chmod 2775 /data; chmod 0664 /data/*.json"]);
+  await docker(["run", "--rm", "--user", "1000:1000", "-v", `${volumes.runtime}:/data`, "--entrypoint", "sh", "streamrecorder-worker:wave-05", "-ceu", "python -c 'import json,os,tempfile; p=\"/data/watchlist.json\"; v=json.load(open(p)); v[0][\"enabled\"]=False; fd,t=tempfile.mkstemp(prefix=\".watchlist.\",dir=\"/data\"); f=os.fdopen(fd,\"w\"); json.dump(v,f,separators=(\",\",\":\")); f.close(); os.replace(t,p)'; probe=/data/.c2-recovery-probe; printf c2 > \"$probe.tmp\"; mv \"$probe.tmp\" \"$probe\"; test \"$(cat \"$probe\")\" = c2; rm \"$probe\""]);
   const recovered = await waitForCState(identifier, (state) => state.sessions.length === 1 && state.sessions[0].session_id === recording.session_id && state.sessions[0].state === "finished" && state.sessions[0].finished_at !== null, "Gate C2 did not persist the original terminal recording after recovery");
   if (recovered.status?.state !== "finished" || assertSingleOpenStream(recovered, identifier).id !== stream.id || recovered.sessions[0].output_file !== recording.output_file || recovered.counts.probe !== 1 || recovered.counts.capture !== 1 || recovered.events.filter((event) => event.operation === "capture_exit").length !== 1) throw new Error("Gate C2 recovery changed identities or duplicated fixture work");
   const childCheck = (await compose("exec", "-T", "worker", "sh", "-ceu", "! ps -eo args | grep -F '[s]treamlink-fixture.py'")).stdout;
@@ -398,7 +399,7 @@ async function stopWorkerForGateD() {
 
 async function resetGateD(scenario, clearWatchlist = false) {
   await stopWorkerForGateD();
-  await docker(["run", "--rm", "-v", `${volumes.recordings}:/recordings`, "--entrypoint", "sh", "streamrecorder-worker:wave-03.5", "-ceu", "rm -rf /recordings/*"]);
+  await docker(["run", "--rm", "-v", `${volumes.recordings}:/recordings`, "--entrypoint", "sh", "streamrecorder-worker:wave-05", "-ceu", "rm -rf /recordings/*"]);
   const prepared = await inspectorJson(resetGateDSource, { env: { GATE_D_SCENARIO: JSON.stringify(scenario), ...(clearWatchlist ? { GATE_D_CLEAR_WATCHLIST: "1" } : {}) } });
   if (!Array.isArray(prepared.scenario_ids)) throw new Error("Gate D isolated reset failed");
 }
@@ -550,7 +551,7 @@ async function runGateD() {
 async function inspectNormal(name) {
   const inspected = JSON.parse((await docker(["inspect", name])).stdout)[0];
   if (!inspected || inspected.State?.Running) throw new Error(`Normal container ${name} must exist and be stopped`);
-  const audit = jsonLine((await docker(["run", "--rm", "--volumes-from", `${name}:ro`, "--entrypoint", "python", "streamrecorder-worker:wave-03.5", "-c", auditSource])).stdout);
+  const audit = jsonLine((await docker(["run", "--rm", "--volumes-from", `${name}:ro`, "--entrypoint", "python", "streamrecorder-worker:wave-05", "-c", auditSource])).stdout);
   if (!audit.valid?.every(Boolean)) throw new Error(`Normal container ${name} has invalid canonical JSON shapes`);
   return { id: inspected.Id, status: inspected.State.Status, audit };
 }
@@ -574,9 +575,11 @@ async function cleanup() {
 
 async function main() {
   environment = { ...process.env, SMOKE_RUNTIME_VOLUME: volumes.runtime, SMOKE_RECORDINGS_VOLUME: volumes.recordings, SMOKE_STATE_VOLUME: volumes.state, SMOKE_FIXTURE_DIR: resolve(root, "scripts", "docker-smoke") };
+  if (!synthetic) {
   normalSnapshot = Object.fromEntries(await Promise.all(normalContainers.map(async (name) => [name, await inspectNormal(name)])));
   if (JSON.stringify(normalSnapshot[normalContainers[0]].audit) !== JSON.stringify(normalSnapshot[normalContainers[1]].audit)) throw new Error("Normal API and Worker canonical data audits differ");
   pass("gate_a.normal_source: normal API and Worker are stopped; read-only canonical structural audits and fingerprints match");
+  }
 
   await compose("build", "api", "worker");
   const resolved = JSON.parse((await compose("config", "--format", "json")).stdout);
@@ -594,16 +597,21 @@ async function main() {
     createdVolumes.push(name);
     if (!await ownedVolume(name)) throw new Error(`Volume ownership verification failed for ${name}`);
   }
-  await docker(["run", "--rm", "--user", "0:0", "-v", `${volumes.runtime}:/runtime`, "-v", `${volumes.recordings}:/recordings`, "-v", `${volumes.state}:/smoke-state`, "--entrypoint", "sh", "streamrecorder-worker:wave-03.5", "-ceu", "mkdir -p /runtime /recordings /smoke-state; chown 1000:1000 /runtime /recordings /smoke-state; chmod 2775 /runtime /recordings /smoke-state"]);
+  await docker(["run", "--rm", "--user", "0:0", "-v", `${volumes.runtime}:/runtime`, "-v", `${volumes.recordings}:/recordings`, "-v", `${volumes.state}:/smoke-state`, "--entrypoint", "sh", "streamrecorder-worker:wave-05", "-ceu", "mkdir -p /runtime /recordings /smoke-state; chown 1000:1000 /runtime /recordings /smoke-state; chmod 2775 /runtime /recordings /smoke-state"]);
   pass("gate_a.named_volumes: three uniquely named, project-owned volumes exist for runtime, recordings, and state");
 
   const sourceContainer = normalContainers[0];
-  const imported = jsonLine((await docker(["run", "--rm", "--user", "0:0", "--volumes-from", `${sourceContainer}:ro`, "-v", `${volumes.runtime}:/isolated`, "--entrypoint", "python", "streamrecorder-worker:wave-03.5", "-c", importSource])).stdout);
+  if (synthetic) {
+    await docker(["run", "--rm", "--user", "1000:1000", "-v", `${volumes.runtime}:/data`, "--entrypoint", "python", "streamrecorder-worker:wave-05", "-c", "import json,pathlib; root=pathlib.Path('/data'); values={'watchlist.json':[{'id':'smoke-seed','channel_name':'smoke-seed','platform':'twitch','url':'https://smoke.invalid/seed','quality':'best','enabled':True}],'channels_status.json':{},'streams.json':[],'sessions.json':[]}; [(root/name).write_text(json.dumps(value)) for name,value in values.items()]"]);
+    pass("gate_a.synthetic_source: generated private fixture without reading normal storage");
+  } else {
+  const imported = jsonLine((await docker(["run", "--rm", "--user", "0:0", "--volumes-from", `${sourceContainer}:ro`, "-v", `${volumes.runtime}:/isolated`, "--entrypoint", "python", "streamrecorder-worker:wave-05", "-c", importSource])).stdout);
   if (JSON.stringify(imported.counts) !== JSON.stringify(normalSnapshot[sourceContainer].audit.shapes) || JSON.stringify(imported.semantic_fingerprints) !== JSON.stringify(normalSnapshot[sourceContainer].audit.semantic_fingerprints)) throw new Error("Importer changed non-URL canonical data");
   pass("gate_a.import: one-shot read-only importer preserves safe semantic fingerprints and counts while atomically sanitizing isolated URLs");
+  }
 
   const runtimeProbe = "test -r /data/watchlist.json; for directory in /data /recordings /smoke-state; do probe=\"$directory/.production-runtime-probe\"; printf runtime > \"$probe.tmp\"; test -s \"$probe.tmp\"; mv \"$probe.tmp\" \"$probe\"; test -s \"$probe\"; rm \"$probe\"; done";
-  const production = await docker(["run", "--rm", "--user", "1000:1000", "-v", `${volumes.runtime}:/data`, "-v", `${volumes.recordings}:/recordings`, "-v", `${volumes.state}:/smoke-state`, "--entrypoint", "sh", "streamrecorder-worker:wave-03.5", "-ceu", `python --version; /usr/local/bin/streamlink --version; python -m pip check; id; ${runtimeProbe}`]);
+  const production = await docker(["run", "--rm", "--user", "1000:1000", "-v", `${volumes.runtime}:/data`, "-v", `${volumes.recordings}:/recordings`, "-v", `${volumes.state}:/smoke-state`, "--entrypoint", "sh", "streamrecorder-worker:wave-05", "-ceu", `python --version; /usr/local/bin/streamlink --version; python -m pip check; id; ${runtimeProbe}`]);
   if (!production.stdout.includes("Python 3.12.") || !production.stdout.includes("streamlink 8.6.1") || !production.stdout.includes("No broken requirements found.") || !/uid=1000\(/.test(production.stdout)) throw new Error("production runtime version, dependency, identity, or volume probes failed");
   pass("gate_a.runtime: one-shot production Worker image verifies Python, Streamlink 8.6.1, pip, UID/GID 1000, and read/write/replace probes before fixture PATH setup");
 

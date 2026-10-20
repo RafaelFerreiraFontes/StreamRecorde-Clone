@@ -1,5 +1,57 @@
 # StreamRecorder Clone - Development Workflow
 
+## Wave 05 Persistence Modes
+
+Wave 05 implements PostgreSQL domain persistence, stable Creator CRUD, the
+Worker persistence bridge, and an explicit legacy migrator. Activation remains
+opt-in; integration QA and human acceptance are separate from code completion.
+
+| Mode | API authority | Worker persistence | Configuration |
+| --- | --- | --- | --- |
+| JSON (default) | Shared JSON adapters | Direct JSON | API `RELATIONAL_STORAGE=false`; Worker `PERSISTENCE_MODE=direct_json` |
+| Relational bridge | PostgreSQL through Drizzle repositories | Internal API plus durable outbox | API `RELATIONAL_STORAGE=true`, `PERSISTENCE_MODE=bridge`; Worker `PERSISTENCE_MODE=bridge` |
+
+In both modes: Browser -> Next.js proxy -> NestJS; Python Worker -> Streamlink
+-> private local recording files. In bridge mode the Worker reads execution
+configuration and sends lifecycle events through `/internal/v1/*`, authenticated
+with a matching private `INTERNAL_API_TOKEN`. Set Worker
+`PERSISTENCE_BRIDGE_URL=http://api:3000` and a persistent `OUTBOX_DIR`.
+Never expose internal endpoints or tokens publicly. PostgreSQL stores metadata,
+not media. Redis, authentication, cloud, SSE and desktop packaging remain deferred.
+
+Default local startup remains `docker compose up -d --build`; Compose now includes
+PostgreSQL with a persistent `postgres_data` volume, but JSON mode does not use
+it as domain authority. Images are `streamrecorder-{api,frontend,worker}:wave-05`.
+Local development uses `pnpm --dir api start:dev`, `pnpm --dir frontend dev`, and
+`python worker/worker.py` with matching mode/configuration environments.
+
+For a clean relational installation, configure the database and apply
+`pnpm --dir api db:migrate` before starting relational services. For an existing
+installation, stop writers, drain pending events, preserve checkpoints/media,
+dry-run, back up, import and verify before coordinated activation. Use a private
+Compose override for both API and Worker; shell flags are not automatically
+forwarded by the default Compose file. See the executable
+[migration, cutover and rollback runbook](api/README.database.md).
+Before new relational writes, rollback can return to unchanged JSON. After new
+writes, freeze launches and repair forward; never activate stale JSON snapshots.
+
+Run isolated deterministic scenarios from the root:
+
+```sh
+pnpm test:smoke
+node scripts/docker-bridge-smoke.mjs
+```
+
+Scenario A defaults to synthetic JSON and requires no normal containers.
+`node scripts/docker-integration-smoke.mjs --normal-source` explicitly opts into
+the older read-only import/audit of stopped normal API/Worker containers.
+Scenario B builds the real PostgreSQL/API/Worker/frontend stack under a unique
+`streamrecorder-wave05-relational-qa-*` project, random loopback ports and owned
+temporary volumes. Both use fake Streamlink, never normal data/media, and remove
+only their owned resources. Image preparation may require network access.
+Do not recreate a normal stack from newly built tags until QA is accepted.
+Fake output does not establish playable MP4 media or real-platform recovery.
+
 For the current milestone, local-first product direction, and planned waves, see [Project Status](PROJECT-STATUS.md).
 
 This repository's root `compose.yml` is the supported Docker Compose workflow for the current API, frontend, and Worker. The legacy Worker-specific Compose file was removed. For component architecture and focused development notes, see [API](api/README.md), [frontend](frontend/README.md), and [Worker](worker/README.md).
@@ -127,7 +179,7 @@ Run the isolated Docker integration smoke test from the repository root:
 pnpm test:smoke
 ```
 
-The harness uses a unique isolated Compose project, three Linux named mutable volumes, and one read-only fixture bind copied into `/tmp`. It has no host-port dependency. It runs the real Worker `poll_loop` with deterministic fake Streamlink behavior and checks Gates A-D: probe classification, lifecycle, persistence denial/recovery, API/Worker cross-writer behavior, active-child SIGTERM termination/reaping, and log-secret safety. Cleanup owns and removes only the exact smoke project resources.
+The JSON harness uses a unique isolated Compose project, three Linux named mutable volumes, one random loopback API port, and one read-only fixture bind copied into `/tmp`. It runs the real Worker `poll_loop` with deterministic fake Streamlink behavior and checks Gates A-D: probe classification, lifecycle, persistence denial/recovery, API/Worker cross-writer behavior, active-child SIGTERM termination/reaping, and log-secret safety. Cleanup owns and removes only the exact smoke project resources.
 
 The smoke scenarios make no Twitch, YouTube, or Kick calls; image builds may still download dependencies. Fake output is not proof of a playable MP4 or real media capture, so a controlled, authorized live-recording exercise remains a separate operational check.
 
