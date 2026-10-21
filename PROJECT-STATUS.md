@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Wave 05 persistence implementation, live Docker integration QA, and documentation (Tasks 01-07) are complete and approved on branch `wave-05-postgresql-persistence`. Existing installations remain JSON-authoritative until explicit migration/cutover; no automatic user data migration has occurred.
+Wave 05 (PostgreSQL Domain Persistence, Option A Worker Bridge, Migration CLI, and Live Docker Integration) is complete and integrated into `master` via PR #2, with Compose volume driver hardening incorporated. All automated suites and live Docker smoke scenarios have been verified. Existing installations remain JSON-authoritative by default until explicit operator cutover; no automatic user data migration has occurred.
 
 ## Product Direction
 
@@ -133,4 +133,4 @@ Optional hosted operation with ownership, authentication, invite limits, deploym
 
 ## Last Updated
 
-2026-10-19: Wave 05 Task 07 implementation and host validation; Docker and pytest blockers remain explicit.
+2026-10-21: Wave 05 completed and merged into master via PR #2 with Compose volume driver hardening incorporated. All automated suites (API, Worker unittest/pytest, Frontend, PostgreSQL foundation) and live Docker integration smoke tests (Scenarios A and B) passed. Relational persistence remains opt-in and JSON mode remains default.

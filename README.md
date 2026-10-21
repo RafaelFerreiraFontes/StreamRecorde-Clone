@@ -172,6 +172,8 @@ Access the application:
 
 Host ports are bound to loopback `127.0.0.1` by default to safeguard unauthenticated local development.
 
+*Note on PostgreSQL service:* The `postgres` container starts with `docker compose up`, but in default JSON mode it is kept in standby and is not a functional dependency for the API (startup is decoupled).
+
 ### 2. Service Management and Logs
 
 Check container states:
@@ -206,32 +208,62 @@ docker compose down
 
 ## JSON vs PostgreSQL Persistence Modes
 
-| Mode | API Authority | Worker Persistence | Configuration |
+| Mode | API Authority | Worker Persistence | Default `compose.yml` Configuration |
 |---|---|---|---|
-| **JSON (Default)** | Shared JSON adapters | Direct JSON files | `RELATIONAL_STORAGE=false`, `PERSISTENCE_MODE=direct_json` |
-| **Relational Bridge (Opt-in)** | PostgreSQL 17 (Drizzle ORM) | Internal API (`/internal/v1/*`) + Durable Outbox | `RELATIONAL_STORAGE=true`, `PERSISTENCE_MODE=bridge` |
+| **JSON (Default)** | Shared JSON adapters | Direct JSON files | API: `RELATIONAL_STORAGE: "false"`, Worker: `PERSISTENCE_MODE: direct_json` |
+| **Relational Bridge (Opt-in)** | PostgreSQL 17 (Drizzle ORM) | Internal API (`/internal/v1/*`) + Durable Outbox | API: `RELATIONAL_STORAGE: "true"`, `PERSISTENCE_MODE: bridge`; Worker: `PERSISTENCE_MODE: bridge` |
 
-To run in **Relational Bridge Mode**, configure environment variables in a local `.env` or Compose override:
+> **Critical Operational Guardrails**:
+> 1. **PostgreSQL container presence vs domain authority**: The `postgres` container starts automatically with `docker compose up` to ensure persistent storage readiness. However, in default JSON mode, **PostgreSQL is not the domain authority** and is not an operational requirement for the API (startup is decoupled). Shared JSON files remain the primary authority.
+> 2. **Explicit service configuration in `compose.yml`**: In `compose.yml`, `RELATIONAL_STORAGE: "false"` and `PERSISTENCE_MODE: direct_json` are explicitly set on the service definitions. Therefore, **adding `RELATIONAL_STORAGE=true` to an ambient `.env` file does NOT activate relational mode in Docker Compose**.
+> 3. **No implicit override**: Never name relational configuration `compose.override.yml`, because Docker Compose automatically loads that filename on plain `docker compose up`, which would trigger an uncoordinated, unauthorized cutover.
+> 4. **Overrides do not replace migration**: An override file only configures container environment and volume bindings; it does **not** execute schema migrations, data import, or outbox quiescence. Activating relational writers against an unmigrated database risks data loss or split-brain state.
 
-```env
-# API
-RELATIONAL_STORAGE=true
-PERSISTENCE_MODE=bridge
-INTERNAL_API_TOKEN=your-private-secret-token-here
-DATABASE_URL=postgresql://streamrecorder:streamrecorder_dev_local@postgres:5432/streamrecorder
+To run in **Relational Bridge Mode** safely after completing all migration prerequisites, use an explicitly named private override file (e.g. `compose.relational.local.yml`, which is git-ignored):
 
-# Worker
-PERSISTENCE_MODE=bridge
-PERSISTENCE_BRIDGE_URL=http://api:3000
-INTERNAL_API_TOKEN=your-private-secret-token-here
-OUTBOX_DIR=/outbox
+```yaml
+# compose.relational.local.yml (MUST be invoked explicitly, never implicitly)
+services:
+  api:
+    environment:
+      RELATIONAL_STORAGE: "true"
+      PERSISTENCE_MODE: bridge
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:?A private secret token is required}"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-streamrecorder}:${POSTGRES_PASSWORD:-streamrecorder_dev_local}@postgres:5432/${POSTGRES_DB:-streamrecorder}"
+
+  worker:
+    environment:
+      PERSISTENCE_MODE: bridge
+      PERSISTENCE_BRIDGE_URL: "http://api:3000"
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:?A private secret token is required}"
+      OUTBOX_DIR: /outbox
+    volumes:
+      - worker_outbox:/outbox
+
+volumes:
+  worker_outbox:
 ```
 
-Apply database migrations before launching relational services:
+### Pre-requisites Before Starting in Relational Mode
 
-```sh
-docker compose exec api node dist/database/migrate.js
-```
+Do **not** launch the relational stack on an unmigrated database or existing installation without following the strict migration sequence:
+
+1. **Validate Configuration**:
+   ```sh
+   docker compose -f compose.yml -f compose.relational.local.yml config --quiet
+   ```
+2. **Apply Database Migrations**:
+   ```sh
+   # On clean or upgraded database
+   docker compose exec api node dist/database/migrate.js
+   ```
+3. **Execute Historical Data Migration (for existing installations)**:
+   Never launch relational writers against historical JSON data without executing the explicit, quiesced CLI migration runbook (`dry-run`, `backup`, `import`, `verify`, and `cutover-check` with drained outbox) documented in the [Database Runbook](api/README.database.md).
+4. **Launch Coordinated Relational Services**:
+   Only after migrations and cutover checks succeed, start the stack with both files specified explicitly:
+   ```sh
+   docker compose -f compose.yml -f compose.relational.local.yml up -d
+   ```
 
 ---
 
@@ -415,17 +447,30 @@ Acesse a interface no navegador:
 
 Por segurança, as portas no host são publicadas exclusivamente em loopback `127.0.0.1`.
 
+*Nota sobre o serviço PostgreSQL:* O container `postgres` é iniciado pelo `docker compose up` para disponibilizar a infraestrutura local, mas **não** é um requisito operacional para a API no modo JSON padrão (inicialização desacoplada).
+
 ---
 
 ## Modos de Persistência
 
 1. **Modo Padrão (JSON)**:
-   - A API e o Worker utilizam arquivos no diretório `runtime-data/`.
-   - O banco PostgreSQL é mantido em repouso e não é obrigatório para iniciar a stack.
+   - A API e o Worker utilizam arquivos no diretório `runtime-data/` como autoridade primária.
+   - O container `postgres` pode estar em execução para disponibilizar a infraestrutura local, mas o PostgreSQL **não é a autoridade do domínio** nesse modo e não é obrigatório para o funcionamento da API (inicialização desacoplada).
 2. **Modo Relacional (PostgreSQL + Worker Bridge)**:
-   - Ativado configurando `RELATIONAL_STORAGE=true`, `PERSISTENCE_MODE=bridge`, `DATABASE_URL` e `INTERNAL_API_TOKEN`.
-   - O Worker utiliza a outbox atômica em disco para garantir entrega de eventos mesmo em caso de reinicialização ou indisponibilidade temporária da API.
-   - Migração assistida via CLI: `pnpm --dir api migrate:legacy dry-run|backup|import|verify|cutover-check`.
+   - No `compose.yml` padrão, `RELATIONAL_STORAGE: "false"` e `PERSISTENCE_MODE: direct_json` estão declarados explicitamente nos serviços. Portanto, **adicionar apenas `RELATIONAL_STORAGE=true` no `.env` NÃO ativa o modo relacional no Docker Compose**.
+   - O modo relacional **não pode ser ativado implicitamente**. Nunca utilize o nome `compose.override.yml`, pois o Docker Compose o carrega automaticamente em qualquer `docker compose up`.
+   - Utilize um arquivo de sobreposição explicitamente nomeado (ex: `compose.relational.local.yml`, incluído no `.gitignore`), configurando a API e o Worker de forma coordenada com volume dedicado para a outbox (`OUTBOX_DIR`) e o token interno (`INTERNAL_API_TOKEN`).
+   - Um arquivo de override **não substitui** o processo de migração. Para instalações existentes com dados legados, é obrigatório executar a sequência quiescida de migração (`dry-run`, `backup`, `import`, `verify`, `cutover-check`) antes de ativar os novos escritores.
+
+Validação explícita da configuração relacional:
+```sh
+docker compose -f compose.yml -f compose.relational.local.yml config --quiet
+```
+
+Inicialização da stack relacional (somente após migração e verificação concluídas):
+```sh
+docker compose -f compose.yml -f compose.relational.local.yml up -d
+```
 
 Consulte o [Runbook de Banco de Dados](api/README.database.md) para procedimentos completos de migração, cutover e forward-repair.
 

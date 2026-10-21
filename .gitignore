@@ -20,3 +20,8 @@ htmlcov/
 !**/.env.example
 .DS_Store
 Thumbs.db
+
+# Private local Compose overrides (prevent accidental commit of credentials or implicit cutover)
+compose.relational.local.yml
+compose.*.local.yml
+compose.override.yml

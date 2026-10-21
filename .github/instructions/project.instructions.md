@@ -11,7 +11,7 @@ StreamRecorder Clone is a personal, portfolio-oriented application inspired by S
 
 The product should demonstrate reliable domain modeling, media execution, persistence, testing, and secure operation while remaining practical for one developer to maintain. Technical quality is measured by working, understandable behavior and evidence, not by the number of technologies introduced.
 
-These instructions define durable rules. Statements marked **current** describe the verified Wave 04.75 baseline; **target**, **future**, and wave references describe work that has not necessarily been implemented. Inspect the actual code before acting.
+These instructions define durable rules. Statements marked **current** describe the verified Wave 05 baseline; **target**, **future**, and wave references describe work that has not necessarily been implemented. Inspect the actual code before acting.
 
 ## 2. Product Direction — Local First
 
@@ -531,7 +531,7 @@ Local Mode is the primary constraint. Keep operation economical and simple on th
 
 Docker Compose remains a supported development/local runtime workflow. Avoid Kubernetes, clusters, unnecessary microservices, expensive managed services, GPU requirements, and distributed workers without concrete need.
 
-PostgreSQL and Redis may join the local topology in their respective waves; they are not current Compose services. Persist metadata/media across ordinary restarts and keep destructive cleanup explicit.
+PostgreSQL 17 is now part of the local Compose topology for opt-in relational persistence; Redis joins in Wave 06. Default mode remains JSON-authoritative. Persist metadata/media across ordinary restarts and keep destructive cleanup explicit.
 
 A future Hosted Mode may start with a simple single-VPS topology, but this is not a Local Mode prerequisite. Desktop service packaging remains a Wave 08.5 decision.
 
