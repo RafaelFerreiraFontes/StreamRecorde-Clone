@@ -4,14 +4,14 @@ wave: "05.5"
 order: 01
 depends_on:
   - ../wave-05/07-wave-integration-qa-documentation.task.md
-status: planned
+status: done
 ---
 
 # Wave 05.5 — Task 01 — Identity, Authentication and Ownership Decisions
 
 ## Status and Preconditions
 
-Planned only; implementation has not started. Read the [wave specification](README.md), project/MVP instructions and the accepted predecessor deliverables. Wait for predecessor validation, independent review and human acceptance under the existing lifecycle. Creating this task does not authorize its execution.
+done — The documentation deliverable is implemented, validated, independently reviewed by Luna (Review 2: PASS), and formally accepted by human authorization. The architectural decisions in `authentication-ownership-decisions.md` are frozen for downstream tasks T02–T07. No application code, schema, runtime settings, or user data were changed.
 
 ## Context / Objective
 
@@ -40,10 +40,10 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Acceptance Criteria
 
-- [ ] Decision record includes mode/route/ownership matrices and an unambiguous choice for each downstream dependency.
-- [ ] Migration and rollback plans cover both existing storage modes without automatic cutover.
-- [ ] Each security and compatibility requirement maps to an implementation task and a validation case.
-- [ ] No application code, schema, dependencies, runtime settings or user data changed.
+- [x] Decision record includes mode/route/ownership matrices and an unambiguous choice for each downstream dependency.
+- [x] Migration and rollback plans cover both existing storage modes without automatic cutover.
+- [x] Each security and compatibility requirement maps to an implementation task and a validation case.
+- [x] No application code, schema, dependencies, runtime settings or user data changed.
 
 ## Automated Tests / Verification
 
