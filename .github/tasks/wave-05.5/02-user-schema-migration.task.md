@@ -4,16 +4,14 @@ wave: "05.5"
 order: 02
 depends_on:
   - 01-authentication-ownership-decisions.task.md
-status: planned
+status: done
 ---
 
 # Wave 05.5 — Task 02 — User Schema, Local Account and Ownership Migration
 
 ## Status and Preconditions
 
-Planned only; implementation has not started. Read the [wave specification](README.md), project/MVP instructions and the accepted predecessor deliverables. Wait for predecessor validation, independent review and human acceptance under the existing lifecycle. Creating this task does not authorize its execution.
-
-T01's accepted authentication-ownership-decisions.md is required. If it is missing or a relevant decision is unresolved, return to Coordinator review rather than inventing a policy.
+done — The implementation of Task 02, including scoped corrections for `IDENTITY_MODE` fail-closed startup validation and case-insensitive email uniqueness/normalization constraints, is complete, validated across all suites, independently approved by Luna (Review 2: PASS), and formally accepted by human authorization. Additive migration `0004_user_ownership.sql`, idempotent bootstrap, ownership constraints, repository derivation, and import/replay compatibility are integrated into the branch. Zero changes to normal runtime-data, recordings, or production Docker Compose volumes were made.
 
 ## Context / Objective
 
@@ -39,11 +37,11 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Acceptance Criteria
 
-- [ ] Fresh migrations and repeat runs succeed; concurrent bootstrap yields one local identity.
-- [ ] Populated relational upgrade preserves all domain counts, IDs and historical fields with correct ownership.
-- [ ] Legacy import/verify/replay and conflicting owner or manifest cases behave as specified.
-- [ ] Constraint failures and late migration/import failures leave recoverable, consistent state.
-- [ ] Existing JSON behavior remains available as documented; no normal data or media is migrated.
+- [x] Fresh migrations and repeat runs succeed; concurrent bootstrap yields one local identity.
+- [x] Populated relational upgrade preserves all domain counts, IDs and historical fields with correct ownership.
+- [x] Legacy import/verify/replay and conflicting owner or manifest cases behave as specified.
+- [x] Constraint failures and late migration/import failures leave recoverable, consistent state.
+- [x] Existing JSON behavior remains available as documented; no normal data or media is migrated.
 
 ## Automated Tests / Verification
 

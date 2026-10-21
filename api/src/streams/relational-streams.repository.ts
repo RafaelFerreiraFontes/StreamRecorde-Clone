@@ -204,12 +204,12 @@ export class RelationalStreamsRepository extends StreamsRepository {
 
   async insertStream(transaction: Transaction, data: StreamInput): Promise<Stream> {
     const start = this.startValues(data);
-    await this.lockTarget(transaction, data.watchTargetId);
+    const target = await this.lockTarget(transaction, data.watchTargetId);
     const [active] = await transaction.select().from(streams).where(and(eq(streams.watchTargetId, data.watchTargetId),
       isNull(streams.finishedAt), isNull(streams.legacyFinishedAtRaw)));
     if (active) return this.streamView(active);
     const [row] = await transaction.insert(streams).values({ id: data.id ?? randomUUID(), watchTargetId: data.watchTargetId,
-      state: data.state ?? "recording", ...start }).onConflictDoNothing({ target: streams.watchTargetId,
+      ownerId: target.ownerId, state: data.state ?? "recording", ...start }).onConflictDoNothing({ target: streams.watchTargetId,
         where: sql`${streams.finishedAt} is null and ${streams.legacyFinishedAtRaw} is null` }).returning();
     if (row) return this.streamView(row);
     const [existing] = await transaction.select().from(streams).where(and(eq(streams.watchTargetId, data.watchTargetId),
@@ -227,12 +227,13 @@ export class RelationalStreamsRepository extends StreamsRepository {
     const target = await this.lockTarget(transaction, data.watchTargetId);
     if (data.streamId != null) {
       if (!isUUID(data.streamId)) throw new BadRequestException("Invalid Stream ID");
-      const [stream] = await transaction.select().from(streams).where(and(eq(streams.id, data.streamId), eq(streams.watchTargetId, data.watchTargetId)));
+      const [stream] = await transaction.select().from(streams).where(and(eq(streams.id, data.streamId),
+        eq(streams.watchTargetId, data.watchTargetId), eq(streams.ownerId, target.ownerId)));
       if (!stream) throw new BadRequestException("Stream must belong to the recording WatchTarget");
     }
     if (data.id && data.sessionId && data.id !== data.sessionId) throw new BadRequestException("Conflicting recording IDs");
     const [row] = await transaction.insert(recordings).values({ id: data.id ?? data.sessionId ?? randomUUID(),
-      watchTargetId: data.watchTargetId, streamId: data.streamId ?? null, state: data.state ?? "recording", ...start,
+      ownerId: target.ownerId, watchTargetId: data.watchTargetId, streamId: data.streamId ?? null, state: data.state ?? "recording", ...start,
       outputFile: data.outputFile, channelName: data.channelName ?? target.channelName,
       platform: data.platform ?? target.platform, quality: data.quality ?? target.quality }).returning();
     return this.recordingView(row);
@@ -314,8 +315,9 @@ export class RelationalStreamsRepository extends StreamsRepository {
   override async createCreator(dto: CreateCreatorDto): Promise<Creator> {
     return this.configurationMutex.runExclusive(async () => {
       const displayName = this.creatorName(dto.display_name);
+      const ownerId = await this.databaseService.resolveBootstrapLocalUser();
       const [row] = await this.db.insert(creators).values({
-        id: randomUUID(), displayName, normalizedKey: displayName.toLowerCase(),
+        id: randomUUID(), ownerId, displayName, normalizedKey: displayName.toLowerCase(),
       }).returning();
       return this.creatorView(row);
     });
@@ -386,8 +388,10 @@ export class RelationalStreamsRepository extends StreamsRepository {
       const id = randomUUID();
       await this.db.transaction(async transaction => {
         const key = this.creatorName(dto.creator_id);
-        await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${key.toLowerCase()}))`);
+        const ownerId = await this.databaseService.resolveBootstrapLocalUser(transaction);
+        await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${ownerId + ":" + key.toLowerCase()}))`);
         let matches = await transaction.select().from(creators).where(and(
+          eq(creators.ownerId, ownerId),
           isNull(creators.archivedAt),
           isUUID(key) ? eq(creators.id, key) : eq(creators.normalizedKey, key.toLowerCase()),
         )).for("update");
@@ -395,11 +399,11 @@ export class RelationalStreamsRepository extends StreamsRepository {
         if (!matches.length) {
           if (isUUID(key)) throw new NotFoundException("Creator not found");
           matches = await transaction.insert(creators).values({
-            id: randomUUID(), displayName: key, normalizedKey: key.toLowerCase(),
+            id: randomUUID(), ownerId, displayName: key, normalizedKey: key.toLowerCase(),
           }).returning();
         }
         await transaction.insert(watchTargets).values({
-          id, creatorId: matches[0].id, channelName: dto.channel_name,
+          id, ownerId: matches[0].ownerId, creatorId: matches[0].id, channelName: dto.channel_name,
           platform: dto.platform, url: dto.url, quality: dto.quality,
           enabled: true, recordingSubdir: dto.recording_subdir || null,
         });

@@ -222,12 +222,30 @@ describeDatabase("relational configuration persistence", () => {
     const stream = await repository.createStream({ watchTargetId: sibling.id, startedAt });
     await expect(repository.createRecording({ watchTargetId: first.id, streamId: stream.id, startedAt }))
       .rejects.toBeInstanceOf(BadRequestException);
-    await expect(pool.query("insert into recordings (id,watch_target_id,stream_id,state,started_at) values ($1,$2,$3,'recording',$4)",
+    await expect(pool.query("insert into recordings (id,watch_target_id,stream_id,state,started_at,owner_id) values ($1,$2,$3,'recording',$4,(select owner_id from watch_targets where id=$2))",
       [randomUUID(), first.id, stream.id, startedAt])).rejects.toMatchObject({ code: "23503" });
     await expect(repository.createRecording({ watchTargetId: first.id, streamId: randomUUID(), startedAt })).rejects.toBeInstanceOf(BadRequestException);
     const unknown = await repository.createRecording({ watchTargetId: first.id, streamId: null, startedAt });
     expect(unknown.stream_id).toBeUndefined();
     expect((await pool.query("select stream_id from recordings where id=$1", [unknown.session_id])).rows[0].stream_id).toBeNull();
+  });
+
+  it("rejects foreign-owner Creator attachment and derives capture ownership from the locked target", async () => {
+    const other = (await pool.query("insert into users (id,username) values (gen_random_uuid(),$1) returning id",
+      [`other-${randomUUID().slice(0, 8)}`])).rows[0].id;
+    const creatorId = randomUUID();
+    const targetId = randomUUID();
+    await pool.query("insert into creators (id,owner_id,display_name,normalized_key) values ($1,$2,'Foreign','foreign')", [creatorId, other]);
+    await expect(target(creatorId)).rejects.toBeInstanceOf(NotFoundException);
+    await pool.query("insert into watch_targets (id,owner_id,creator_id,channel_name,platform,url,quality) values ($1,$2,$3,'foreign','twitch','https://example.test/foreign','720p')", [targetId, other, creatorId]);
+    const capture = await repository.createStreamAndRecording({ watchTargetId: targetId,
+      stream: { startedAt: "2026-01-01T00:00:00Z" }, recording: { startedAt: "2026-01-01T00:00:00Z" } });
+    expect((await pool.query("select owner_id from streams where id=$1", [capture.stream.id])).rows[0].owner_id).toBe(other);
+    expect((await pool.query("select owner_id from recordings where id=$1", [capture.recording.session_id])).rows[0].owner_id).toBe(other);
+    const local = await target("Local");
+    await expect(repository.createRecording({ watchTargetId: local.id, streamId: capture.stream.id, startedAt: "2026-01-01T00:00:00Z" }))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(await repository.findAllRecordings()).toHaveLength(1);
   });
 
   it("rolls back combined creation and terminal changes when the second operation fails", async () => {
@@ -288,7 +306,7 @@ describeDatabase("relational configuration persistence", () => {
     await expect(repository.createStream({ watchTargetId: first.id, legacyStartedAtRaw: raw }))
       .rejects.toEqual(new BadRequestException("startedAt is required"));
     const streamId = randomUUID();
-    await pool.query("insert into streams (id,watch_target_id,state,legacy_started_at_raw,legacy_finished_at_raw) values ($1,$2,'finished',$3,$4)",
+    await pool.query("insert into streams (id,watch_target_id,state,legacy_started_at_raw,legacy_finished_at_raw,owner_id) values ($1,$2,'finished',$3,$4,(select owner_id from watch_targets where id=$2))",
       [streamId, first.id, raw, "2026-01-01T11:00:00"]);
     const stream = await repository.findOneStream(streamId);
     expect(stream.started_at).toBe(raw);
@@ -297,7 +315,7 @@ describeDatabase("relational configuration persistence", () => {
     const later = await repository.createStream({ watchTargetId: first.id, startedAt: "2026-01-02T00:00:00Z" });
     expect(later.id).not.toBe(stream.id);
     const legacyId = randomUUID();
-    await pool.query("insert into recordings (id,watch_target_id,state,legacy_started_at_raw,legacy_finished_at_raw) values ($1,$2,'finished',$3,$4)",
+    await pool.query("insert into recordings (id,watch_target_id,state,legacy_started_at_raw,legacy_finished_at_raw,owner_id) values ($1,$2,'finished',$3,$4,(select owner_id from watch_targets where id=$2))",
       [legacyId, first.id, raw, "2026-01-01T11:00:00"]);
     expect(await repository.findOneRecording(legacyId)).toMatchObject({ session_id: legacyId, started_at: raw,
       finished_at: "2026-01-01T11:00:00", stream_id: undefined });
@@ -409,8 +427,8 @@ describeDatabase("relational configuration persistence", () => {
     const first = await target("History");
     const streamId = randomUUID();
     const recordingId = randomUUID();
-    await pool.query("insert into streams (id, watch_target_id, state, started_at) values ($1,$2,'recording',now())", [streamId, first.id]);
-    await pool.query("insert into recordings (id, watch_target_id, stream_id, state, started_at) values ($1,$2,$3,'recording',now())", [recordingId, first.id, streamId]);
+    await pool.query("insert into streams (id, watch_target_id, owner_id, state, started_at) values ($1,$2,(select owner_id from watch_targets where id=$2),'recording',now())", [streamId, first.id]);
+    await pool.query("insert into recordings (id, watch_target_id, stream_id, owner_id, state, started_at) values ($1,$2,$3,(select owner_id from watch_targets where id=$2),'recording',now())", [recordingId, first.id, streamId]);
     await repository.removeWatchTarget(first.id);
     await repository.removeCreator(first.creator_id);
     expect((await pool.query("select id from streams where id=$1", [streamId])).rowCount).toBe(1);

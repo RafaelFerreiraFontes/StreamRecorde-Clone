@@ -92,8 +92,8 @@ describeDatabase("internal Worker events", () => {
     await pool.query("truncate worker_events, recordings, streams, watch_targets, creators");
     const creatorId = randomUUID();
     targetId = randomUUID();
-    await pool.query("insert into creators (id, display_name, normalized_key) values ($1, 'Fixture', 'fixture')", [creatorId]);
-    await pool.query("insert into watch_targets (id, creator_id, channel_name, platform, url, quality) values ($1,$2,'fake','twitch','https://example.test/fake','1080p')", [targetId, creatorId]);
+    await pool.query("insert into creators (id, owner_id, display_name, normalized_key) values ($1, (select id from users where bootstrap_key='local'), 'Fixture', 'fixture')", [creatorId]);
+    await pool.query("insert into watch_targets (id, creator_id, owner_id, channel_name, platform, url, quality) values ($1,$2,(select owner_id from creators where id=$2),'fake','twitch','https://example.test/fake','1080p')", [targetId, creatorId]);
     await startApi();
   });
 

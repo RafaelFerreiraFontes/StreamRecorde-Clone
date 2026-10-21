@@ -1,5 +1,6 @@
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
+import { validateStartupIdentityMode } from "./database/identity-mode";
 import {
   resolveAllConfigPaths,
   initializeRuntimeFiles,
@@ -8,6 +9,8 @@ import {
 } from "./streams/json-compatibility.adapters";
 
 async function bootstrap() {
+  validateStartupIdentityMode(process.env);
+
   // Resolve all four config paths using the established precedence
   const configPaths = resolveAllConfigPaths(process.env);
 

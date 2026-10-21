@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { eq, sql } from "drizzle-orm";
-import { DatabaseConnection } from "../database/database.service";
-import { creators, migrationManifests, recordings, streams, watchTargets } from "../database/schema";
+import { eq, inArray, sql } from "drizzle-orm";
+import { DatabaseConnection, resolveBootstrapLocalUser } from "../database/database.service";
+import { creators, migrationManifests, recordings, streams, users, watchTargets } from "../database/schema";
 import { canonical, Counts, creatorId, creatorKey, creatorName, digest, FILES, inspectSnapshot, Snapshot, TOOL_VERSION } from "./snapshot";
 
 type Source = { origin: string; size: number; sha256: string };
@@ -78,21 +78,21 @@ export async function loadSnapshot(directory: string, manifestPath: string): Pro
   return { manifest, snapshot };
 }
 
-function entities(snapshot: Snapshot) {
+function entities(snapshot: Snapshot, ownerId: string) {
   const creatorRows = [...new Map(snapshot.rows["watchlist.json"].map((row) => [creatorKey(row), {
-    id: creatorId(creatorKey(row)), displayName: creatorName(row), normalizedKey: creatorKey(row),
+    id: creatorId(creatorKey(row)), ownerId, displayName: creatorName(row), normalizedKey: creatorKey(row),
   }])).values()];
   const targetRows = snapshot.rows["watchlist.json"].map((row) => ({
-    id: String(row.id).toLowerCase(), creatorId: creatorId(creatorKey(row)), channelName: String(row.channel_name),
+    id: String(row.id).toLowerCase(), ownerId, creatorId: creatorId(creatorKey(row)), channelName: String(row.channel_name),
     platform: String(row.platform), url: String(row.url), quality: String(row.quality), enabled: row.enabled === undefined ? true : row.enabled as boolean,
     recordingSubdir: row.recording_subdir ? String(row.recording_subdir).replace(/\\/g, "/") : null,
   }));
   const streamRows = snapshot.rows["streams.json"].map((row) => ({
-    id: String(row.id).toLowerCase(), watchTargetId: String(row.watch_target_id).toLowerCase(), state: String(row.state),
+    id: String(row.id).toLowerCase(), ownerId, watchTargetId: String(row.watch_target_id).toLowerCase(), state: String(row.state),
     startedAt: null, finishedAt: null, legacyStartedAtRaw: String(row.started_at), legacyFinishedAtRaw: row.finished_at == null ? null : String(row.finished_at),
   }));
   const recordingRows = snapshot.rows["sessions.json"].map((row) => ({
-    id: String(row.session_id).toLowerCase(), watchTargetId: String(row.channel_id).toLowerCase(), streamId: null, state: String(row.state),
+    id: String(row.session_id).toLowerCase(), ownerId, watchTargetId: String(row.channel_id).toLowerCase(), streamId: null, state: String(row.state),
     startedAt: null, finishedAt: null, legacyStartedAtRaw: String(row.started_at), legacyFinishedAtRaw: row.finished_at == null ? null : String(row.finished_at),
     outputFile: row.output_file == null ? null : String(row.output_file), channelName: null, platform: null, quality: null,
   }));
@@ -102,13 +102,21 @@ function entities(snapshot: Snapshot) {
 export async function importSnapshot(db: DatabaseConnection, directory: string, manifestPath: string, quiesced: boolean) {
   if (!quiesced) throw new Error("Import requires --quiesced confirmation");
   const { manifest, snapshot } = await loadSnapshot(directory, manifestPath);
-  const rows = entities(snapshot);
   return db.transaction(async (transaction) => {
     await transaction.execute(sql`LOCK TABLE migration_manifests, creators, watch_targets, streams, recordings IN EXCLUSIVE MODE`);
+    const ownerId = await resolveBootstrapLocalUser(transaction);
+    const rows = entities(snapshot, ownerId);
     const [applied] = await transaction.select().from(migrationManifests).where(eq(migrationManifests.manifestFingerprint, manifest.fingerprint));
     if (applied) {
-      if (canonical(applied.sourceDigests) !== canonical(sourceDigests(manifest)) || canonical(applied.entityCounts) !== canonical(manifest.counts)) {
+      if (applied.ownerId !== ownerId || canonical(applied.sourceDigests) !== canonical(sourceDigests(manifest)) || canonical(applied.entityCounts) !== canonical(manifest.counts)) {
         throw new Error("Existing manifest ledger conflict");
+      }
+      for (const [table, imported] of [[creators, rows.creatorRows], [watchTargets, rows.targetRows],
+        [streams, rows.streamRows], [recordings, rows.recordingRows]] as const) {
+        if (!imported.length) continue;
+        const existing = await transaction.select({ ownerId: table.ownerId }).from(table)
+          .where(inArray(table.id, imported.map(row => row.id)));
+        if (existing.some(row => row.ownerId !== ownerId)) throw new Error("Existing import owner conflict");
       }
       return { outcome: "idempotence-verified", fingerprint: manifest.fingerprint };
     }
@@ -120,7 +128,7 @@ export async function importSnapshot(db: DatabaseConnection, directory: string, 
     if (rows.targetRows.length) await transaction.insert(watchTargets).values(rows.targetRows);
     if (rows.streamRows.length) await transaction.insert(streams).values(rows.streamRows);
     if (rows.recordingRows.length) await transaction.insert(recordings).values(rows.recordingRows);
-    await transaction.insert(migrationManifests).values({ id: randomUUID(), manifestFingerprint: manifest.fingerprint,
+    await transaction.insert(migrationManifests).values({ id: randomUUID(), ownerId, manifestFingerprint: manifest.fingerprint,
       sourceDigests: sourceDigests(manifest), entityCounts: manifest.counts, toolVersion: TOOL_VERSION });
     return { outcome: "imported", fingerprint: manifest.fingerprint };
   });
@@ -128,11 +136,13 @@ export async function importSnapshot(db: DatabaseConnection, directory: string, 
 
 export async function verifySnapshot(db: DatabaseConnection, directory: string, manifestPath: string) {
   const { manifest, snapshot } = await loadSnapshot(directory, manifestPath);
-  const rows = entities(snapshot);
   return db.transaction(async (transaction) => {
     await transaction.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY`);
+    const [local] = await transaction.select({ id: users.id }).from(users).where(eq(users.bootstrapKey, "local"));
+    if (!local) throw new Error("Missing bootstrap local user");
+    const rows = entities(snapshot, local.id);
     const [applied] = await transaction.select().from(migrationManifests).where(eq(migrationManifests.manifestFingerprint, manifest.fingerprint));
-    if (!applied || canonical(applied.sourceDigests) !== canonical(sourceDigests(manifest)) || canonical(applied.entityCounts) !== canonical(manifest.counts)) {
+    if (!applied || applied.ownerId !== local.id || canonical(applied.sourceDigests) !== canonical(sourceDigests(manifest)) || canonical(applied.entityCounts) !== canonical(manifest.counts)) {
       throw new Error("Missing or conflicting import ledger");
     }
     const groups = [

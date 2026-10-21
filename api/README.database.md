@@ -70,7 +70,7 @@ leaves its partial directory for inspection; retry with a new destination.
 ### Import And Verify
 
 Set DATABASE_URL explicitly to the disposable destination for rehearsals. Apply
-checked-in migrations first, including 0003_migration_manifests. The CLI never
+checked-in migrations first, including 0004_user_ownership. The CLI never
 migrates the schema implicitly.
 
 ```bash
@@ -173,6 +173,102 @@ opt-in relational repositories, bridge events and cutover tooling. JSON remains
 the default authority until explicit activation. The database service is lazy;
 HTTP liveness alone does not prove relational readiness. Check database-backed
 routes and authenticated execution configuration before launching the Worker.
+
+## Wave 05.5 Task 02: Local User And Ownership Foundation
+
+Migration `0004_user_ownership` adds User and session storage and explicit
+`owner_id` on Creators, WatchTargets, Streams, Recordings and migration manifests.
+It does not activate authentication, implement sessions/login, scope all API
+queries, or change normal installation authority. Authorization and authenticated
+startup gating remain successor-task work; this checkpoint is not a multi-user
+security boundary. JSON remains the unchanged, single-user default and creates
+no User. Do not enable authenticated operation at this checkpoint.
+
+The bootstrap account has `bootstrap_key='local'`, canonical username `local`
+and no password. Its UUID is generated once, not derived from its username.
+Migration creates it and runtime insertion paths repair a missing bootstrap via
+insert-on-conflict followed by reselect. Concurrent bootstrap calls converge on
+the same persistent UUID. A username collision without the designated bootstrap
+key fails rather than adopting an arbitrary account. No password, login route,
+account-management CLI, automatic downgrade or ownership transfer is supplied.
+Usernames must match `^[a-z0-9][a-z0-9._-]{2,31}$`; optional email is unique when
+present. Account input normalization belongs to the forthcoming account writer.
+The new `sessions` table is an inert authentication foundation, distinct from
+legacy Recording/session resources and JSON files.
+
+### Synthetic Fresh Install And Repeat Migration
+
+From the repository root in Bash, use only the disposable Compose project:
+
+```bash
+docker compose -f compose.test-db.yml -p streamrecorder-test-db up -d --wait
+export DATABASE_URL='postgresql://streamrecorder_test:streamrecorder_test_local@127.0.0.1:55432/streamrecorder_test'
+pnpm --dir api db:migrate
+pnpm --dir api db:migrate
+docker compose -f compose.test-db.yml -p streamrecorder-test-db exec -T postgres-test psql -U streamrecorder_test -d streamrecorder_test -c "SELECT id, bootstrap_key, username, password_hash IS NULL AS passwordless FROM users;"
+```
+
+Expect one passwordless local User and empty domain/session tables on a fresh
+database. Rerunning the migration runner is a no-op; do not execute raw migration
+SQL twice. Applied Wave 05 migrations are unchanged. All migration statements
+and ledger advancement run in the existing Drizzle migration transaction.
+
+### Populated Relational Upgrade And Recovery
+
+No real installation upgrade is authorized by this task. For any separately
+authorized upgrade, first quiesce all API/Worker writers, drain/reconcile outbox
+work, and take a verified consistent PostgreSQL backup. Record domain and
+manifest counts, IDs and historical fields before applying `db:migrate` to the
+explicit destination. The same migration assigns all existing rows/manifests to
+the designated local UUID, then enforces NOT NULL and composite parent/owner
+foreign keys. Existing IDs, typed/raw timestamps, NULL Stream links, archival
+state, configuration and output paths remain unchanged; no media is accessed.
+
+Rehearse populated upgrade and late-failure recovery with synthetic data only:
+
+```bash
+node scripts/test-db-foundation.mjs
+```
+
+The harness uses port 55432, temporary schemas/source files and the test-only
+volume. It checks fresh/repeated migrations, concurrent bootstrap, populated
+Wave 05 backfill, late-failure rollback, cross-owner FK rejection, imports and
+restart durability, then removes only its disposable project/volume. Do not run
+it while another process owns that test project or database. A failed migration
+does not switch authority: retain diagnostics/backup, inspect migration state,
+repair forward and rerun the runner, or restore the verified backup while
+writers remain stopped. Never manually mark a failed migration applied, remove
+normal volumes, reassign owners, or fall back to stale JSON after relational
+writes.
+
+### Legacy Import And Owner-Aware Replay
+
+Keep `TOOL_VERSION=legacy-json-v1` and the existing manifest file format. With
+`DATABASE_URL` still pointing at the disposable database, use a new empty domain
+database and synthetic private paths:
+
+```bash
+pnpm --dir api migrate:legacy dry-run --source /private/synthetic-source
+pnpm --dir api migrate:legacy backup --source /private/synthetic-source --destination /private/synthetic-backup --quiesced
+pnpm --dir api migrate:legacy import --snapshot /private/synthetic-backup --manifest /private/synthetic-backup/manifest.json --quiesced
+pnpm --dir api migrate:legacy verify --snapshot /private/synthetic-backup --manifest /private/synthetic-backup/manifest.json
+pnpm --dir api migrate:legacy import --snapshot /private/synthetic-backup --manifest /private/synthetic-backup/manifest.json --quiesced
+```
+
+Import resolves bootstrap inside the import transaction and assigns it to every
+row and manifest. Existing destination rows still reject first import, including
+foreign-owner ID collisions. Replay compares manifest provenance and ownership
+of surviving imported IDs without overwriting later edits. Unrelated new owners
+are not imported identities. Read-only verification compares bootstrap owner,
+ledger, counts and all imported fields. A conflicting owner or ledger fails
+without reassignment; do not edit manifests/owners to force acceptance. Preserve
+the database, snapshot and outbox for diagnosis/forward repair. Cleanup is only
+for resources created by the isolated rehearsal:
+
+```bash
+docker compose -f compose.test-db.yml -p streamrecorder-test-db down --volumes
+unset DATABASE_URL
+```
 
 ## Local database
 

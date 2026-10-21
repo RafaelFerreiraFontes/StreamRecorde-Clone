@@ -57,6 +57,10 @@ describeDatabase("legacy migration isolated PostgreSQL", () => {
       started_at: null, finished_at: null, legacy_started_at_raw: started, legacy_finished_at_raw: finished,
       channel_name: null, platform: null, quality: null });
     const targets = (await pool.query("select * from watch_targets order by id")).rows;
+    const localId = await database.resolveBootstrapLocalUser();
+    for (const table of ["creators", "watch_targets", "streams", "recordings", "migration_manifests"]) {
+      expect((await pool.query(`select distinct owner_id from ${table}`)).rows).toEqual([{ owner_id: localId }]);
+    }
     expect(targets.map((row) => row.enabled)).toEqual([true, true, false]);
     expect(targets.map((row) => row.quality)).toEqual(["best", "1080p", "720p"]);
     expect(new Set(targets.map((row) => row.creator_id)).size).toBe(1);
@@ -92,16 +96,61 @@ describeDatabase("legacy migration isolated PostgreSQL", () => {
     await expect(importSnapshot(database.connection, snapshot, manifest, true)).rejects.toThrow(/ledger conflict/);
   });
 
+  it("rejects changed manifest owner on replay and verification without reassigning data", async () => {
+    await capture();
+    await importSnapshot(database.connection, snapshot, manifest, true);
+    const other = (await pool.query("insert into users (id,username) values (gen_random_uuid(),'manifest-other') on conflict (username) do update set username=excluded.username returning id")).rows[0].id;
+    await pool.query("update migration_manifests set owner_id=$1", [other]);
+    await expect(importSnapshot(database.connection, snapshot, manifest, true)).rejects.toThrow(/ledger conflict/);
+    await expect(verifySnapshot(database.connection, snapshot, manifest)).rejects.toThrow(/conflicting import ledger/);
+    expect((await pool.query("select owner_id from migration_manifests")).rows[0].owner_id).toBe(other);
+    expect((await pool.query("select owner_id from recordings")).rows[0].owner_id).toBe(await database.resolveBootstrapLocalUser());
+  });
+
+  it("rejects replay and verification when the imported owner mapping changes", async () => {
+    await capture();
+    await importSnapshot(database.connection, snapshot, manifest, true);
+    const other = (await pool.query("insert into users (id,username) values (gen_random_uuid(),'mapping-other') on conflict (username) do update set username=excluded.username returning id")).rows[0].id;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("delete from recordings");
+      await client.query("delete from streams");
+      await client.query("delete from watch_targets");
+      await client.query("update creators set owner_id=$1", [other]);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally { client.release(); }
+    await expect(importSnapshot(database.connection, snapshot, manifest, true)).rejects.toThrow(/owner conflict/);
+    await expect(verifySnapshot(database.connection, snapshot, manifest)).rejects.toThrow(/mismatch/);
+    expect((await pool.query("select owner_id from creators")).rows[0].owner_id).toBe(other);
+  });
+
+  it("does not treat unrelated owners as conflicting imported identities on replay", async () => {
+    await capture();
+    await importSnapshot(database.connection, snapshot, manifest, true);
+    const other = (await pool.query("insert into users (id,username) values (gen_random_uuid(),'unrelated-other') on conflict (username) do update set username=excluded.username returning id")).rows[0].id;
+    await pool.query("insert into creators (id,owner_id,display_name,normalized_key) values (gen_random_uuid(),$1,'Unrelated','unrelated')", [other]);
+    expect((await importSnapshot(database.connection, snapshot, manifest, true)).outcome).toBe("idempotence-verified");
+    expect((await pool.query("select count(*) from creators")).rows[0].count).toBe("2");
+  });
+
   it("rolls back all inserts on a late failure and rejects existing destination IDs", async () => {
     await capture();
+    await pool.query("delete from users where bootstrap_key='local'");
     await pool.query("alter table recordings add constraint migration_test_failure check (false) not valid");
     try {
       await expect(importSnapshot(database.connection, snapshot, manifest, true)).rejects.toThrow();
       expect((await pool.query("select count(*) from creators")).rows[0].count).toBe("0");
       expect((await pool.query("select count(*) from migration_manifests")).rows[0].count).toBe("0");
+      expect((await pool.query("select count(*) from users where bootstrap_key='local'")).rows[0].count).toBe("0");
     } finally { await pool.query("alter table recordings drop constraint migration_test_failure"); }
-    await pool.query("insert into creators (id, display_name, normalized_key) values ($1, 'Existing', 'existing')", [recordingId]);
+    const other = (await pool.query("insert into users (id,username) values (gen_random_uuid(),'existing-other') on conflict (username) do update set username=excluded.username returning id")).rows[0].id;
+    await pool.query("insert into creators (id, owner_id, display_name, normalized_key) values ($1, $2, 'Existing', 'existing')", [recordingId, other]);
     await expect(importSnapshot(database.connection, snapshot, manifest, true)).rejects.toThrow(/Destination conflict/);
+    expect((await pool.query("select owner_id from creators where id=$1", [recordingId])).rows[0].owner_id).toBe(other);
   });
 
   it("preserves original JSON before activation and forward state after cutover edits", async () => {
