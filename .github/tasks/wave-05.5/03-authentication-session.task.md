@@ -4,16 +4,14 @@ wave: "05.5"
 order: 03
 depends_on:
   - 02-user-schema-migration.task.md
-status: planned
+status: done
 ---
 
 # Wave 05.5 — Task 03 — Authentication and Session Lifecycle
 
 ## Status and Preconditions
 
-Planned only; implementation has not started. Read the [wave specification](README.md), project/MVP instructions and the accepted predecessor deliverables. Wait for predecessor validation, independent review and human acceptance under the existing lifecycle. Creating this task does not authorize its execution.
-
-T01's accepted authentication-ownership-decisions.md is required. If it is missing or a relevant decision is unresolved, return to Coordinator review rather than inventing a policy.
+done — The implementation of Task 03 is complete, validated across all unit and isolated PostgreSQL suites, independently approved by Luna (Review 2: PASS), and formally accepted by human authorization. Bounded authentication, scrypt credential verification, CLI user management, opaque database sessions, brute-force controls, and trusted-Origin enforcement are integrated into the branch while preserving the production authenticated-mode startup guard until Task 07.
 
 ## Context / Objective
 
@@ -39,11 +37,11 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Acceptance Criteria
 
-- [ ] Local mode resolves the stable account without mandatory login.
-- [ ] Invalid credentials, expired/revoked sessions and missing identity fail closed.
-- [ ] Logout and restart behave as accepted; session material and hashes are absent from responses/logs.
-- [ ] Rate limiting, input validation, transport and CSRF policy have focused positive/negative tests.
-- [ ] Internal service credentials cannot be used as a normal user session; incomplete authenticated mode stays gated.
+- [x] Local mode resolves the stable account without mandatory login.
+- [x] Invalid credentials, expired/revoked sessions and missing identity fail closed.
+- [x] Logout and restart behave as accepted; session material and hashes are absent from responses/logs.
+- [x] Rate limiting, input validation, transport and CSRF policy have focused positive/negative tests.
+- [x] Internal service credentials cannot be used as a normal user session; incomplete authenticated mode stays gated.
 
 ## Automated Tests / Verification
 

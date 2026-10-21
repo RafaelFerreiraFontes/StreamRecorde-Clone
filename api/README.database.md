@@ -1,5 +1,79 @@
 # Wave 05 PostgreSQL Persistence And Operations
 
+## Wave 05.5 Task 03: Accounts And Sessions
+
+Task 03 adds CLI-only account provisioning and `/auth/session`, `/auth/login`,
+and `/auth/logout`. It does not activate authenticated operation. Production
+startup still rejects `IDENTITY_MODE=authenticated` with
+`authenticated mode not yet available`. Only T07 may remove that guard after
+the ownership, filesystem, frontend and integrated validation gates and human
+approval. Tests exercise authenticated paths using isolated Nest testing apps.
+There is no registration endpoint, default password or automatic data cutover.
+
+Apply the explicit migrations first and configure `DATABASE_URL` for the
+intended database. Run these commands from the repository root:
+
+```bash
+pnpm --dir api users create alice --email alice@example.test
+pnpm --dir api users set-password local
+pnpm --dir api users disable alice
+pnpm --dir api users enable alice
+pnpm --dir api users list
+```
+
+`create` and `set-password` read one password from a no-echo TTY prompt or
+piped stdin. Never put a password in argv, shell history or a committed file;
+password flags and extra positional arguments are rejected. Passwords are
+12-256 characters, stored as salted asynchronous scrypt hashes (N=32768,
+r=8, p=1, 64-byte key, 16-byte salt). Username and optional email are trimmed,
+NFKC-normalized and lowercased. Username must match
+`^[a-z0-9][a-z0-9._-]{2,31}$`. Email is not a login identifier. The `list`
+command exposes account status, not password hashes. `set-password local`
+preserves the bootstrap UUID and bootstrap key. Disablement revokes all
+sessions transactionally without deleting domain history; enablement clears
+lockout state. Password enrollment also clears failed-login/lockout state.
+
+In default JSON/local mode, `GET /auth/session` returns local/json with
+`user: null` and creates no database identity. Relational/local mode resolves
+the stable bootstrap local user. Login/logout are 404 in local mode. Database
+failure in relational mode returns a bounded 503, never JSON/local fallback.
+Public identities contain only `id`, `username`, and `email`.
+
+For the future authenticated mode, configure `AUTH_TRUSTED_ORIGINS` as a
+comma-separated list of exact HTTP/HTTPS origins, for example
+`http://localhost:3000,https://app.example.test`. Paths, trailing slashes,
+wildcards, credentials, queries and fragments are invalid. Every unsafe
+cookie request (including login/logout) requires a matching Origin, with
+Referer-origin fallback only when Origin is absent. Missing/untrusted origins
+or an empty allowlist return 403. CORS remains disabled. T04 can reuse
+`AuthService.requireUnsafeOrigin` and `resolvePrincipal` for domain guards.
+Human identity never accepts `x-internal-token` or client-supplied owner IDs;
+Worker service authentication remains separate.
+
+Sessions use 32-byte random opaque tokens, stored only as SHA-256 hashes.
+The host-only `sr_session` cookie is HttpOnly, Path=/, SameSite=Lax and Secure
+only for a validated HTTPS origin. All auth responses are no-store. Sessions
+expire after 24 idle hours or seven absolute days; use extends idle expiry at
+most once per five minutes without exceeding the absolute deadline. Login
+rotates any supplied previous session and opportunistically purges expired
+sessions. Logout revokes the current session and clears the cookie; repeated
+logout is 401. Disabled users cannot use existing sessions. Valid sessions
+survive API/database restarts; no signing secret is required.
+
+Unknown users, wrong passwords, disabled accounts and locked accounts receive
+the same `401 {"message":"Invalid credentials"}`. Ten consecutive account
+failures produce a 15-minute database lock; concurrent failures serialize on
+the account row. Successful login resets the counter. The additional bounded
+in-process source-IP limiter permits 20 attempts per 15 minutes, uses the
+socket address rather than forwarded headers, and is best effort across API
+instances/restarts. It returns 429 when exhausted.
+
+Deterministic auth unit tests run with the API suite. The auth PostgreSQL
+integration suite is registered in `test:db:integration` and runs with
+`node scripts/test-db-foundation.mjs` against the disposable test database,
+including lifecycle, lockout, outages and API/database restart durability.
+These tests never use normal runtime data or recordings.
+
 Tasks 01-06 implement the persistence transition: Drizzle/PostgreSQL schema,
 stable Creator/WatchTarget CRUD, relational Stream/Recording history, internal
 Worker events, durable outbox recovery, and explicit legacy migration/cutover.

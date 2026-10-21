@@ -15,6 +15,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node -r ts-node/register src/database/migrate.ts",
     "migrate:legacy": "node -r ts-node/register src/migrator/cli.ts",
+    "users": "node -r ts-node/register src/auth/users-cli.ts",
     "test:db:integration": "node scripts/test-db-integration.mjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
