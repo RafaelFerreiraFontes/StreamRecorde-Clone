@@ -128,8 +128,8 @@ flowchart TD
         LocalMedia[("Local Recording Storage\n(/recordings)")]
 
         Worker --> Outbox
-        Outbox -.->|HTTP + Token| IntCtrl
-        Worker -->|Reads Config (JSON Mode)| JSONFiles
+        Outbox -.->|HTTP and Token| IntCtrl
+        Worker -->|Reads Config in JSON Mode| JSONFiles
         Worker --> SL
         SL --> LocalMedia
     end
@@ -156,8 +156,6 @@ flowchart TD
 - Docker Desktop with Docker Compose v2.
 - Git.
 - For local (non-Docker) development: Node.js `>=25.9.0`, pnpm, Python 3.10+, Streamlink 8.6.1, and FFmpeg.
-
-## Local Quick Start with Docker Compose
 
 ### 1. Start the Stack (Default JSON Mode)
 
