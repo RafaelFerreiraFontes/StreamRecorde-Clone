@@ -17,22 +17,22 @@ Use the smallest maintainable design that proves the slice. Avoid a collection o
 
 ## 2. Current Baseline Versus Target MVP
 
-Wave 04.75 provides a working initial local slice:
+Wave 05 is complete and integrated into master. The current local slice provides:
 
-- NestJS REST domain/legacy API with JSON adapters.
+- NestJS REST domain/legacy API with default JSON adapters and opt-in Drizzle/PostgreSQL repositories.
 - Next.js App Router dashboard, target edits, polling, diagnostics, and recording location browsing.
 - Independent Python Worker polling enabled WatchTargets, classifying LIVE/OFFLINE/ERROR, selecting adaptive quality, and recording locally.
-- Stream/Recording lifecycle, JSON compatibility, terminal-persistence recovery, and safe subprocess shutdown.
-- Three-service local Compose and deterministic API/Worker/frontend tests plus fake-Streamlink Docker smoke.
+- Stream/Recording lifecycle, JSON compatibility, terminal-persistence recovery, and safe subprocess shutdown; relational mode adds the internal API bridge with transactional event acknowledgment and durable outbox/checkpoints.
+- Four-service local Compose (PostgreSQL, API, frontend and Worker), deterministic API/Worker/frontend tests, isolated database/migration tests and fake-Streamlink JSON/bridge Docker smoke.
 
 Current limitations must remain visible:
 
-- Creator identity is derived from display_name/channel_name; no independent Creator CRUD exists.
-- Shared JSON is the primary persistence/communication layer.
-- Legacy sessions do not persist Recording.stream_id.
+- JSON mode retains name-derived Creator grouping. Relational mode provides stable persisted Creator identity and independent API CRUD; the frontend does not yet expose independent Creator mutation.
+- Default Compose remains JSON-authoritative (RELATIONAL_STORAGE=false; Worker PERSISTENCE_MODE=direct_json). PostgreSQL is domain authority only after explicit coordinated relational cutover; startup does not migrate data.
+- Legacy sessions omit Recording.stream_id and imports preserve unknown links as NULL; new relational bridge recordings persist valid Stream/WatchTarget relationships.
 - Successful capture uses finished, not COMPLETED.
 - FFmpeg is installed/available to Streamlink, but no separate FFmpeg finalization command is explicitly invoked.
-- There is no persisted User/profile, authentication, PostgreSQL, Redis/BullMQ, queue-backed Recording Job, SSE, Worker heartbeat, cloud integration, or Tauri.
+- There is no persisted User/profile, human authentication, ownership, Redis/BullMQ, queue-backed Recording Job, SSE, Worker heartbeat, cloud integration, or Tauri. The internal Worker token is service authentication, not a user account.
 
 The target slice below is not a claim that these gaps have already been resolved. [PROJECT-STATUS.md](../../PROJECT-STATUS.md) holds the current milestone and roadmap.
 
@@ -85,7 +85,7 @@ The target functional scenario is:
 11. Recording remains locally accessible.
 12. Status and failures are observable.
 
-Today target creation also establishes name-derived Creator grouping, and Worker polling initiates capture directly. Stable Creator persistence is Wave 05; profile/authentication is Wave 05.5; queue-backed execution is Wave 06. The target scenario does not make all later technologies requirements of the current task.
+In JSON mode, target creation establishes name-derived Creator grouping. Relational mode has stable Creator persistence and CRUD from Wave 05. Worker polling still initiates capture directly. Profile/authentication is planned in Wave 05.5 and queue-backed execution in Wave 06; the target scenario does not make all later technologies requirements of the current task.
 
 Cloud connection/upload, desktop packaging, and hosted deployment are not conditions for this slice to succeed.
 
@@ -101,7 +101,7 @@ Controllers handle transport and remain thin. Services enforce application/domai
 
 The current API exposes configuration, domain/history reads, validation, legacy mappings, and read-only recording locations. It does not capture media, execute Streamlink/FFmpeg, or hold a request open until recording finishes.
 
-As later waves add capabilities, the API owns stable domain management, authentication/ownership enforcement, and recording-job orchestration. Do not duplicate media-processing logic in the API or move business rules into the frontend.
+The API already owns stable relational domain management. Later waves add authentication/ownership enforcement and recording-job orchestration. Do not duplicate media-processing logic in the API or move business rules into the frontend.
 
 When a future recording request schedules work, validate the target and applicable authorization, resolve the exact configuration, persist/schedule the work, and return promptly.
 
@@ -129,13 +129,13 @@ GET /recordings?watchTargetId=<id>
 
 Recording filesystem/location GETs support safe metadata browsing. Legacy /streamer and /session routes still coexist.
 
-Creator mutations, /auth, /users, and cloud-storage routes are not currently implemented. Old conceptual route examples do not override the actual controller/proxy contracts.
+Relational mode supports POST /creators, PATCH /creators/:id and DELETE /creators/:id through the API. The frontend proxy/UI does not expose independent Creator mutation. /auth, /users and cloud-storage routes are not implemented. Old conceptual route examples do not override the actual controller/proxy contracts.
 
 Prefer REST resource-oriented design for additions. Preserve response shapes, status/error semantics, IDs, filters, and legacy boundaries unless an explicit migration justifies a change.
 
 ## 8. Creator and WatchTarget Management
 
-**Creator target:** independently create, list, read, update, and delete/manage identity with history-safe semantics. Wave 05 must resolve stable persistence and legacy name-ID mapping. Ownership applies when introduced in Wave 05.5.
+**Creator current behavior:** relational API persistence supports stable identity, independent CRUD and history-safe archival; JSON compatibility retains name-derived grouping. Preserve legacy name-ID lookup semantics within the applicable storage mode. Ownership applies when introduced in Wave 05.5.
 
 **WatchTarget current behavior:** create/read/delete and PATCH enabled, recording_subdir, quality, and URL. Preserve omitted fields; an empty recording_subdir clears the override. The API creates targets enabled by default, and legacy absent enabled maps to true.
 
@@ -149,9 +149,9 @@ Do not let name changes, target deletion, or config edits silently reassign hist
 
 The Worker currently creates/reuses Streams and creates capture attempts; the API exposes their persisted history. Repeated live observations may use one Stream; a failed capture can be retried within it; a later broadcast has a new Stream.
 
-Preserve Recording session_id, watch_target_id, timestamps, output_file, and lifecycle across the compatibility boundary. stream_id is known in memory for new captures but omitted by legacy sessions adapters. Unknown historical links must remain explicit, not invented.
+Preserve Recording session_id, watch_target_id, timestamps, output_file, and lifecycle across the compatibility boundary. Legacy sessions adapters omit stream_id; new relational bridge captures persist it with target consistency enforced. Unknown imported historical links remain NULL, not invented.
 
-Future relational persistence must enforce valid relationships and retain relevant historical context. A target edit must not cause the UI to present a past recording as though it used new settings.
+Existing relational persistence enforces valid Stream/Recording target relationships and retains relevant historical context. A target edit must not cause the UI to present a past recording as though it used new settings.
 
 Recording files remain local. Optional export is separate from capture/history validity.
 
@@ -175,7 +175,7 @@ Never include OAuth tokens, credentials, or other secrets directly in job payloa
 
 Worker is the media/operational execution layer, not the owner of all product policy.
 
-Preserve configuration loading, lifecycle updates, local output, operational diagnostics, and failure handling. Keep it independently executable/restartable where its integration allows; future persistence dependencies need explicit recovery behavior.
+Preserve configuration loading, lifecycle updates, local output, operational diagnostics, and failure handling. Keep it independently executable/restartable where its integration allows; preserve the existing bridge outbox/checkpoint recovery and explicit persistence-failure behavior.
 
 Current protections to retain:
 
@@ -187,7 +187,7 @@ Current protections to retain:
 - Shutdown terminates/reaps children and records appropriate failure outcomes.
 - Persistence failure must not become false durable success.
 
-Do not add auth, REST serving, public media indexing, or user-facing business decisions to the Worker.
+Do not add human authentication, REST serving, public media indexing, or user-facing business decisions to the Worker. Preserve its existing token-authenticated internal API client in relational bridge mode.
 
 ## 12. Streamlink
 
@@ -246,7 +246,7 @@ The frontend is a management/monitoring UI. Business rules, validation authority
 
 Current Next.js dashboard supports Creator groups, targets, Streams, Recordings, diagnostics, and polling. Targets can be created/deleted, enabled/disabled, and edited for quality, URL, and folder.
 
-Creator should organize WatchTargets so the user can understand configurations such as Best, 1080p, and 720p as independent rows/settings. Selecting or creating a display name currently establishes grouping; do not imply an independent Creator mutation endpoint exists.
+Creator should organize WatchTargets so the user can understand configurations such as Best, 1080p, and 720p as independent rows/settings. The current UI establishes grouping through target creation/display names. Independent Creator mutation exists in the relational API, but is not exposed by the frontend proxy/UI.
 
 Preserve loading/error/stale-data handling and mutation reconciliation. A failed edit must not leave a false saved value. Open Stream is validated external navigation, not proxying or playing recorded media.
 
@@ -272,7 +272,7 @@ Persist lifecycle state so future realtime delivery can consume it. Keep transpo
 
 ## 19. Persistence Foundation
 
-Current shared files serve different purposes:
+In default JSON mode, shared files serve different purposes:
 
 | File | Role |
 | --- | --- |
@@ -281,13 +281,13 @@ Current shared files serve different purposes:
 | streams.json | Broadcast history |
 | sessions.json | Legacy Recording history without persisted stream_id |
 
-Wave 05 plans PostgreSQL for Creator, WatchTarget, Stream, and Recording. Use normalized entities, explicit relationships, appropriate constraints/indexes, reproducible migrations, and compatible IDs/timestamps.
+Wave 05 implemented PostgreSQL 17 with Drizzle for Creator, WatchTarget, Stream, and Recording. Preserve normalized entities, explicit relationships, constraints/indexes, checked-in migrations, and compatible IDs/timestamps. In opt-in relational bridge mode PostgreSQL is domain authority and channels_status.json remains an operational snapshot, not imported domain history.
 
 Separate domain storage from operational communication. channels_status.json may remain during transition; do not delete every JSON in one replacement. Reuse existing repository/adapters and preserve ongoing Worker writes.
 
-Existing local data needs backup, explicit import, idempotence, malformed-data handling, and rollback. Missing historical links and timezone-free timestamps require honest migration policy.
+Existing local data uses the explicit quiesced dry-run, backup, import, verify and cutover-check procedure in [README.database.md](../../api/README.database.md). Preserve manifest/idempotence checks and explicit failure handling. Unknown historical Stream links remain NULL and legacy timestamp strings remain raw. After new relational writes, do not switch to stale JSON snapshots; follow the documented forward-repair/recovery policy.
 
-User/auth belongs to 05.5, Redis/BullMQ to 06, and Tags to 06.5. Do not create fictitious user_id fields or cloud tables merely to anticipate those waves. Follow the [Wave 05 task](../tasks/wave-05/README.md) for concrete persistence acceptance.
+User/auth/ownership belongs to [Wave 05.5](../tasks/wave-05.5/README.md), Redis/BullMQ to 06, and Tags to 06.5. Ownership schema must follow the accepted Wave 05.5 decisions when execution is authorized; do not add speculative cloud or future-wave tables. [Wave 05](../tasks/wave-05/README.md) records completed persistence work.
 
 ## 20. Security, Validation, Errors, Logging, and Configuration
 
@@ -315,7 +315,7 @@ Users remain responsible for copyright/platform compliance. Terms/disclaimers ar
 
 ## 21. Testing Priorities
 
-Use deterministic tests and existing frameworks. Automated tests must not require Twitch/YouTube/Kick, real live channels, or external platform availability. Use fake Streamlink/process boundaries and isolated storage; later DB integration uses an isolated local test database.
+Use deterministic tests and existing frameworks. Automated tests must not require Twitch/YouTube/Kick, real live channels, or external platform availability. Use fake Streamlink/process boundaries and isolated storage; database integration uses an isolated local PostgreSQL test database.
 
 Mandatory domain scenario:
 
@@ -338,7 +338,7 @@ Cover the implemented scope:
 - Filesystem containment, missing files, unavailable directories, permissions, and private output.
 - Frontend loading/error/edit reconciliation, proxy behavior, and component interactions.
 
-Add Creator CRUD/relational integrity/migration/DB-outage tests in Wave 05, auth/user isolation in 05.5, job payload/retry/idempotence in 06, Tags in 06.5, and provider/export/retention tests in their later waves.
+Preserve existing Wave 05 Creator CRUD/relational integrity/migration/DB-outage coverage. Add auth/user isolation in 05.5, job payload/retry/idempotence in 06, Tags in 06.5, and provider/export/retention tests in their later waves.
 
 Do not confuse:
 
@@ -353,9 +353,9 @@ Run relevant existing API Jest, Worker unittest/pytest, frontend component/proxy
 
 ## 22. Infrastructure and Deferred Milestones
 
-Current local Docker Compose runs frontend, api, and worker with shared runtime-data and recording mounts. API recording access is read-only; frontend uses the API proxy. Preserve Windows/Docker Desktop operation and safe configuration precedence.
+Current local Docker Compose runs postgres, frontend, api, and worker. API and Worker share runtime-data and recording mounts. API recording access is read-only; frontend uses the API proxy. Preserve Windows/Docker Desktop operation and safe configuration precedence.
 
-PostgreSQL and Redis join only in their planned waves, with appropriate local persistence, health/readiness, configuration, and recovery. Do not require Kubernetes, clusters, expensive managed services, GPU processing, or unnecessary microservices.
+PostgreSQL 17 already has a persistent local volume and healthcheck in Compose, while default JSON-mode API startup remains decoupled from database availability. Relational readiness requires database-backed checks; HTTP liveness alone is insufficient. Redis remains planned for Wave 06. Do not require Kubernetes, clusters, expensive managed services, GPU processing, or unnecessary microservices.
 
 The active task controls implementation scope. The roadmap includes PostgreSQL (05), User/auth (05.5), queue/jobs (06), Tags (06.5), local storage/management (07/07.5), SSE/heartbeat (08), Tauri 2 (08.5), and optional cloud (09 onward). Full roadmap/status stays in PROJECT-STATUS.md.
 
@@ -390,7 +390,7 @@ For each wave/feature, require as applicable:
 - Existing behavior preserved and documentation/status updated when necessary.
 - No unrelated complexity or premature future feature.
 
-Cloud export, Hosted Mode, Tauri packaging, SSE, and later retention policies are not premature acceptance requirements for the active slice. Persisted profile/auth and queue behavior remain explicit milestone work, not claims about the Wave 04.75 baseline.
+Cloud export, Hosted Mode, Tauri packaging, SSE, and later retention policies are not premature acceptance requirements for the active slice. Persisted profile/auth and queue behavior remain explicit milestone work, not claims about the current post-Wave 05 baseline.
 
 ## 25. AI Agent Execution Rules
 
