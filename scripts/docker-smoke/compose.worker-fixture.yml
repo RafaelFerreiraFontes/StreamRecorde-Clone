@@ -1,3 +1,4 @@
+# StreamRecorder Clone — Worker Fixture Override for Integration Smoke
 services:
   api:
     volumes:

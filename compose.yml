@@ -1,3 +1,4 @@
+# StreamRecorder Clone — Local Multi-Service Docker Compose
 services:
   postgres:
     image: postgres:17-alpine
