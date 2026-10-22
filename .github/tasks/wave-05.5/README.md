@@ -2,7 +2,7 @@
 
 ## Status and Objective
 
-Wave in progress. T01-T05 are recorded as done in their task files; T05.5 is user-approve after validation and Luna PASS; T06 and T07 remain planned. This README is the umbrella specification, not an additional executable task. T05.5 implementation is complete and awaits human acceptance; its [validation report](linting-validation-report.md) records this execution without re-certifying earlier tasks.
+Wave in progress. T01-T06, including T05.5 (see its [validation report](linting-validation-report.md)), are complete and formally accepted (`done`); T07 is the next planned checkpoint (`planned`). This README is the umbrella specification, not an additional executable task.
 
 Introduce stable User identity, a low-friction local account, credential/session handling and backend resource isolation. Local Mode remains primary; authenticated operation is a capability to validate locally, not authorization for hosted deployment.
 
@@ -29,8 +29,8 @@ Original planning baseline: master at 28e42a1b8b96724b3e1eb7f057b836b65bf8a7f5 (
 | 03 | [Authentication and Session Lifecycle](03-authentication-session.task.md) | 05.5-T02 | done |
 | 04 | [Domain Ownership and Legacy Route Authorization](04-domain-authorization.task.md) | 05.5-T03 | done |
 | 05 | [Worker Ownership and Filesystem Access Boundaries](05-worker-filesystem-ownership.task.md) | 05.5-T04 | done |
-| 05.5 | [Repository Linting and Code Readability](05.5-repository-linting-code-readability.task.md) | 05.5-T05 | user-approve |
-| 06 | [Frontend Identity, Proxy and Session UX](06-frontend-authentication.task.md) | 05.5-T05.5 | planned |
+| 05.5 | [Repository Linting and Code Readability](05.5-repository-linting-code-readability.task.md) | 05.5-T05 | done |
+| 06 | [Frontend Identity, Proxy and Session UX](06-frontend-authentication.task.md) | 05.5-T05.5 | done |
 | 07 | [Wave Integration QA and Operational Documentation](07-wave-integration-qa-documentation.task.md) | 05.5-T06 | planned |
 
 Execute sequentially: T01 decisions -> T02 schema/migration -> T03 authentication -> T04 domain authorization -> T05 Worker/filesystem -> T05.5 linting/code remediation -> T06 frontend -> T07 integration/documentation. A completed implementation is not accepted dependency evidence; follow validation, review and human acceptance gates.

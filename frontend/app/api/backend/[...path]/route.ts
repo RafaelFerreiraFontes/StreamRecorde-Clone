@@ -3,17 +3,11 @@ export const dynamic = "force-dynamic";
 
 function isSameOrigin(request: NextRequest): boolean {
   const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
-  // No origin means non-browser/curl request - allow
   if (!origin) return true;
-  // Origin present but no host - reject
-  if (!host) return false;
   try {
     const parsed = new URL(origin);
-    // Origin host must exactly match received host
-    return parsed.host === host;
+    return parsed.origin === request.nextUrl.origin;
   } catch {
-    // Malformed origin - reject
     return false;
   }
 }
@@ -21,6 +15,11 @@ function isSameOrigin(request: NextRequest): boolean {
 async function proxy(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
   const [resource, id, child] = path;
+  const authRoute = resource === "auth" && path.length === 2;
+  const authAllowed =
+    authRoute &&
+    ((request.method === "GET" && id === "session") ||
+      (request.method === "POST" && ["login", "logout"].includes(id)));
   const readable =
     ["creators", "watch-targets", "streams", "recordings", "streamer", "session"].includes(
       resource,
@@ -36,7 +35,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
       (request.method === "PATCH" && path.length === 2) ||
       (request.method === "DELETE" && path.length === 2));
   if (
-    !(request.method === "GET" ? readable : writable) ||
+    !(authAllowed || (request.method === "GET" ? readable : writable)) ||
     path.some((segment) => segment === "." || segment === ".." || /[\\/]/.test(segment))
   )
     return Response.json({ message: "Unsupported API route" }, { status: 404 });
@@ -50,28 +49,43 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     if (resource === "recordings" && id === "filesystem" && path.length === 2) {
       url.searchParams.set("path", request.nextUrl.searchParams.get("path") ?? "");
     }
+    const headers = new Headers({ "Content-Type": "application/json" });
+    const sessionCookies = (request.headers.get("cookie") ?? "")
+      .split(";")
+      .map((cookie) => cookie.trim())
+      .filter((cookie) => cookie.startsWith("sr_session="));
+    if (sessionCookies.length === 1 && /^sr_session=[A-Za-z0-9_-]{43}$/.test(sessionCookies[0]))
+      headers.set("Cookie", sessionCookies[0]);
+    for (const name of ["origin", "referer"]) {
+      const value = request.headers.get(name);
+      if (value !== null) headers.set(name, value);
+    }
     const response = await fetch(url, {
       method: request.method,
       cache: "no-store",
       redirect: "error",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: ["POST", "PATCH"].includes(request.method) ? await request.text() : undefined,
       signal: AbortSignal.timeout(10000),
     });
+    const responseHeaders = new Headers({
+      "Content-Type": response.headers.get("content-type") || "application/json",
+      "Cache-Control": "no-store",
+    });
+    if (authRoute && ["login", "logout"].includes(id)) {
+      for (const cookie of response.headers.getSetCookie())
+        responseHeaders.append("Set-Cookie", cookie);
+    }
     return new Response(response.status === 204 ? null : await response.text(), {
       status: response.status,
-      headers: {
-        "Content-Type": response.headers.get("content-type") || "application/json",
-        "Cache-Control": "no-store",
-      },
+      headers: responseHeaders,
     });
-  } catch (error) {
+  } catch {
     return Response.json(
       {
         message: "NestJS API unavailable. Check API_BASE_URL and the API process.",
-        detail: error instanceof Error ? error.message : String(error),
       },
-      { status: 502 },
+      { status: 502, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

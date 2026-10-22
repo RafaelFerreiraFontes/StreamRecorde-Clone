@@ -21,9 +21,32 @@ HTMLDialogElement.prototype.close = function close() {
   this.removeAttribute("open");
 };
 
-const { cleanup, fireEvent, render, screen, waitFor } = await import("@testing-library/react");
+const {
+  cleanup,
+  fireEvent,
+  render: renderComponent,
+  screen,
+  waitFor,
+} = await import("@testing-library/react");
 const { RecordingBrowser } = await import("../components/recording-browser");
 const { DashboardProvider } = await import("../components/provider");
+const defaultFetch = globalThis.fetch;
+function render(element: React.ReactElement) {
+  const fetch = globalThis.fetch;
+  const fullDashboard = element.type === DashboardProvider;
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path === "/api/backend/auth/session")
+      return Response.json({ identityMode: "local", persistence: "json", user: null });
+    if (
+      !fullDashboard &&
+      /^\/api\/backend\/(creators|watch-targets|streams|recordings)$/.test(path)
+    )
+      return Response.json([]);
+    return fetch(input, init);
+  };
+  return renderComponent(element, fullDashboard ? undefined : { wrapper: DashboardProvider });
+}
 const {
   default: WatchTargets,
   WatchTargetEnabledSwitch,
@@ -45,6 +68,7 @@ const target = {
 
 afterEach(() => {
   cleanup();
+  globalThis.fetch = defaultFetch;
 });
 
 test("enabled switch sends its boolean PATCH body, disables optimistically, reconciles, and rolls back on error", async () => {

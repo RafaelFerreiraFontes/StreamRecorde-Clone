@@ -1,11 +1,11 @@
 ﻿"use client";
 import { useState, useSyncExternalStore } from "react";
-import { api, requestLog, type RequestLog } from "@/lib/api";
+import { requestLog, type RequestLog } from "@/lib/api";
 import { useDashboard } from "@/components/provider";
 import { Empty, Json, ResourceStatus, Table } from "@/components/ui";
 const empty: RequestLog[] = [];
 export default function Diagnostics() {
-  const { snapshot } = useDashboard();
+  const { snapshot, request: api, generation, isCurrentGeneration } = useDashboard();
   const logs = useSyncExternalStore(requestLog.subscribe, requestLog.snapshot, () => empty);
   const [legacy, setLegacy] = useState<unknown>();
   const [error, setError] = useState("");
@@ -15,11 +15,12 @@ export default function Diagnostics() {
     setError("");
     setLegacy(undefined);
     try {
-      setLegacy(await api(path));
+      const data = await api(path);
+      if (isCurrentGeneration(generation)) setLegacy(data);
     } catch (e) {
-      setError(String(e));
+      if (isCurrentGeneration(generation)) setError(String(e));
     } finally {
-      setBusy(false);
+      if (isCurrentGeneration(generation)) setBusy(false);
     }
   }
   return (

@@ -17,7 +17,7 @@ test("proxy returns 502 controlled error when API is unavailable", () => {
 
   // Verify catch block exists (there are multiple: isSameOrigin validation + proxy)
   assert.ok(
-    /\bcatch\s*\([^)]*\)\s*\{/.test(source),
+    /\bcatch\s*(?:\([^)]*\))?\s*\{/.test(source),
     "Proxy must have a catch block for error handling",
   );
 
@@ -46,16 +46,11 @@ test("proxy does not crash on network errors", () => {
   const routePath = resolve("app/api/backend/[...path]/route.ts");
   const source = readFileSync(routePath, "utf-8");
 
-  // Verify Error type check in catch block
-  assert.ok(
-    /error\s+instanceof\s+Error|error\s*\?/.test(source) || /String\s*\(\s*error\s*\)/.test(source),
-    "Proxy catch block must safely handle error (instanceof Error or String conversion)",
-  );
+  assert.ok(!/detail\s*:/.test(source), "Proxy must not disclose upstream exception details");
 
   // Verify Response.json is used for error response (not throw)
-  const catchBlockHasResponse = /catch\s*\([^)]*\)\s*\{[^}]*Response\.(?:json|error)[^}]*\}/s.test(
-    source,
-  );
+  const catchBlockHasResponse =
+    /catch\s*(?:\([^)]*\))?\s*\{[^}]*Response\.(?:json|error)[^}]*\}/s.test(source);
   assert.ok(catchBlockHasResponse, "Proxy catch block must return Response, not throw");
 });
 

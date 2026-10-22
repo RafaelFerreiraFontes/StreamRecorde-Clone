@@ -1,17 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
-
-interface Directory {
-  path: string;
-  truncated?: boolean;
-  entries: { name: string; path: string; kind: "directory" | "file" }[];
-}
-interface Location {
-  status: "available" | "file_not_found" | "directory_unavailable";
-  directory?: Directory;
-  file?: string;
-}
+import { useDashboard } from "./provider";
+import type { RecordingDirectory as Directory, RecordingLocation as Location } from "@/lib/types";
 
 /** Shared server-storage browser. Native dialog supplies focus trapping and Escape. */
 export function RecordingBrowser({
@@ -25,10 +15,12 @@ export function RecordingBrowser({
   onSelect?: (relative: string) => void;
   onClose: () => void;
 }) {
+  const { request: api, authState, generation, isCurrentGeneration } = useDashboard();
   const dialog = useRef<HTMLDialogElement>(null);
   const [path, setPath] = useState<string | null>(initialPath ?? (recordingId ? null : ""));
   const [directory, setDirectory] = useState<Directory>();
   const [location, setLocation] = useState<Location>();
+  const metadataOnly = authState === "authenticated" || (!!location?.status && !location.directory);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -42,39 +34,46 @@ export function RecordingBrowser({
     };
   }, []);
   useEffect(() => {
+    if (authState !== "local" && authState !== "authenticated") return;
     let active = true;
+    const current = () => active && isCurrentGeneration(generation);
     Promise.resolve().then(() => {
-      if (!active) return;
+      if (!current()) return;
       setLoading(true);
       setError("");
       setDirectory(undefined);
+      setLocation(undefined);
+      if (authState === "authenticated" && !recordingId) {
+        setLoading(false);
+        return;
+      }
       const request =
-        path === null && recordingId
+        (path === null || authState === "authenticated") && recordingId
           ? api<Location>(`/recordings/${encodeURIComponent(recordingId)}/location`).then(
               (result) => {
-                if (active) {
+                if (current()) {
                   setLocation(result);
-                  setDirectory(result.directory);
+                  if (authState !== "authenticated") setDirectory(result.directory);
                 }
               },
             )
           : api<Directory>(`/recordings/filesystem?path=${encodeURIComponent(path ?? "")}`).then(
               (result) => {
-                if (active) setDirectory(result);
+                if (current()) setDirectory(result);
               },
             );
       request
         .catch((e) => {
-          if (active) setError(String(e));
+          if (current()) setError(String(e));
         })
         .finally(() => {
-          if (active) setLoading(false);
+          if (current()) setLoading(false);
         });
     });
     return () => {
       active = false;
     };
-  }, [path, recordingId, retry]);
+  }, [path, recordingId, retry, api, authState, generation, isCurrentGeneration]);
   const crumbs = directory?.path.split("/").filter(Boolean) ?? [];
   const entries =
     directory?.entries.filter((entry) => !onSelect || entry.kind === "directory") ?? [];
@@ -107,20 +106,37 @@ export function RecordingBrowser({
           {location.file ? ` - ${location.file}` : ""}
         </p>
       )}
-      <nav aria-label="Recording folder breadcrumbs" className="folder-breadcrumbs">
-        <button type="button" onClick={() => setPath("")}>
-          Recordings root
-        </button>
-        {crumbs.map((name, index) => (
-          <button
-            type="button"
-            key={index}
-            onClick={() => setPath(crumbs.slice(0, index + 1).join("/"))}
-          >
-            {name}
+      {metadataOnly && location && (
+        <dl>
+          <dt>Relative folder</dt>
+          <dd>{location.subdir || "/"}</dd>
+          {location.size !== undefined && (
+            <>
+              <dt>File size</dt>
+              <dd>{location.size} bytes</dd>
+            </>
+          )}
+        </dl>
+      )}
+      {authState === "authenticated" && !recordingId && (
+        <p>Enter relative recording paths manually in authenticated mode.</p>
+      )}
+      {!metadataOnly && (
+        <nav aria-label="Recording folder breadcrumbs" className="folder-breadcrumbs">
+          <button type="button" onClick={() => setPath("")}>
+            Recordings root
           </button>
-        ))}
-      </nav>
+          {crumbs.map((name, index) => (
+            <button
+              type="button"
+              key={index}
+              onClick={() => setPath(crumbs.slice(0, index + 1).join("/"))}
+            >
+              {name}
+            </button>
+          ))}
+        </nav>
+      )}
       {loading && <p role="status">Loading folders...</p>}
       {error && (
         <div className="error" role="alert">

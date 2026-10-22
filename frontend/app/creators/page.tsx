@@ -1,7 +1,6 @@
 ﻿"use client";
 import { useEffect, useState } from "react";
 import { useDashboard } from "@/components/provider";
-import { api } from "@/lib/api";
 import { Badge, Empty, Json, ResourceStatus, Table } from "@/components/ui";
 import type { Creator, WatchTarget } from "@/lib/types";
 function CreatorRow({ creator }: { creator: Creator }) {
@@ -9,25 +8,25 @@ function CreatorRow({ creator }: { creator: Creator }) {
   const [targets, setTargets] = useState<WatchTarget[]>();
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
-  const { snapshot } = useDashboard();
+  const { snapshot, request: api, generation, isCurrentGeneration } = useDashboard();
   const targetsUpdated = snapshot["watch-targets"].updated;
   useEffect(() => {
     if (!open) return;
     let active = true;
     api<WatchTarget[]>(`/creators/${encodeURIComponent(creator.id)}/watch-targets`)
       .then((data) => {
-        if (active) {
+        if (active && isCurrentGeneration(generation)) {
           setTargets(data);
           setError("");
         }
       })
       .catch((e) => {
-        if (active) setError(String(e));
+        if (active && isCurrentGeneration(generation)) setError(String(e));
       });
     return () => {
       active = false;
     };
-  }, [open, creator.id, targetsUpdated, retry]);
+  }, [open, creator.id, targetsUpdated, retry, api, generation, isCurrentGeneration]);
   return (
     <section className="panel creator">
       <button className="creator-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>

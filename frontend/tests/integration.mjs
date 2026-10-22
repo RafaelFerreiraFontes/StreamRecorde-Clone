@@ -16,6 +16,10 @@ async function request(path, method = "GET", body) {
   return { status: response.status, data: text ? JSON.parse(text) : undefined };
 }
 try {
+  const session = await request("/auth/session");
+  assert.equal(session.status, 200);
+  assert.equal(session.data.identityMode, "local");
+  assert.ok(["json", "relational"].includes(session.data.persistence));
   for (const path of ["/creators", "/watch-targets", "/streams", "/recordings"]) {
     const response = await request(path);
     assert.equal(response.status, 200);

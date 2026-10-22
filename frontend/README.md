@@ -21,7 +21,7 @@ Next.js App Router, TypeScript, React, Tailwind CSS and native fetch. A shared p
 
 ## Requirements and setup
 
-Use the repository's Node.js requirement (>=25.9.0) and pnpm. No UI framework, authentication, database, queue, or realtime transport is required. For the supported Docker Compose workflow, service lifecycle commands, shared-state behavior, and Windows notes, see the [root development guide](../README.md).
+Use the repository's Node.js requirement (>=25.9.0) and pnpm. Local JSON mode requires no interactive login, database, queue, or realtime transport. For the supported Docker Compose workflow, service lifecycle commands, shared-state behavior, and Windows notes, see the [root development guide](../README.md).
 
 ```sh
 # API terminal (from repository root)
@@ -42,7 +42,17 @@ Open http://localhost:3001. NestJS defaults to port 3000. The Worker is optional
 API_BASE_URL=http://localhost:3000
 ```
 
-`API_BASE_URL` is server-only. The proxy reads it at request time; restart development after environment-file changes. Never prefix it with `NEXT_PUBLIC_`. The proxy allowlists current routes and GET/POST/DELETE/PATCH operations, forwards JSON bodies and the Recording filter, preserves upstream HTTP errors, disables caching and times out upstream calls after 10 seconds. It rejects cross-origin mutations and does not proxy cookies, credentials, filesystem resources, or arbitrary destinations. No backend CORS changes are needed. This unauthenticated console is intended for a trusted local development environment.
+`API_BASE_URL` is server-only. The proxy reads it at request time; restart development after environment-file changes. Never prefix it with `NEXT_PUBLIC_`. The proxy allowlists domain routes plus `GET /auth/session`, `POST /auth/login`, and `POST /auth/logout`. It forwards JSON bodies, `watchTargetId` filters and relative filesystem `path` queries, preserves upstream HTTP errors, disables caching and times out upstream calls after 10 seconds. Unreachable upstreams produce a controlled 502 without exception details.
+
+## Identity and session flow
+
+The frontend verifies `/auth/session` before mounting domain pages or fetching collections. Local JSON and local relational sessions open the dashboard directly, without a login prompt or sign-out control. Authenticated mode requires a non-null user and displays their username and Sign out. Missing or expired identity shows a username/password form; backend unavailability shows a retryable error and never falls back to local mode. This frontend support does not enable authenticated production startup or provision accounts.
+
+Only one valid `sr_session` cookie is forwarded to NestJS. Other cookies, Authorization, identity headers and internal service tokens are not forwarded. Upstream `Set-Cookie` headers are relayed only on login/logout, preserving the backend's host-only HttpOnly, SameSite=Lax, Path=/, conditional Secure and logout-clearing attributes. The proxy rejects cross-origin mutations and forwards incoming Origin/Referer unchanged for backend `AUTH_TRUSTED_ORIGINS` validation; it never invents a trusted origin. Configure the browser origin in the backend policy when using authenticated mode.
+
+Logout immediately removes protected views and clears collections and diagnostics. Login success, identity changes and 401 responses invalidate the request generation and abort older requests; delayed results cannot restore the previous user's data. Failed logout reports that revocation could not be confirmed and offers retry or session verification. A resource 404 does not end the session. Login bodies and responses are excluded from in-memory request diagnostics. Passwords and session tokens are not persisted in browser storage.
+
+Local mode retains read-only recording-directory browsing and the folder picker. Authenticated recording locations show only availability, filename, safe relative subdirectory and size in bytes when provided. Authenticated target folders are entered manually; the UI does not request `/recordings/filesystem`. Neither mode serves recorded media or opens native folders.
 
 ## Pages and API coverage
 

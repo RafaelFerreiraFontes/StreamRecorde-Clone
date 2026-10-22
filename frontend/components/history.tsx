@@ -3,11 +3,10 @@ import { RecordingBrowser } from "./recording-browser";
 import { useEffect, useState } from "react";
 import { useDashboard } from "./provider";
 import { Badge, Empty, Json, ResourceStatus, Table } from "./ui";
-import { api } from "@/lib/api";
 import { timestamp, duration } from "@/lib/format";
 import { states, type Recording } from "@/lib/types";
 export function History({ kind }: { kind: "streams" | "recordings" }) {
-  const { snapshot } = useDashboard();
+  const { snapshot, request: api, generation, isCurrentGeneration } = useDashboard();
   const [locationId, setLocationId] = useState<string>();
   const [target, setTarget] = useState("");
   const [state, setState] = useState("");
@@ -21,19 +20,20 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
   useEffect(() => {
     if (!recordings || !target) return;
     let active = true;
+    const current = () => active && isCurrentGeneration(generation);
     Promise.resolve().then(() => {
-      if (!active) return;
+      if (!current()) return;
       setError("");
       setFiltered(undefined);
       return api<Recording[]>(`/recordings?watchTargetId=${encodeURIComponent(target)}`)
         .then((data) => {
-          if (active) {
+          if (current()) {
             if (!Array.isArray(data)) throw new Error("Invalid API response: expected an array");
             setFiltered({ target, data });
           }
         })
         .catch((e) => {
-          if (active) {
+          if (current()) {
             setFiltered(undefined);
             setError(String(e));
           }
@@ -42,7 +42,15 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
     return () => {
       active = false;
     };
-  }, [recordings, target, snapshot.recordings.updated, retry]);
+  }, [
+    recordings,
+    target,
+    snapshot.recordings.updated,
+    retry,
+    api,
+    generation,
+    isCurrentGeneration,
+  ]);
   const data = recordings
     ? target
       ? filtered?.target === target

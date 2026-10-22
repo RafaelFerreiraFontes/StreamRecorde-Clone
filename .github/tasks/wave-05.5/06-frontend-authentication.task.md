@@ -4,14 +4,19 @@ wave: "05.5"
 order: 06
 depends_on:
   - 05.5-repository-linting-code-readability.task.md
-status: planned
+status: done
 ---
 
 # Wave 05.5 — Task 06 — Frontend Identity, Proxy and Session UX
 
 ## Status and Preconditions
 
-Planned only; implementation has not started. Read the [wave specification](README.md), project/MVP instructions and the accepted predecessor deliverables. Wait for predecessor validation, independent review and human acceptance under the existing lifecycle. Creating this task does not authorize its execution.
+Task 06 implementation is complete and formally approved on 2026-10-22 against the accepted [wave specification](README.md), project/MVP instructions and accepted T01–T05.5 deliverables.
+- Next.js proxy allowlist extended for `/auth/session`, `/auth/login` and `/auth/logout` with safe `sr_session` forwarding, `Origin`/`Referer` forwarding and auth-only `Set-Cookie` relay.
+- Local and authenticated frontend session resolution, login/logout recovery, request-generation cancellation, snapshot/diagnostic invalidation and mode-aware Recording location UX implemented.
+- All required validation gates passed (lint, format, frontend typecheck/build/38 tests, API typecheck/179 tests, isolated PostgreSQL 80 tests and Docker bridge smoke).
+- Luna Review 2 returned PASS.
+- Human acceptance explicitly granted. Authenticated production mode remains disabled until Task 07.
 
 T01's accepted authentication-ownership-decisions.md is required. If it is missing or a relevant decision is unresolved, return to Coordinator review rather than inventing a policy.
 
@@ -39,11 +44,11 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Acceptance Criteria
 
-- [ ] Local dashboard remains usable without interactive login; authenticated dashboard requires valid identity.
-- [ ] Proxy preserves the accepted credential/session lifecycle without exposing service secrets.
-- [ ] Logout/user switch/401 clears data, including delayed concurrent responses.
-- [ ] Two-user UI tests show no stale identity or resource leakage.
-- [ ] Existing dashboard/proxy/component behavior remains compatible under the accepted modes.
+- [x] Local dashboard remains usable without interactive login; authenticated dashboard requires valid identity.
+- [x] Proxy preserves the accepted credential/session lifecycle without exposing service secrets.
+- [x] Logout/user switch/401 clears data, including delayed concurrent responses.
+- [x] Two-user UI tests show no stale identity or resource leakage.
+- [x] Existing dashboard/proxy/component behavior remains compatible under the accepted modes.
 
 ## Automated Tests / Verification
 

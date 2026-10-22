@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 import { useDashboard } from "./provider";
 const navigation = [
   ["/", "Overview", "01"],
@@ -12,7 +13,96 @@ const navigation = [
 ];
 export function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  const { snapshot, automatic, setAutomatic, busy, refresh } = useDashboard();
+  const {
+    snapshot,
+    automatic,
+    setAutomatic,
+    busy,
+    refresh,
+    authState,
+    authBusy,
+    session,
+    authError,
+    login,
+    logout,
+    retrySession,
+    generation,
+  } = useDashboard();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  if (!["local", "authenticated"].includes(authState)) {
+    return (
+      <main className="session-screen">
+        <section className="session-panel" aria-labelledby="session-title">
+          <h1 id="session-title">StreamRecorder</h1>
+          {authState === "initializing" ? (
+            <p role="status">Verifying session...</p>
+          ) : authState === "backend_unavailable" ? (
+            <>
+              <p role="alert">{authError}</p>
+              <button onClick={() => void retrySession()}>Retry</button>
+            </>
+          ) : (
+            <>
+              <h2>Sign in</h2>
+              {authError && (
+                <p className="error" role="alert">
+                  {authError}
+                </p>
+              )}
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  setSubmitting(true);
+                  const secret = password;
+                  setPassword("");
+                  void login(username, secret).finally(() => setSubmitting(false));
+                }}
+              >
+                <label>
+                  Username
+                  <input
+                    name="username"
+                    autoComplete="username"
+                    value={username}
+                    required
+                    disabled={submitting}
+                    onChange={(event) => setUsername(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Password
+                  <input
+                    name="password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    required
+                    disabled={submitting}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </label>
+                <button className="primary" disabled={submitting || authBusy}>
+                  {submitting ? "Signing in..." : authBusy ? "Signing out..." : "Sign in"}
+                </button>
+              </form>
+              <div className="toolbar">
+                <button disabled={submitting || authBusy} onClick={() => void retrySession()}>
+                  Verify session
+                </button>
+                {authState === "authentication_error" && (
+                  <button disabled={submitting || authBusy} onClick={() => void logout()}>
+                    Retry sign out
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+      </main>
+    );
+  }
   const items = Object.values(snapshot);
   const failures = items.filter((x) => x.error).length;
   const status = failures
@@ -57,6 +147,20 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </small>
           </div>
           <div className="toolbar">
+            {authState === "authenticated" && (
+              <>
+                <span className="tag">{session?.user?.username}</span>
+                <button
+                  onClick={() => {
+                    setPassword("");
+                    setUsername("");
+                    void logout();
+                  }}
+                >
+                  Sign out
+                </button>
+              </>
+            )}
             <label className="check">
               <input
                 type="checkbox"
@@ -70,7 +174,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         </header>
-        <main>{children}</main>
+        <main key={generation}>{children}</main>
         <footer>
           Observed state only · Worker detection interval defaults to 60 seconds · No realtime
           connection
