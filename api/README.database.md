@@ -1,5 +1,52 @@
 # Wave 05 PostgreSQL Persistence And Operations
 
+## Wave 05.5 Task 04: Domain Authorization
+
+Task 04 propagates the verified human principal through modern domain and
+legacy `/streamer` and `/session` routes. Owner IDs are explicit request-local
+arguments, never shared singleton state. Relational reads, filters, updates
+and archives are scoped in SQL; creation and automatic Creator grouping use
+the resolved owner, including owner-scoped advisory locks. Client-supplied
+`owner_id` and `ownerId` mutation fields are rejected with 400. Identity claims
+in query parameters or headers never select the owner.
+
+JSON/local behavior remains single-user and creates no database user.
+Relational/local routes resolve only the bootstrap `local` owner; other
+accounts' rows remain stored and invisible. Direct relational service calls
+without an owner retain this bootstrap-local behavior. An explicitly supplied
+invalid owner fails rather than falling back to local.
+
+In isolated authenticated testing apps, domain routes require a valid
+`sr_session`; missing, expired, revoked, or disabled-user sessions return 401.
+The internal Worker token is not a human credential. Unsafe POST/PATCH/DELETE
+requests additionally require a trusted Origin or Referer (403 otherwise).
+Unknown and foreign resources or parent filters return 404. Same-name Creators
+are independent across owners; ambiguous active names within one owner return
+409. Database failures return a bounded `503 Database unavailable`, without SQL
+details or a JSON fallback.
+
+History retains its original owner after configuration archival. Recording
+and Session detail reads include legacy recordings with NULL `stream_id`.
+`GET /recordings?watchTargetId=...` and `GET /session/channel/:id` first authorize
+the target, including archived owned targets; foreign or unknown filters
+return 404 rather than an empty list. Existing IDs, raw timestamps and
+`finished` success states are unchanged.
+
+Until Task 05 establishes owner-safe file metadata, both
+`GET /recordings/filesystem` and `GET /recordings/:id/location` return 401
+without a valid authenticated session and 404 with one, before filesystem
+access. Local mode retains the existing trusted single-operator browser;
+relational/local location lookup authorizes the bootstrap owner's recording.
+No media is moved, exposed or deleted. Privileged internal Worker operations
+retain their existing token-based contracts and are not human-owner-scoped.
+
+Production startup still rejects `IDENTITY_MODE=authenticated` with
+`authenticated mode not yet available`; Task 04 does not activate it. Only
+Task 07 may remove the guard after the remaining gates and human approval.
+The two-user HTTP authorization suite uses real login sessions, an isolated
+PostgreSQL database and temporary filesystem fixtures. It is registered in
+`test:db:integration` and the disposable foundation harness below.
+
 ## Wave 05.5 Task 03: Accounts And Sessions
 
 Task 03 adds CLI-only account provisioning and `/auth/session`, `/auth/login`,
@@ -45,7 +92,7 @@ comma-separated list of exact HTTP/HTTPS origins, for example
 wildcards, credentials, queries and fragments are invalid. Every unsafe
 cookie request (including login/logout) requires a matching Origin, with
 Referer-origin fallback only when Origin is absent. Missing/untrusted origins
-or an empty allowlist return 403. CORS remains disabled. T04 can reuse
+or an empty allowlist return 403. CORS remains disabled. T04 uses
 `AuthService.requireUnsafeOrigin` and `resolvePrincipal` for domain guards.
 Human identity never accepts `x-internal-token` or client-supplied owner IDs;
 Worker service authentication remains separate.

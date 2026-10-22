@@ -4,16 +4,14 @@ wave: "05.5"
 order: 04
 depends_on:
   - 03-authentication-session.task.md
-status: planned
+status: done
 ---
 
 # Wave 05.5 — Task 04 — Domain Ownership and Legacy Route Authorization
 
 ## Status and Preconditions
 
-Planned only; implementation has not started. Read the [wave specification](README.md), project/MVP instructions and the accepted predecessor deliverables. Wait for predecessor validation, independent review and human acceptance under the existing lifecycle. Creating this task does not authorize its execution.
-
-T01's accepted authentication-ownership-decisions.md is required. If it is missing or a relevant decision is unresolved, return to Coordinator review rather than inventing a policy.
+done — The implementation of Task 04 is complete, validated across all unit and isolated PostgreSQL suites, independently approved by Luna (Review 1: PASS), and formally accepted after independent final verification and human approval. SQL-level domain ownership, legacy route authorization, forged-owner rejection, and temporary authenticated filesystem fail-closed behavior are integrated into the branch while preserving the production authenticated-mode startup guard until Task 07.
 
 ## Context / Objective
 
@@ -39,11 +37,11 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Acceptance Criteria
 
-- [ ] Two synthetic users cannot list/read/mutate each other's resources by guessed UUID, legacy ID, name or filter.
-- [ ] Forged ownership input and cross-owner relationships are rejected without mutation.
-- [ ] Same-name Creators remain independent across users; sibling target behavior is preserved.
-- [ ] Legacy routes and archived/NULL-stream history enforce the same isolation.
-- [ ] Concurrent requests for different users cannot leak principal state; JSON/local compatibility follows T01.
+- [x] Two synthetic users cannot list/read/mutate each other's resources by guessed UUID, legacy ID, name or filter.
+- [x] Forged ownership input and cross-owner relationships are rejected without mutation.
+- [x] Same-name Creators remain independent across users; sibling target behavior is preserved.
+- [x] Legacy routes and archived/NULL-stream history enforce the same isolation.
+- [x] Concurrent requests for different users cannot leak principal state; JSON/local compatibility follows T01.
 
 ## Automated Tests / Verification
 

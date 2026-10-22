@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, HttpException, Injectable, InternalServerErrorException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { isUUID } from "class-validator";
@@ -21,6 +21,25 @@ type StreamInput = StartInput & { id?: string; watchTargetId: string; state?: Re
 type RecordingInput = StreamInput & { sessionId?: string; streamId?: string | null; outputFile?: string | null;
   channelName?: string; platform?: string; quality?: string };
 
+function HumanDatabaseOperation() {
+  return (_target: object, _name: string, descriptor: PropertyDescriptor) => {
+    const operation = descriptor.value;
+    descriptor.value = async function (...args: unknown[]) {
+      try { return await operation.apply(this, args); }
+      catch (error) {
+        if (error instanceof HttpException) throw error;
+        const code = (error as { code?: string; cause?: { code?: string } })?.cause?.code
+          ?? (error as { code?: string })?.code;
+        if (code === "23505") throw new ConflictException("Resource conflict");
+        if (["23503", "23514", "23502", "22P02"].includes(code ?? "")) {
+          throw new BadRequestException("Invalid resource relationship or value");
+        }
+        throw new ServiceUnavailableException("Database unavailable");
+      }
+    };
+  };
+}
+
 @Injectable()
 export class RelationalStreamsRepository extends StreamsRepository {
   private readonly configurationMutex = new Mutex();
@@ -31,6 +50,14 @@ export class RelationalStreamsRepository extends StreamsRepository {
 
   private get db() {
     return this.databaseService.connection;
+  }
+
+  private async resolveOwnerId(ownerId?: string, client?: Transaction): Promise<string> {
+    if (ownerId !== undefined) {
+      if (!isUUID(ownerId)) throw new BadRequestException("Invalid owner");
+      return ownerId;
+    }
+    return this.databaseService.resolveBootstrapLocalUser(client);
   }
 
   async getExecutionConfigs(): Promise<ExecutionConfig[]> {
@@ -130,68 +157,108 @@ export class RelationalStreamsRepository extends StreamsRepository {
       platform: row.platform ?? undefined, quality: row.quality ?? undefined };
   }
 
-  override async findAllStreams(): Promise<Stream[]> {
-    return (await this.db.select().from(streams).orderBy(desc(streams.createdAt), streams.id)).map(row => this.streamView(row));
+  @HumanDatabaseOperation()
+  override async findAllStreams(ownerId?: string): Promise<Stream[]> {
+    const owner = await this.resolveOwnerId(ownerId);
+    return (await this.db.select().from(streams).where(eq(streams.ownerId, owner))
+      .orderBy(desc(streams.createdAt), streams.id)).map(row => this.streamView(row));
   }
 
-  override async findOneStream(id: string): Promise<Stream> {
+  @HumanDatabaseOperation()
+  override async findOneStream(id: string, ownerId?: string): Promise<Stream> {
     if (!isUUID(id)) throw new NotFoundException("Stream not found");
-    const [row] = await this.db.select().from(streams).where(eq(streams.id, id));
+    const owner = await this.resolveOwnerId(ownerId);
+    const [row] = await this.db.select().from(streams).where(and(eq(streams.id, id), eq(streams.ownerId, owner)));
     if (!row) throw new NotFoundException("Stream not found");
     return this.streamView(row);
   }
 
-  async findActiveStreamByWatchTarget(watchTargetId: string): Promise<Stream | null> {
+  @HumanDatabaseOperation()
+  async findActiveStreamByWatchTarget(watchTargetId: string, ownerId?: string): Promise<Stream | null> {
     if (!isUUID(watchTargetId)) return null;
-    const [row] = await this.db.select().from(streams).where(and(eq(streams.watchTargetId, watchTargetId),
+    const owner = await this.resolveOwnerId(ownerId);
+    const [row] = await this.db.select().from(streams).where(and(eq(streams.watchTargetId, watchTargetId), eq(streams.ownerId, owner),
       isNull(streams.finishedAt), isNull(streams.legacyFinishedAtRaw)));
     return row ? this.streamView(row) : null;
   }
 
-  async findStreamsByWatchTarget(watchTargetId: string, since?: string): Promise<Stream[]> {
+  @HumanDatabaseOperation()
+  async findStreamsByWatchTarget(watchTargetId: string, since?: string, ownerId?: string): Promise<Stream[]> {
     if (!isUUID(watchTargetId)) return [];
-    return (await this.db.select().from(streams).where(and(eq(streams.watchTargetId, watchTargetId),
+    const owner = await this.resolveOwnerId(ownerId);
+    return (await this.db.select().from(streams).where(and(eq(streams.watchTargetId, watchTargetId), eq(streams.ownerId, owner),
       since === undefined ? undefined : gte(streams.startedAt, this.timestamp(since))))
       .orderBy(desc(streams.createdAt), streams.id)).map(row => this.streamView(row));
   }
 
-  override async findAllRecordings(): Promise<Recording[]> {
-    return (await this.db.select().from(recordings).orderBy(desc(recordings.createdAt), recordings.id)).map(row => this.recordingView(row));
+  @HumanDatabaseOperation()
+  override async findAllRecordings(ownerId?: string): Promise<Recording[]> {
+    const owner = await this.resolveOwnerId(ownerId);
+    return (await this.db.select().from(recordings).where(eq(recordings.ownerId, owner))
+      .orderBy(desc(recordings.createdAt), recordings.id)).map(row => this.recordingView(row));
   }
 
-  override async findOneRecording(id: string): Promise<Recording> {
+  @HumanDatabaseOperation()
+  override async findOneRecording(id: string, ownerId?: string): Promise<Recording> {
     if (!isUUID(id)) throw new NotFoundException("Recording not found");
-    const [row] = await this.db.select().from(recordings).where(eq(recordings.id, id));
+    const owner = await this.resolveOwnerId(ownerId);
+    const [row] = await this.db.select().from(recordings).where(and(eq(recordings.id, id), eq(recordings.ownerId, owner)));
     if (!row) throw new NotFoundException("Recording not found");
     return this.recordingView(row);
   }
 
-  override async findRecordingsByWatchTarget(id: string): Promise<Recording[]> {
-    if (!isUUID(id)) return [];
-    return (await this.db.select().from(recordings).where(eq(recordings.watchTargetId, id))
+  @HumanDatabaseOperation()
+  override async findRecordingsByWatchTarget(id: string, ownerId?: string): Promise<Recording[]> {
+    const owner = await this.resolveOwnerId(ownerId);
+    await this.requireOwnedHistoricalTarget(id, owner, "Watch target not found");
+    return (await this.db.select().from(recordings).where(and(eq(recordings.watchTargetId, id), eq(recordings.ownerId, owner)))
       .orderBy(desc(recordings.createdAt), recordings.id)).map(row => this.recordingView(row));
   }
 
-  override async findAllSessions(): Promise<SessionDto[]> {
+  private async requireOwnedHistoricalTarget(id: string, ownerId: string, message: string): Promise<void> {
+    if (!isUUID(id)) throw new NotFoundException(message);
+    const [target] = await this.db.select({ id: watchTargets.id }).from(watchTargets)
+      .where(and(eq(watchTargets.id, id), eq(watchTargets.ownerId, ownerId)));
+    if (!target) throw new NotFoundException(message);
+  }
+
+  private sessionView(recording: typeof recordings.$inferSelect, target: typeof watchTargets.$inferSelect | null): SessionDto & { channel_name: string } {
+    const view = this.recordingView(recording);
+    return { session_id: view.session_id, channel_id: view.watch_target_id,
+      channel_name: recording.channelName ?? target?.channelName ?? "",
+      platform: recording.platform ?? target?.platform ?? "", state: view.state,
+      started_at: view.started_at, finished_at: view.finished_at, output_file: view.output_file };
+  }
+
+  @HumanDatabaseOperation()
+  override async findAllSessions(ownerId?: string): Promise<SessionDto[]> {
+    const owner = await this.resolveOwnerId(ownerId);
     const rows = await this.db.select({ recording: recordings, target: watchTargets }).from(recordings)
-      .leftJoin(watchTargets, eq(recordings.watchTargetId, watchTargets.id)).orderBy(desc(recordings.createdAt), recordings.id);
-    return rows.map(({ recording, target }) => {
-      const view = this.recordingView(recording);
-      return { session_id: view.session_id, channel_id: view.watch_target_id,
-        channel_name: recording.channelName ?? target?.channelName ?? "",
-        platform: recording.platform ?? target?.platform ?? "", state: view.state,
-        started_at: view.started_at, finished_at: view.finished_at, output_file: view.output_file };
-    });
+      .leftJoin(watchTargets, and(eq(recordings.watchTargetId, watchTargets.id), eq(watchTargets.ownerId, owner)))
+      .where(eq(recordings.ownerId, owner)).orderBy(desc(recordings.createdAt), recordings.id);
+    return rows.map(({ recording, target }) => this.sessionView(recording, target));
   }
 
-  override async findOneSession(id: string): Promise<SessionDto> {
-    const session = (await this.findAllSessions()).find(row => row.session_id === id);
-    if (!session) throw new NotFoundException("Session not found");
-    return session;
+  @HumanDatabaseOperation()
+  override async findOneSession(id: string, ownerId?: string): Promise<SessionDto> {
+    if (!isUUID(id)) throw new NotFoundException("Session not found");
+    const owner = await this.resolveOwnerId(ownerId);
+    const [row] = await this.db.select({ recording: recordings, target: watchTargets }).from(recordings)
+      .leftJoin(watchTargets, and(eq(recordings.watchTargetId, watchTargets.id), eq(watchTargets.ownerId, owner)))
+      .where(and(eq(recordings.id, id), eq(recordings.ownerId, owner)));
+    if (!row) throw new NotFoundException("Session not found");
+    return this.sessionView(row.recording, row.target);
   }
 
-  override async findSessionsByChannel(id: string): Promise<SessionDto[]> {
-    return (await this.findAllSessions()).filter(row => row.channel_id === id);
+  @HumanDatabaseOperation()
+  override async findSessionsByChannel(id: string, ownerId?: string): Promise<SessionDto[]> {
+    const owner = await this.resolveOwnerId(ownerId);
+    await this.requireOwnedHistoricalTarget(id, owner, "Channel not found");
+    const rows = await this.db.select({ recording: recordings, target: watchTargets }).from(recordings)
+      .leftJoin(watchTargets, and(eq(recordings.watchTargetId, watchTargets.id), eq(watchTargets.ownerId, owner)))
+      .where(and(eq(recordings.watchTargetId, id), eq(recordings.ownerId, owner)))
+      .orderBy(desc(recordings.createdAt), recordings.id);
+    return rows.map(({ recording, target }) => this.sessionView(recording, target));
   }
 
   private async lockTarget(transaction: Transaction, id: string) {
@@ -297,13 +364,18 @@ export class RelationalStreamsRepository extends StreamsRepository {
     return value.trim();
   }
 
-  override async findAllCreators(): Promise<Creator[]> {
-    return (await this.db.select().from(creators).where(isNull(creators.archivedAt)))
+  @HumanDatabaseOperation()
+  override async findAllCreators(ownerId?: string): Promise<Creator[]> {
+    const owner = await this.resolveOwnerId(ownerId);
+    return (await this.db.select().from(creators).where(and(eq(creators.ownerId, owner), isNull(creators.archivedAt))))
       .map(row => this.creatorView(row));
   }
 
-  override async findOneCreator(idOrName: string): Promise<Creator> {
+  @HumanDatabaseOperation()
+  override async findOneCreator(idOrName: string, ownerId?: string): Promise<Creator> {
+    const owner = await this.resolveOwnerId(ownerId);
     const rows = await this.db.select().from(creators).where(and(
+      eq(creators.ownerId, owner),
       isNull(creators.archivedAt),
       isUUID(idOrName) ? eq(creators.id, idOrName) : eq(creators.normalizedKey, idOrName.trim().toLowerCase()),
     ));
@@ -312,86 +384,106 @@ export class RelationalStreamsRepository extends StreamsRepository {
     return this.creatorView(rows[0]);
   }
 
-  override async createCreator(dto: CreateCreatorDto): Promise<Creator> {
+  @HumanDatabaseOperation()
+  override async createCreator(dto: CreateCreatorDto, ownerId?: string): Promise<Creator> {
     return this.configurationMutex.runExclusive(async () => {
       const displayName = this.creatorName(dto.display_name);
-      const ownerId = await this.databaseService.resolveBootstrapLocalUser();
+      const owner = await this.resolveOwnerId(ownerId);
       const [row] = await this.db.insert(creators).values({
-        id: randomUUID(), ownerId, displayName, normalizedKey: displayName.toLowerCase(),
+        id: randomUUID(), ownerId: owner, displayName, normalizedKey: displayName.toLowerCase(),
       }).returning();
       return this.creatorView(row);
     });
   }
 
-  override async updateCreator(id: string, dto: PatchCreatorDto): Promise<Creator> {
+  @HumanDatabaseOperation()
+  override async updateCreator(id: string, dto: PatchCreatorDto, ownerId?: string): Promise<Creator> {
     return this.configurationMutex.runExclusive(async () => {
       if (!isUUID(id)) throw new NotFoundException("Creator not found");
       const displayName = dto.display_name === undefined ? undefined : this.creatorName(dto.display_name);
+      const owner = await this.resolveOwnerId(ownerId);
       const [row] = await this.db.update(creators).set({
         displayName, normalizedKey: displayName?.toLowerCase(), updatedAt: new Date(),
-      }).where(and(eq(creators.id, id), isNull(creators.archivedAt))).returning();
+      }).where(and(eq(creators.id, id), eq(creators.ownerId, owner), isNull(creators.archivedAt))).returning();
       if (!row) throw new NotFoundException("Creator not found");
       await this.projectWatchlist();
       return this.creatorView(row);
     });
   }
 
-  override async removeCreator(id: string): Promise<void> {
+  @HumanDatabaseOperation()
+  override async removeCreator(id: string, ownerId?: string): Promise<void> {
     return this.configurationMutex.runExclusive(async () => {
       if (!isUUID(id)) throw new NotFoundException("Creator not found");
       await this.db.transaction(async transaction => {
+        const owner = await this.resolveOwnerId(ownerId, transaction);
         const [row] = await transaction.select().from(creators)
-          .where(and(eq(creators.id, id), isNull(creators.archivedAt))).for("update");
+          .where(and(eq(creators.id, id), eq(creators.ownerId, owner), isNull(creators.archivedAt))).for("update");
         if (!row) throw new NotFoundException("Creator not found");
         const targets = await transaction.select({ id: watchTargets.id }).from(watchTargets)
-          .where(and(eq(watchTargets.creatorId, id), isNull(watchTargets.archivedAt)));
+          .where(and(eq(watchTargets.creatorId, id), eq(watchTargets.ownerId, owner), isNull(watchTargets.archivedAt)));
         if (targets.length) throw new BadRequestException("Cannot delete creator with active watch targets");
         await transaction.update(creators).set({ archivedAt: new Date(), updatedAt: new Date() })
-          .where(eq(creators.id, id));
+          .where(and(eq(creators.id, id), eq(creators.ownerId, owner), isNull(creators.archivedAt)));
       });
     });
   }
 
-  private async activeTargets() {
+  private async activeTargets(ownerId: string, id?: string, creatorId?: string) {
     return this.db.select({ target: watchTargets, displayName: creators.displayName })
       .from(watchTargets).innerJoin(creators, eq(watchTargets.creatorId, creators.id))
-      .where(and(isNull(watchTargets.archivedAt), isNull(creators.archivedAt)))
+      .where(and(eq(watchTargets.ownerId, ownerId), eq(creators.ownerId, ownerId),
+        isNull(watchTargets.archivedAt), isNull(creators.archivedAt),
+        id === undefined ? undefined : eq(watchTargets.id, id),
+        creatorId === undefined ? undefined : eq(watchTargets.creatorId, creatorId)))
       .orderBy(watchTargets.createdAt, watchTargets.id);
   }
 
-  override async findAllWatchTargets(): Promise<WatchTarget[]> {
-    const [rows, statuses] = await Promise.all([
-      this.activeTargets(), RuntimeStatusJsonAdapter.read(resolveAllConfigPaths(process.env).channels_status),
-    ]);
-    return rows.map(({ target }) => ({
-      id: target.id, creator_id: target.creatorId, channel_name: target.channelName,
+  private async targetViews(rows: Awaited<ReturnType<RelationalStreamsRepository["activeTargets"]>>): Promise<WatchTarget[]> {
+    const statuses = await RuntimeStatusJsonAdapter.read(resolveAllConfigPaths(process.env).channels_status);
+    return rows.map(({ target }) => this.targetView(target, statuses[target.id]?.state ?? "idle"));
+  }
+
+  private targetView(target: typeof watchTargets.$inferSelect, state: WatchTarget["state"]): WatchTarget {
+    return { id: target.id, creator_id: target.creatorId, channel_name: target.channelName,
       platform: target.platform as WatchTarget["platform"], url: target.url,
-      quality: target.quality, enabled: target.enabled,
-      state: statuses[target.id]?.state ?? "idle",
-      ...(target.recordingSubdir === null ? {} : { recording_subdir: target.recordingSubdir }),
-    }));
+      quality: target.quality, enabled: target.enabled, state,
+      ...(target.recordingSubdir === null ? {} : { recording_subdir: target.recordingSubdir }) };
   }
 
-  override async findOneWatchTarget(id: string): Promise<WatchTarget> {
-    const target = (await this.findAllWatchTargets()).find(target => target.id === id);
-    if (!target) throw new NotFoundException("Watch target not found");
-    return target;
+  @HumanDatabaseOperation()
+  override async findAllWatchTargets(ownerId?: string): Promise<WatchTarget[]> {
+    const owner = await this.resolveOwnerId(ownerId);
+    return this.targetViews(await this.activeTargets(owner));
   }
 
-  override async findWatchTargetsByCreator(idOrName: string): Promise<WatchTarget[]> {
-    const creator = await this.findOneCreator(idOrName);
-    return (await this.findAllWatchTargets()).filter(target => target.creator_id === creator.id);
+  @HumanDatabaseOperation()
+  override async findOneWatchTarget(id: string, ownerId?: string): Promise<WatchTarget> {
+    if (!isUUID(id)) throw new NotFoundException("Watch target not found");
+    const owner = await this.resolveOwnerId(ownerId);
+    const rows = await this.activeTargets(owner, id);
+    if (!rows.length) throw new NotFoundException("Watch target not found");
+    return (await this.targetViews(rows))[0];
   }
 
-  override async createWatchTarget(dto: CreateWatchTargetDto): Promise<WatchTarget> {
+  @HumanDatabaseOperation()
+  override async findWatchTargetsByCreator(idOrName: string, ownerId?: string): Promise<WatchTarget[]> {
+    const owner = await this.resolveOwnerId(ownerId);
+    const creator = await this.findOneCreator(idOrName, owner);
+    return this.targetViews(await this.activeTargets(owner, undefined, creator.id));
+  }
+
+  @HumanDatabaseOperation()
+  override async createWatchTarget(dto: CreateWatchTargetDto, ownerId?: string): Promise<WatchTarget> {
     return this.configurationMutex.runExclusive(async () => {
       const id = randomUUID();
+      let owner: string;
       await this.db.transaction(async transaction => {
         const key = this.creatorName(dto.creator_id);
-        const ownerId = await this.databaseService.resolveBootstrapLocalUser(transaction);
-        await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${ownerId + ":" + key.toLowerCase()}))`);
+        owner = await this.resolveOwnerId(ownerId, transaction);
+        await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${owner + ":" + key.toLowerCase()}))`);
         let matches = await transaction.select().from(creators).where(and(
-          eq(creators.ownerId, ownerId),
+          eq(creators.ownerId, owner),
           isNull(creators.archivedAt),
           isUUID(key) ? eq(creators.id, key) : eq(creators.normalizedKey, key.toLowerCase()),
         )).for("update");
@@ -399,7 +491,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
         if (!matches.length) {
           if (isUUID(key)) throw new NotFoundException("Creator not found");
           matches = await transaction.insert(creators).values({
-            id: randomUUID(), ownerId, displayName: key, normalizedKey: key.toLowerCase(),
+            id: randomUUID(), ownerId: owner, displayName: key, normalizedKey: key.toLowerCase(),
           }).returning();
         }
         await transaction.insert(watchTargets).values({
@@ -409,33 +501,37 @@ export class RelationalStreamsRepository extends StreamsRepository {
         });
       });
       await this.projectWatchlist();
-      return this.findOneWatchTarget(id);
+      return this.findOneWatchTarget(id, owner!);
     });
   }
 
+  @HumanDatabaseOperation()
   override async updateWatchTarget(id: string, patch: {
     recordingSubdir?: string; enabled?: boolean; quality?: string; url?: string;
-  }): Promise<WatchTarget> {
+  }, ownerId?: string): Promise<WatchTarget> {
     return this.configurationMutex.runExclusive(async () => {
       if (!isUUID(id)) throw new NotFoundException("Watch target not found");
       if (patch.enabled !== undefined && typeof patch.enabled !== "boolean") {
         throw new BadRequestException("enabled must be a boolean");
       }
+      const owner = await this.resolveOwnerId(ownerId);
       const [row] = await this.db.update(watchTargets).set({
         recordingSubdir: patch.recordingSubdir === undefined ? undefined : patch.recordingSubdir || null,
         enabled: patch.enabled, quality: patch.quality, url: patch.url, updatedAt: new Date(),
-      }).where(and(eq(watchTargets.id, id), isNull(watchTargets.archivedAt))).returning();
+      }).where(and(eq(watchTargets.id, id), eq(watchTargets.ownerId, owner), isNull(watchTargets.archivedAt))).returning();
       if (!row) throw new NotFoundException("Watch target not found");
       await this.projectWatchlist();
-      return this.findOneWatchTarget(id);
+      return this.findOneWatchTarget(id, owner);
     });
   }
 
-  override async removeWatchTarget(id: string): Promise<void> {
+  @HumanDatabaseOperation()
+  override async removeWatchTarget(id: string, ownerId?: string): Promise<void> {
     return this.configurationMutex.runExclusive(async () => {
       if (!isUUID(id)) throw new NotFoundException("Watch target not found");
+      const owner = await this.resolveOwnerId(ownerId);
       const [row] = await this.db.update(watchTargets).set({ archivedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(watchTargets.id, id), isNull(watchTargets.archivedAt))).returning();
+        .where(and(eq(watchTargets.id, id), eq(watchTargets.ownerId, owner), isNull(watchTargets.archivedAt))).returning();
       if (!row) throw new NotFoundException("Watch target not found");
       await this.projectWatchlist();
     });
@@ -448,7 +544,11 @@ export class RelationalStreamsRepository extends StreamsRepository {
   private async projectWatchlist(): Promise<void> {
     if (process.env.PERSISTENCE_MODE === "bridge") return;
     try {
-      const entries = (await this.activeTargets()).map(({ target, displayName }) => ({
+      const rows = await this.db.select({ target: watchTargets, displayName: creators.displayName })
+        .from(watchTargets).innerJoin(creators, eq(watchTargets.creatorId, creators.id))
+        .where(and(isNull(watchTargets.archivedAt), isNull(creators.archivedAt)))
+        .orderBy(watchTargets.createdAt, watchTargets.id);
+      const entries = rows.map(({ target, displayName }) => ({
         id: target.id, display_name: displayName, channel_name: target.channelName,
         platform: target.platform, url: target.url, quality: target.quality, enabled: target.enabled,
         ...(target.recordingSubdir === null ? {} : { recording_subdir: target.recordingSubdir }),
@@ -459,21 +559,27 @@ export class RelationalStreamsRepository extends StreamsRepository {
     }
   }
 
-  private async streamerView(target: WatchTarget): Promise<StreamerDto> {
-    const creator = await this.findOneCreator(target.creator_id);
+  private async streamerView(target: WatchTarget, ownerId: string): Promise<StreamerDto> {
+    const creator = await this.findOneCreator(target.creator_id, ownerId);
     return { id: target.id, display_name: creator.display_name, channel_name: target.channel_name,
       platform: target.platform, url: target.url, quality: target.quality, state: target.state };
   }
 
-  override async findAllStreamer(): Promise<StreamerDto[]> {
-    return Promise.all((await this.findAllWatchTargets()).map(target => this.streamerView(target)));
+  @HumanDatabaseOperation()
+  override async findAllStreamer(ownerId?: string): Promise<StreamerDto[]> {
+    const owner = await this.resolveOwnerId(ownerId);
+    return Promise.all((await this.findAllWatchTargets(owner)).map(target => this.streamerView(target, owner)));
   }
 
-  override async findOneStreamer(id: string): Promise<StreamerDto> {
-    return this.streamerView(await this.findOneWatchTarget(id));
+  @HumanDatabaseOperation()
+  override async findOneStreamer(id: string, ownerId?: string): Promise<StreamerDto> {
+    const owner = await this.resolveOwnerId(ownerId);
+    return this.streamerView(await this.findOneWatchTarget(id, owner), owner);
   }
 
-  override async createStreamer(dto: CreateStreamerDto): Promise<StreamerDto> {
+  @HumanDatabaseOperation()
+  override async createStreamer(dto: CreateStreamerDto, ownerId?: string): Promise<StreamerDto> {
+    const owner = await this.resolveOwnerId(ownerId);
     const platform = dto.platform;
     if (platform !== "youtube" && platform !== "twitch" && platform !== "kick") {
       throw new BadRequestException("Unsupported platform");
@@ -481,11 +587,12 @@ export class RelationalStreamsRepository extends StreamsRepository {
     const target = await this.createWatchTarget({
       creator_id: dto.display_name?.trim() || dto.channel_name, channel_name: dto.channel_name,
       platform, url: dto.url, quality: dto.quality ?? "best",
-    });
-    return this.streamerView(target);
+    }, owner);
+    return this.streamerView(target, owner);
   }
 
-  override async removeStreamer(id: string): Promise<void> {
-    return this.removeWatchTarget(id);
+  @HumanDatabaseOperation()
+  override async removeStreamer(id: string, ownerId?: string): Promise<void> {
+    return this.removeWatchTarget(id, await this.resolveOwnerId(ownerId));
   }
 }

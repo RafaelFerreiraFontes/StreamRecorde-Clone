@@ -12,6 +12,7 @@ const result = spawnSync(
     "database/test/legacy-migration.integration.spec.ts",
     "auth/test/auth.integration.spec.ts",
     "streams/test/relational-persistence.integration.spec.ts",
+    "streams/test/domain-authorization.integration.spec.ts",
     "streams/test/internal-events.integration.spec.ts",
     "--runInBand",
   ],

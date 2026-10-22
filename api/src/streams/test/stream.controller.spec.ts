@@ -610,7 +610,7 @@ describe("StreamController", () => {
 
     await controller.getSessionByChannel("channel-id");
 
-    expect(findSessionsByChannel).toHaveBeenCalledWith("channel-id");
+    expect(findSessionsByChannel).toHaveBeenCalledWith("channel-id", undefined);
   });
 
   it("PATCH quality only changes quality and preserves enabled, recording_subdir, url, and sibling entries", async () => {

@@ -245,7 +245,8 @@ describeDatabase("relational configuration persistence", () => {
     const local = await target("Local");
     await expect(repository.createRecording({ watchTargetId: local.id, streamId: capture.stream.id, startedAt: "2026-01-01T00:00:00Z" }))
       .rejects.toBeInstanceOf(BadRequestException);
-    expect(await repository.findAllRecordings()).toHaveLength(1);
+    expect(await repository.findAllRecordings()).toEqual([]);
+    expect(await repository.findAllRecordings(other)).toEqual([capture.recording]);
   });
 
   it("rolls back combined creation and terminal changes when the second operation fails", async () => {
