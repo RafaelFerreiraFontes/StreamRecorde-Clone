@@ -108,13 +108,13 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
       </div>
       <ResourceStatus resource={kind} />
       <ResourceStatus resource="watch-targets" />
-      {error && target && (
+      {error && target ? (
         <div className="error" role="alert">
           <pre>{error}</pre>
           <button onClick={() => setRetry((n) => n + 1)}>Retry filtered request</button>
         </div>
-      )}
-      {recordings && target && !data && !error && <Empty>Loading filtered recordings…</Empty>}
+      ) : null}
+      {recordings && target && !data && !error ? <Empty>Loading filtered recordings…</Empty> : null}
       <section className="panel">
         {rows?.length ? (
           <Table
@@ -138,11 +138,11 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
                   {targetOptions.get(row.watch_target_id) || row.watch_target_id}
                   <code className="subtext">{row.watch_target_id}</code>
                 </td>
-                {recordings && (
+                {recordings ? (
                   <td>
                     <code>{(row as Recording).stream_id || "Not persisted"}</code>
                   </td>
-                )}
+                ) : null}
                 <td>
                   <Badge state={row.state} />
                 </td>
@@ -153,7 +153,7 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
                   <code>{timestamp(row.finished_at)}</code>
                 </td>
                 <td className="nowrap">{duration(row.started_at, row.finished_at)}</td>
-                {recordings && (
+                {recordings ? (
                   <td>
                     <code className="path">{(row as Recording).output_file || "—"}</code>
                     <button
@@ -164,7 +164,7 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
                       Browse location
                     </button>
                   </td>
-                )}
+                ) : null}
               </tr>
             ))}
           </Table>
@@ -177,13 +177,14 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
       <p className="note">
         Timestamps are shown as persisted. The current Worker omits timezone offsets. Duration is
         calculated only when both timestamps are available.
-        {recordings &&
-          " Stream IDs may not be persisted. Output paths are local Worker filesystem information only."}
+        {recordings
+          ? " Stream IDs may not be persisted. Output paths are local Worker filesystem information only."
+          : null}
       </p>
-      {locationId && (
+      {locationId ? (
         <RecordingBrowser recordingId={locationId} onClose={() => setLocationId(undefined)} />
-      )}
-      {data && <Json data={data} />}
+      ) : null}
+      {data ? <Json data={data} /> : null}
     </>
   );
 }

@@ -6,9 +6,11 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
 ignore = ["E501"]
 
 [lint.isort]
+combine-as-imports = true
 known-first-party = ["worker", "json_adapters", "outbox"]
 
 [format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+docstring-code-format = true

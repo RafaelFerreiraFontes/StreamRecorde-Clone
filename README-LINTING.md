@@ -85,6 +85,33 @@ Exact ASCII C0/DEL security regular expressions use narrowly documented line exc
 
 Ruff uses Python 3.12, width 100, double quotes, spaces and LF. E501 is excluded because formatting does not guarantee every long string/comment fits. Import ordering reflects direct Worker execution and package-style test imports. Review subprocess, context-manager, exception, retry and outbox transformations manually.
 
+### Rule Compatibility and Adoption Matrix
+
+| Area     | Rule or option                                                    | Decision                             | Compatibility rationale                                                                                                                                |
+| -------- | ----------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Frontend | Next Core Web Vitals, TypeScript and Hooks recommendations        | Already enabled                      | Preserve the Next.js baseline and Hooks semantics.                                                                                                     |
+| Frontend | `no-unused-vars`                                                  | Adopted override                     | Error; underscore-prefixed arguments, variables and caught errors are intentionally ignored.                                                           |
+| Frontend | `consistent-type-imports`                                         | Adopted                              | Prefer separate type imports; preserve value imports needed at runtime.                                                                                |
+| Frontend | `no-explicit-any`, `jsx-key`, `prefer-const`                      | Already enabled; explicitly retained | Error; current sources pass without exceptions.                                                                                                        |
+| Frontend | `jsx-no-leaked-render`                                            | Adopted                              | Error; use ternaries or boolean coercion instead of potentially leaking values through JSX conditions.                                                 |
+| Frontend | `self-closing-comp`, `no-array-index-key`                         | Adopted                              | Error; use self-closing empty elements and stable identity keys, including cumulative breadcrumb paths.                                                |
+| Frontend | `eqeqeq`                                                          | Adopted                              | Error with `smart` semantics, preserving intentional null comparisons.                                                                                 |
+| Frontend | `no-console`                                                      | Adopted                              | Warn except `warn`/`error`; `--max-warnings 0` makes other console calls fail the gate.                                                                |
+| Frontend | `no-nested-ternary`                                               | Deferred                             | Avoid broad refactoring of readable JSX and state ternaries under `--max-warnings 0`.                                                                  |
+| Frontend | `no-floating-promises`, `await-thenable`, `prefer-optional-chain` | Deferred                             | Type-aware project setup is not enabled; see optional evaluation below.                                                                                |
+| API      | `prefer-nullish-coalescing`                                       | Rejected                             | Preserve intentional empty-string/zero logical OR fallbacks; the mature API config is unchanged.                                                       |
+| Worker   | isort `combine-as-imports = true`                                 | Adopted                              | Combine aliased imports while retaining existing first-party ordering.                                                                                 |
+| Worker   | format `docstring-code-format = true`                             | Adopted                              | Format recognized docstring code examples using Ruff.                                                                                                  |
+| Prettier | Generated/private-data exclusions                                 | Adopted clarification                | Ignore `.next/`, `api/dist/`, `coverage/`, `.venv/`, `runtime-data/`, `recordings/`, `*.lock`, `pnpm-lock.yaml` and applied `api/drizzle/migrations/`. |
+
+Frontend overrides apply to TS/TSX under app, components, lib and tests. Global ignores precede the Next configurations; root JS/MJS tooling and test scripts disable the additional React rules, and eslint-config-prettier remains last. Maintained frontend, API, Worker and scripts files remain in the runner inventory; ignores do not exclude those directories wholesale. This guide is formatted by the aggregate; the code-quality skill remains outside its bounded Markdown inventory and should be checked explicitly when edited.
+
+### 3.5 Optional Evaluation: Type-Aware Frontend Rules
+
+A non-persistent ESLint evaluation with `projectService: true` found 27 `no-floating-promises` errors, with no `await-thenable` or `prefer-optional-chain` findings. Floating promises require a separate semantic review, particularly for test callbacks; adding `void` indiscriminately would hide rather than handle failures. Defer these rules instead of expanding this hardening task into promise-lifecycle changes.
+
+Although optional-chain passes with type information, enabling a project service solely for a rule with no current findings adds TypeScript project loading and couples lint to tsconfig membership and generated Next.js types. Keep all three type-aware frontend rules deferred so routine lint stays fast and independent of build artifacts. This does not change the API's existing type-aware linting.
+
 ## Regression and Agent Gates
 
 Before independent review, run the aggregate read-only checks and the affected test/typecheck/build suites. For this repository-wide cleanup the required matrix includes API Jest, frontend tests, both production builds, Worker unittest/pytest, isolated database foundation tests and synthetic JSON/bridge Docker smoke.

@@ -350,17 +350,17 @@ export default function WatchTargets() {
           {showForm ? "Close form" : "+ Create WatchTarget"}
         </button>
       </div>
-      {message && (
+      {message ? (
         <div className="success" role="status">
           {message}
         </div>
-      )}
-      {error && (
+      ) : null}
+      {error ? (
         <div className="error" role="alert">
           <pre>{error}</pre>
         </div>
-      )}
-      {showForm && (
+      ) : null}
+      {showForm ? (
         <section className="panel form-panel">
           <h2>Create WatchTarget</h2>
           <p>
@@ -454,7 +454,7 @@ export default function WatchTargets() {
             </button>
           </form>
         </section>
-      )}
+      ) : null}
       <ResourceStatus resource="watch-targets" />
       <ResourceStatus resource="creators" />
       <section className="panel">
@@ -599,14 +599,14 @@ export default function WatchTargets() {
         active recordings continue. Changes take effect when configuration is re-read. This wave
         does not change Worker execution behavior.
       </p>
-      {picker && authState === "local" && (
+      {picker && authState === "local" ? (
         <RecordingBrowser
           initialPath={picker === "edit" ? editValue : undefined}
           onClose={() => setPicker(null)}
           onSelect={picker === "create" ? setCreateFolder : setEditValue}
         />
-      )}
-      {targets && <Json data={targets} />}
+      ) : null}
+      {targets ? <Json data={targets} /> : null}
     </>
   );
 }

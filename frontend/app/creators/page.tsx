@@ -36,17 +36,17 @@ function CreatorRow({ creator }: { creator: Creator }) {
         </span>
         <span>{open ? "− Collapse" : "+ Watch targets"}</span>
       </button>
-      {open && (
+      {open ? (
         <div className="creator-children">
-          {error && (
+          {error ? (
             <div className="error" role="alert">
               <pre>{error}</pre>
               <button onClick={() => setRetry((n) => n + 1)}>Retry</button>
             </div>
-          )}
+          ) : null}
           {!targets && !error && <Empty>Loading Creator watch targets…</Empty>}
-          {targets &&
-            (targets.length ? (
+          {targets ? (
+            targets.length ? (
               <Table headings={["WatchTarget", "Platform", "State", "Quality"]}>
                 {targets.map((t) => (
                   <tr key={t.id}>
@@ -64,9 +64,10 @@ function CreatorRow({ creator }: { creator: Creator }) {
               </Table>
             ) : (
               <Empty>No associated watch targets.</Empty>
-            ))}
+            )
+          ) : null}
         </div>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -93,7 +94,7 @@ export default function Creators() {
         Creator IDs are currently derived from display names. Expand a Creator to query its
         WatchTargets.
       </p>
-      {data && <Json data={data} />}
+      {data ? <Json data={data} /> : null}
     </>
   );
 }

@@ -61,12 +61,12 @@ export default function Diagnostics() {
                   <code>{log.timestamp}</code>
                 </td>
                 <td>
-                  {log.error && (
+                  {log.error ? (
                     <details>
                       <summary>Inspect error</summary>
                       <pre>{log.error}</pre>
                     </details>
-                  )}
+                  ) : null}
                 </td>
               </tr>
             ))}
@@ -79,7 +79,7 @@ export default function Diagnostics() {
       {(["creators", "watch-targets", "streams", "recordings"] as const).map((key) => (
         <div key={key}>
           <ResourceStatus resource={key} />
-          {snapshot[key].data && <Json title={`GET /${key}`} data={snapshot[key].data} />}
+          {snapshot[key].data ? <Json title={`GET /${key}`} data={snapshot[key].data} /> : null}
         </div>
       ))}
       <section className="panel legacy">
@@ -96,12 +96,12 @@ export default function Diagnostics() {
             Inspect GET /session
           </button>
         </div>
-        {busy && <p role="status">Loading compatibility response…</p>}
-        {error && (
+        {busy ? <p role="status">Loading compatibility response…</p> : null}
+        {error ? (
           <div className="error" role="alert">
             <pre>{error}</pre>
           </div>
-        )}
+        ) : null}
         {legacy !== undefined && <Json data={legacy} title="Legacy response" />}
       </section>
     </>

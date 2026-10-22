@@ -70,13 +70,37 @@ Preserve runtime DI and decorator metadata (`emitDecoratorMetadata` / `experimen
 
 Preserve React Hooks and `exhaustive-deps` semantics; avoid stale closures and unintended effect reruns. Preserve the authentication generation/cancellation model (`AbortController` plus generation token), prevent cross-account snapshot restoration, and retain proxy security checks. Passing the formatter does not prove that the UI works; run relevant component/proxy tests.
 
+#### Rule Compatibility and Adoption Matrix
+
+| Decision              | Policy                                                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Already enabled       | Next Core Web Vitals, TypeScript and Hooks recommendations; explicitly retain frontend `no-explicit-any`, `jsx-key` and `prefer-const` as errors.             |
+| Adopted               | TS/TSX `no-unused-vars` ignores underscore-prefixed args, vars and caught errors; `consistent-type-imports` prefers separate type imports.                    |
+| Adopted               | `jsx-no-leaked-render` permits ternary/coerce strategies; `self-closing-comp` covers components and HTML; `no-array-index-key` requires stable identity keys. |
+| Adopted               | `eqeqeq` uses `smart`; `no-console` warns except for `warn`/`error`, and zero-warning gates reject other calls.                                               |
+| Deferred              | `no-nested-ternary`: avoids broad refactoring of readable JSX and state ternaries under `--max-warnings 0`.                                                   |
+| Deferred              | Frontend type-aware `no-floating-promises`, `await-thenable` and `prefer-optional-chain`; do not enable project service incidentally.                         |
+| Rejected              | API `prefer-nullish-coalescing`: preserve intentional logical OR fallback behavior.                                                                           |
+| Adopted               | Ruff `combine-as-imports = true` and `docstring-code-format = true`; preserve the remaining selected rules and format settings.                               |
+| Adopted clarification | Prettier ignores generated output, private runtime/media, environments, lockfiles and applied migrations, without excluding maintained source directories.    |
+
+Keep frontend global ignores first, Next recommendations next, scoped TS/TSX rules and JS/MJS tooling/test overrides after them, and Prettier last. The additional React rules do not apply to Node tooling/test scripts.
+
+#### 3.5 Optional Evaluation: Type-Aware Frontend Rules
+
+The hardening evaluation with `projectService: true` produced 27 floating-promise errors and no await-thenable or optional-chain findings. Resolving test callback and application promise lifecycles needs its own semantic scope; do not silence findings with indiscriminate `void`. Defer all three frontend type-aware rules: optional-chain alone has no current findings and does not justify TypeScript project loading or coupling lint to tsconfig membership and generated Next.js types. API typed linting remains unchanged. See the repository guide for the full adoption matrix.
+
 ### Worker (Python 3.12 / Ruff 0.15.6)
 
 Preserve Python 3.12 target compatibility, Streamlink/FFmpeg subprocess ownership, interruption/shutdown handling, durable outbox/checkpoint recovery, retry semantics, event acknowledgments, and local media retention on persistence failure. Never run live streams as lint validation. Avoid unsafe Ruff fixes unless justified and authorized; use deterministic tests for changed behavior.
 
+Ruff combines aliased imports and formats recognized code examples in docstrings. These options do not authorize changing capture behavior or widening the lint selection.
+
 ### Root Scripts (Node JS/MJS/CJS)
 
 Preserve Docker smoke harnesses, database integration scripts, migration tooling, exit-code propagation, test cleanup ownership, cross-platform paths, and non-destructive fixtures. YAML, Dockerfiles, shell scripts, and applied SQL migrations are excluded from the bounded formatter inventory; their exclusion does not remove task-specific validation obligations.
+
+Prettier excludes `.next/`, `api/dist/`, `coverage/`, `.venv/`, `runtime-data/`, `recordings/`, `*.lock`, `pnpm-lock.yaml` and `api/drizzle/migrations/`. The runner still formats maintained scripts/frontend/API files and README-LINTING.md; Worker Python uses Ruff. Other Markdown, including this skill, is outside the aggregate inventory: explicitly check edited documentation with the root Prettier configuration.
 
 ## 8. Integration with Agent Responsibilities
 

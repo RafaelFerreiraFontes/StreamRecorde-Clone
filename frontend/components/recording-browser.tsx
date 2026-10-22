@@ -94,7 +94,7 @@ export function RecordingBrowser({
         </button>
       </div>
       <p>Server recording storage</p>
-      {location && (
+      {location ? (
         <p role="status">
           {
             {
@@ -105,8 +105,8 @@ export function RecordingBrowser({
           }
           {location.file ? ` - ${location.file}` : ""}
         </p>
-      )}
-      {metadataOnly && location && (
+      ) : null}
+      {metadataOnly && location ? (
         <dl>
           <dt>Relative folder</dt>
           <dd>{location.subdir || "/"}</dd>
@@ -117,7 +117,7 @@ export function RecordingBrowser({
             </>
           )}
         </dl>
-      )}
+      ) : null}
       {authState === "authenticated" && !recordingId && (
         <p>Enter relative recording paths manually in authenticated mode.</p>
       )}
@@ -129,7 +129,7 @@ export function RecordingBrowser({
           {crumbs.map((name, index) => (
             <button
               type="button"
-              key={index}
+              key={crumbs.slice(0, index + 1).join("/")}
               onClick={() => setPath(crumbs.slice(0, index + 1).join("/"))}
             >
               {name}
@@ -137,16 +137,16 @@ export function RecordingBrowser({
           ))}
         </nav>
       )}
-      {loading && <p role="status">Loading folders...</p>}
-      {error && (
+      {loading ? <p role="status">Loading folders...</p> : null}
+      {error ? (
         <div className="error" role="alert">
           <p>{error}</p>
           <button type="button" onClick={() => setRetry((n) => n + 1)}>
             Retry
           </button>
         </div>
-      )}
-      {!loading && directory && (
+      ) : null}
+      {!loading && directory ? (
         <>
           <p>
             Current directory: <code>{directory.path || "Recordings root"}</code>
@@ -170,24 +170,24 @@ export function RecordingBrowser({
           ) : (
             <p>{onSelect ? "No subdirectories." : "This directory is empty."}</p>
           )}
-          {directory.truncated && (
+          {directory.truncated ? (
             <p role="status">
               Showing the first 1,000 entries. Use the manual folder field for an unlisted
               directory.
             </p>
-          )}
-          {onSelect && !directory.path && (
+          ) : null}
+          {onSelect && !directory.path ? (
             <p className="note">
               The root has no folder override. Selecting it uses the existing channel-name default.
             </p>
-          )}
+          ) : null}
         </>
-      )}
+      ) : null}
       <div className="folder-actions">
         <button type="button" onClick={onClose}>
           {onSelect ? "Cancel" : "Close"}
         </button>
-        {onSelect && (
+        {onSelect ? (
           <button
             type="button"
             className="primary"
@@ -201,7 +201,7 @@ export function RecordingBrowser({
           >
             Select current directory
           </button>
-        )}
+        ) : null}
       </div>
     </dialog>
   );

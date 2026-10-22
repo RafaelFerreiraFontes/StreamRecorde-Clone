@@ -46,11 +46,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
           ) : (
             <>
               <h2>Sign in</h2>
-              {authError && (
+              {authError ? (
                 <p className="error" role="alert">
                   {authError}
                 </p>
-              )}
+              ) : null}
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
