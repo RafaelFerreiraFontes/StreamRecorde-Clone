@@ -77,6 +77,16 @@ Do not accept an implementation merely because partial tests passed. Confirm the
 
 Do not request changes for style or personal preference. A simple, correct, scoped implementation should pass.
 
+During review, verify that `.task.md` YAML frontmatter and the corresponding Wave `README.md` task-table status agree and both read `review/QA`, under project instructions section 39.1. For code changes, verify evidence that the selected read-only quality gates, including `pnpm lint` and `pnpm format:check`, actually ran; skill references alone are not execution evidence.
+
+## Role-Specific Skill Selection
+
+Primary skills: `streamrecorder-review-gate` and `streamrecorder-code-quality`.
+
+Contextual skills, selected from the actual diff: `streamrecorder-security-compliance`, `streamrecorder-domain-contracts`, `streamrecorder-postgres-persistence`, `streamrecorder-worker-lifecycle`, `streamrecorder-api-frontend`, `streamrecorder-docker-validation`, and `streamrecorder-task-preflight`. Never eagerly load every skill.
+
+Independently inspect the final diff, verify executed quality gates and semantic safety of lint/format edits, check task/README status synchronization, and verify acceptance evidence without unnecessary style demands. Return `PASS`, `CHANGES_REQUIRED`, `FAILED_REVIEW_LIMIT`, or `BLOCKED` without editing implementation or marking a task `done`.
+
 ## Finding Format
 
 Every finding must include:

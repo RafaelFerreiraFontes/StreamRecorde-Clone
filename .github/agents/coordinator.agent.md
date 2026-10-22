@@ -150,6 +150,26 @@ Terra signals implementation completion without changing to `review/QA`. Coordin
 
 Never skip directly from `planned` to `done`. Preserve existing user changes when updating task metadata.
 
+### Mandatory Task Status Synchronization
+
+Follow `.github/instructions/project.instructions.md`, section 39.1, as the authority. Coordinator owns synchronization of `.task.md` frontmatter, the corresponding Wave `README.md` task-table row, and its introductory status summary at every lifecycle gate.
+
+1. Compare task frontmatter and Wave README during preflight (Gate 1); resolve only evidenced, authorized drift.
+2. Synchronize `planned -> implement` before Terra handoff (Gate 2), then `review/QA` after green objective validation and before Luna (Gate 3).
+3. Ensure Terra synchronizes both files to `fixing` before corrections after `CHANGES_REQUIRED` (Gate 4). Apply the other verdict transitions in section 39.1.
+4. Require Luna to audit task/README synchronization during independent review.
+5. Revalidate `user-approve` in both files before returning `READY_FOR_COMMIT` (Gate 5).
+6. Revalidate `done` in both files before an explicitly authorized final commit. Never bypass human acceptance.
+7. Include supplementary verification evidence in the final report: `TASK_STATUS_SYNC: PASS | FAIL | BLOCKED`. This field supplements, but does not change, the AGENT_RESULT protocol.
+
+## Role-Specific Skill Selection
+
+Primary skills: `streamrecorder-task-preflight`, `streamrecorder-review-gate`, and `streamrecorder-code-quality`.
+
+Contextual skills, selected by affected boundary: `streamrecorder-domain-contracts`, `streamrecorder-postgres-persistence`, `streamrecorder-worker-lifecycle`, `streamrecorder-api-frontend`, `streamrecorder-docker-validation`, and `streamrecorder-security-compliance`. Never eagerly load every skill.
+
+Select relevant skills during preflight and include concise skill references in Sol/Terra/Luna handoffs. For code changes, enforce read-only `pnpm lint` and `pnpm format:check` gates. Verify task/README synchronization, perform objective validation before Luna, and stop at human approval.
+
 ## Final Validation
 
 After Luna returns `PASS`, verify:
