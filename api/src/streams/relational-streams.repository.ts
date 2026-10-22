@@ -4,7 +4,7 @@ import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { isUUID } from "class-validator";
 import { Mutex } from "async-mutex";
 import { DatabaseService } from "../database/database.service";
-import { creators, watchTargets, streams, recordings, workerEvents } from "../database/schema";
+import { creators, watchTargets, streams, recordings, workerEvents, users } from "../database/schema";
 import { ExecutionConfig, InternalEventDto } from "./dto/internal-event.dto";
 import { StreamsRepository } from "./streams.repository";
 import { Creator, WatchTarget, Stream, Recording, RecordingState } from "./domain.model";
@@ -61,8 +61,10 @@ export class RelationalStreamsRepository extends StreamsRepository {
   }
 
   async getExecutionConfigs(): Promise<ExecutionConfig[]> {
-    const rows = await this.db.select().from(watchTargets).where(isNull(watchTargets.archivedAt));
-    return rows.map(row => ({ id: row.id, channel_name: row.channelName, platform: row.platform,
+    const rows = await this.db.select({ target: watchTargets }).from(watchTargets)
+      .innerJoin(users, eq(watchTargets.ownerId, users.id))
+      .where(and(isNull(watchTargets.archivedAt), isNull(users.disabledAt)));
+    return rows.map(({ target: row }) => ({ id: row.id, channel_name: row.channelName, platform: row.platform,
       url: row.url, quality: row.quality, enabled: row.enabled,
       ...(row.recordingSubdir === null ? {} : { recording_subdir: row.recordingSubdir }) }));
   }
@@ -76,9 +78,24 @@ export class RelationalStreamsRepository extends StreamsRepository {
         return event.responsePayload as Record<string, unknown>;
       }
       await transaction.execute(sql`select pg_advisory_xact_lock(hashtextextended(${dto.watch_target_id}, 1))`);
+      const [target] = await transaction.select().from(watchTargets)
+        .where(eq(watchTargets.id, dto.watch_target_id)).for("update");
+      if (!target) {
+        if (dto.event_type === "recording.terminal") throw new ConflictException("Recording event relationship mismatch");
+        throw new NotFoundException("Watch target not found");
+      }
+      const [owner] = await transaction.select().from(users).where(eq(users.id, target.ownerId)).for("share");
+      if (!owner) throw new ConflictException("Watch target owner unavailable");
+      if (dto.stream_id) {
+        const [referenced] = await transaction.select().from(streams).where(eq(streams.id, dto.stream_id));
+        if (referenced && (referenced.watchTargetId !== target.id || referenced.ownerId !== target.ownerId)) {
+          throw new ConflictException("Stream event relationship mismatch");
+        }
+      }
       let response: Record<string, unknown>;
       if (dto.event_type === "recording.start") {
-        const target = await this.lockTarget(transaction, dto.watch_target_id);
+        if (target.archivedAt) throw new NotFoundException("Watch target not found");
+        if (owner.disabledAt) throw new ConflictException("Watch target owner is disabled");
         if (!target.enabled) throw new ConflictException("Watch target is disabled");
         const [active] = await transaction.select().from(recordings).where(and(
           eq(recordings.watchTargetId, dto.watch_target_id), isNull(recordings.finishedAt), isNull(recordings.legacyFinishedAtRaw)));
@@ -92,8 +109,14 @@ export class RelationalStreamsRepository extends StreamsRepository {
       } else if (dto.event_type === "recording.terminal") {
         const [recording] = await transaction.select().from(recordings).where(eq(recordings.id, dto.session_id!)).for("update");
         if (!recording) throw new ConflictException("Recording start must be acknowledged before terminal event");
-        if (recording.watchTargetId !== dto.watch_target_id || (dto.stream_id && dto.stream_id !== recording.streamId)) {
+        if (recording.ownerId !== target.ownerId || recording.watchTargetId !== dto.watch_target_id || (dto.stream_id && dto.stream_id !== recording.streamId)) {
           throw new ConflictException("Recording event relationship mismatch");
+        }
+        if (recording.streamId) {
+          const [stream] = await transaction.select().from(streams).where(eq(streams.id, recording.streamId));
+          if (!stream || stream.watchTargetId !== target.id || stream.ownerId !== target.ownerId) {
+            throw new ConflictException("Recording Stream relationship mismatch");
+          }
         }
         if (recording.finishedAt || recording.legacyFinishedAtRaw) {
           throw new ConflictException("Recording is already terminal");
@@ -109,8 +132,11 @@ export class RelationalStreamsRepository extends StreamsRepository {
           eq(recordings.watchTargetId, dto.watch_target_id), isNull(recordings.finishedAt), isNull(recordings.legacyFinishedAtRaw)));
         const [stream] = await transaction.select().from(streams).where(and(
           eq(streams.watchTargetId, dto.watch_target_id), isNull(streams.finishedAt), isNull(streams.legacyFinishedAtRaw)));
+        if ((active && active.ownerId !== target.ownerId) || (stream && stream.ownerId !== target.ownerId)) {
+          throw new ConflictException("Offline event relationship mismatch");
+        }
         if (dto.stream_id && stream && dto.stream_id !== stream.id) throw new ConflictException("Offline Stream mismatch");
-        const finalized = !!stream && !active && (!stream.startedAt || new Date(dto.occurred_at) >= stream.startedAt);
+        const finalized = !target.archivedAt && !!stream && !active && (!stream.startedAt || new Date(dto.occurred_at) >= stream.startedAt);
         if (finalized) await this.updateStream(transaction, stream.id, { finishedAt: dto.occurred_at });
         response = { acknowledged: true, finalized };
       }

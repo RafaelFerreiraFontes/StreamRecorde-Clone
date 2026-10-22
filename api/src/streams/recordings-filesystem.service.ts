@@ -109,7 +109,11 @@ export class RecordingsFilesystemService {
     }
   }
 
-  async location(outputFile?: string): Promise<RecordingLocation> {
+  async metadata(outputFile?: string) {
+    return this.location(outputFile, true);
+  }
+
+  async location(outputFile?: string, metadataOnly = false): Promise<RecordingLocation & { subdir?: string; size?: number }> {
     if (!outputFile) return { status: "directory_unavailable" };
     let relative: string;
     try {
@@ -131,6 +135,23 @@ export class RecordingsFilesystemService {
       }
       if (!relative) return { status: "directory_unavailable" };
       const parent = path.posix.dirname(relative);
+      if (metadataOnly) {
+        const subdir = parent === "." ? "" : parent;
+        if (!(await fs.stat(await this.resolve(subdir))).isDirectory()) {
+          return { status: "directory_unavailable" };
+        }
+        const file = path.posix.basename(relative);
+        try {
+          const stat = await fs.stat(await this.resolve(relative));
+          if (!stat.isFile()) return { status: "directory_unavailable" };
+          return { status: "available", file, subdir, size: stat.size };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return { status: "file_not_found", file, subdir };
+          }
+          return { status: "directory_unavailable" };
+        }
+      }
       const directory = await this.list(parent === "." ? "" : parent);
       let available = false;
       try {

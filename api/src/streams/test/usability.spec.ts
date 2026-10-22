@@ -292,6 +292,26 @@ describe("Wave 04.5 HTTP and persistence", () => {
     ).toBe("directory_unavailable");
   });
 
+  it("inspects metadata without enumerating siblings and preserves root and missing semantics", async () => {
+    const list = jest.spyOn(browser, "list");
+    const size = (await fs.stat(path.join(root, "twitch/channel/video.mp4"))).size;
+    expect(await browser.metadata("twitch/channel/video.mp4")).toEqual({
+      status: "available", file: "video.mp4", subdir: "twitch/channel", size,
+    });
+    expect(await browser.metadata("twitch/channel/missing.mp4")).toEqual({
+      status: "file_not_found", file: "missing.mp4", subdir: "twitch/channel",
+    });
+    await fs.writeFile(path.join(root, "root.mp4"), "root");
+    expect(await browser.metadata(path.join(root, "root.mp4"))).toEqual({
+      status: "available", file: "root.mp4", subdir: "", size: 4,
+    });
+    for (const output of ["missing/file.mp4", "../secret", "twitch/../secret", "C:\\secret", ""]) {
+      expect(await browser.metadata(output)).toEqual({ status: "directory_unavailable" });
+    }
+    expect(list).not.toHaveBeenCalled();
+    list.mockRestore();
+  });
+
   it.each([
     "../",
     "../../",
@@ -338,6 +358,7 @@ describe("Wave 04.5 HTTP and persistence", () => {
     expect(await browser.location(path.join(root, "escape", "secret"))).toEqual(
       { status: "directory_unavailable" },
     );
+    expect(await browser.metadata("escape/secret")).toEqual({ status: "directory_unavailable" });
   });
 
   it("supports root-relative stored metadata and safe unavailable errors", async () => {

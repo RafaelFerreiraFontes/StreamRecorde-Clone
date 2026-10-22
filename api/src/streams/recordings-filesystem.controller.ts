@@ -22,8 +22,8 @@ export class RecordingsFilesystemController {
   @Get(":id/location")
   async location(@Param("id") id: string, @Req() req?: Request) {
     const principal = await this.authService?.resolvePrincipal(req?.headers?.cookie);
-    if (principal?.kind === "authenticated") throw new NotFoundException();
     const recording = await this.recordings.findOneRecording(id, principal?.user?.id);
+    if (principal?.kind === "authenticated") return this.filesystem.metadata(recording.output_file);
     return this.filesystem.location(recording.output_file);
   }
 }

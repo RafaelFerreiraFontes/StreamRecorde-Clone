@@ -4,14 +4,20 @@ wave: "05.5"
 order: 05
 depends_on:
   - 04-domain-authorization.task.md
-status: planned
+status: done
 ---
 
 # Wave 05.5 — Task 05 — Worker Ownership and Filesystem Access Boundaries
 
 ## Status and Preconditions
 
-Planned only; implementation has not started. Read the [wave specification](README.md), project/MVP instructions and the accepted predecessor deliverables. Wait for predecessor validation, independent review and human acceptance under the existing lifecycle. Creating this task does not authorize its execution.
+Task 05 implementation is complete and formally approved.
+- Worker ownership derivation and event authorization implemented.
+- Filesystem metadata isolation and shared-directory sibling non-disclosure enforced (`/recordings/filesystem` 404 in authenticated mode; `/recordings/:id/location` returns owner-scoped metadata only).
+- Account-disablement concurrency defect corrected via PostgreSQL `FOR SHARE` row locking on owner lookup within `handleWorkerEvent`, verified with two-connection concurrency tests.
+- All validation gates passed (API typecheck and build, Jest suite, isolated PostgreSQL 17 test harness with restart durability, Python Worker tests, synthetic bridge Docker smoke, and git diff check).
+- Luna Review 2 returned PASS.
+- Human acceptance explicitly granted.
 
 T01's accepted authentication-ownership-decisions.md is required. If it is missing or a relevant decision is unresolved, return to Coordinator review rather than inventing a policy.
 
@@ -39,11 +45,11 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Acceptance Criteria
 
-- [ ] Service events persist correct ownership and reject inconsistent relationships.
-- [ ] Old pending events/checkpoints replay without owner reassignment, duplication or lost acknowledgments.
-- [ ] Human session expiry/logout does not break in-flight capture recovery.
-- [ ] Two users cannot enumerate each other's filenames through listing or location responses.
-- [ ] Traversal/symlink and shared-directory fixtures remain safe; no real media is moved or deleted.
+- [x] Service events persist correct ownership and reject inconsistent relationships.
+- [x] Old pending events/checkpoints replay without owner reassignment, duplication or lost acknowledgments.
+- [x] Human session expiry/logout does not break in-flight capture recovery.
+- [x] Two users cannot enumerate each other's filenames through listing or location responses.
+- [x] Traversal/symlink and shared-directory fixtures remain safe; no real media is moved or deleted.
 
 ## Automated Tests / Verification
 

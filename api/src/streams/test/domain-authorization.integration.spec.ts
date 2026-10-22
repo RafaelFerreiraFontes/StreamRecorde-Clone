@@ -3,7 +3,7 @@ import { Test } from "@nestjs/testing";
 import { Pool } from "pg";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AUTH_OPTIONS, AuthService } from "../../auth/auth.service";
@@ -271,7 +271,7 @@ describeDatabase("domain ownership HTTP authorization", () => {
     await get("/creators", `sr_session=${session.token}`).expect(401);
   });
 
-  it("hides both filesystem routes in authenticated mode and preserves local-bootstrap-only domain visibility", async () => {
+  it("hides tree browsing and foreign locations and preserves local-bootstrap-only domain visibility", async () => {
     const foreign = await target();
     const foreignHistory = await history(foreign.id);
     const filesystem = app.get(RecordingsFilesystemService);
@@ -279,7 +279,7 @@ describeDatabase("domain ownership HTTP authorization", () => {
     const location = jest.spyOn(filesystem, "location");
     for (const path of ["/recordings/filesystem", `/recordings/${foreignHistory.recording.session_id}/location`]) {
       await http().get(path).expect(401);
-      await get(path).expect(404);
+      if (path === "/recordings/filesystem") await get(path).expect(404);
       await get(path, bob.cookie).expect(404);
     }
     expect(list).not.toHaveBeenCalled();
@@ -301,6 +301,60 @@ describeDatabase("domain ownership HTTP authorization", () => {
     await http().get(`/recordings/${localHistory.recording.session_id}/location`).expect(200);
     await http().get(`/recordings/${foreignHistory.recording.session_id}/location`).expect(404);
     expect((await pool.query("SELECT count(*)::int AS count FROM watch_targets WHERE owner_id=$1", [alice.id])).rows[0].count).toBe(1);
+  });
+
+  it("returns only owned file metadata even when two owners share a directory", async () => {
+    const first = await target();
+    const second = await target(bob.cookie);
+    await patch(`/watch-targets/${first.id}`, { recording_subdir: "shared" }).expect(200);
+    await patch(`/watch-targets/${second.id}`, { recording_subdir: "shared" }, bob.cookie).expect(200);
+    const own = await history(first.id);
+    const other = await history(second.id);
+    await mkdir(join(directory, "shared"));
+    await writeFile(join(directory, "shared", "alice.mp4"), "alice");
+    await writeFile(join(directory, "shared", "bob-private.mp4"), "bob");
+    await pool.query("UPDATE recordings SET output_file=$1 WHERE id=$2", ["shared/alice.mp4", own.recording.session_id]);
+    await pool.query("UPDATE recordings SET output_file=$1 WHERE id=$2", ["shared/bob-private.mp4", other.recording.session_id]);
+    const list = jest.spyOn(app.get(RecordingsFilesystemService), "list");
+    const location = `/recordings/${own.recording.session_id}/location`;
+    expect((await get(location).expect(200)).body).toEqual({ status: "available", file: "alice.mp4", subdir: "shared", size: 5 });
+    expect((await get(`/recordings/${other.recording.session_id}/location`, bob.cookie).expect(200)).body)
+      .toEqual({ status: "available", file: "bob-private.mp4", subdir: "shared", size: 3 });
+    await get(location, bob.cookie).expect(404);
+    await get(`/recordings/${other.recording.session_id}/location`).expect(404);
+    await get(`/recordings/${randomUUID()}/location`).expect(404);
+    await rm(join(directory, "shared", "alice.mp4"));
+    expect((await get(location).expect(200)).body).toEqual({ status: "file_not_found", file: "alice.mp4", subdir: "shared" });
+    for (const output of ["absent/alice.mp4", "../private.mp4", "shared/../private.mp4", "C:\\private.mp4"]) {
+      await pool.query("UPDATE recordings SET output_file=$1 WHERE id=$2", [output, own.recording.session_id]);
+      expect((await get(location).expect(200)).body).toEqual({ status: "directory_unavailable" });
+    }
+    await symlink(join(directory, "shared"), join(directory, "link"), "junction");
+    await pool.query("UPDATE recordings SET output_file=$1 WHERE id=$2", ["link/bob-private.mp4", own.recording.session_id]);
+    expect((await get(location).expect(200)).body).toEqual({ status: "directory_unavailable" });
+    expect(list).not.toHaveBeenCalled();
+    list.mockRestore();
+  });
+
+  it.each(["logout", "expiry", "disablement"])("persists accepted service work after human session %s", async change => {
+    process.env.INTERNAL_API_TOKEN = "test-only-ownership-worker";
+    const own = await target();
+    const start = { event_id: randomUUID(), event_type: "recording.start", watch_target_id: own.id,
+      session_id: randomUUID(), stream_id: randomUUID(), occurred_at: new Date().toISOString() };
+    const servicePost = (payload: object) => http().post("/internal/v1/events")
+      .set("X-Internal-Token", process.env.INTERNAL_API_TOKEN!).send(payload);
+    await http().post("/internal/v1/events").set("Cookie", alice.cookie).send(start).expect(401);
+    await servicePost(start).expect(201);
+    if (change === "logout") await post("/auth/logout", {}).expect(200);
+    else if (change === "expiry") await pool.query("UPDATE sessions SET idle_expires_at=NOW()-INTERVAL '1 second' WHERE user_id=$1", [alice.id]);
+    else await pool.query("UPDATE users SET disabled_at=NOW() WHERE id=$1", [alice.id]);
+    await get("/recordings").expect(401);
+    const terminal = { ...start, event_id: randomUUID(), event_type: "recording.terminal", state: "finished", occurred_at: new Date().toISOString() };
+    const accepted = (await servicePost(terminal).expect(201)).body;
+    expect((await servicePost(terminal).expect(201)).body).toEqual(accepted);
+    expect((await pool.query("SELECT owner_id, state FROM recordings WHERE id=$1", [start.session_id])).rows)
+      .toEqual([{ owner_id: alice.id, state: "finished" }]);
+    expect((await pool.query("SELECT count(*)::int AS count FROM worker_events")).rows[0].count).toBe(2);
   });
 
   it("returns safe 503 errors for auth and scoped repository database outages without JSON fallback", async () => {
