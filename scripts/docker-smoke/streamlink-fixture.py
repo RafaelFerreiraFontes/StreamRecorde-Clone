@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 PROCESS_ID = str(uuid.uuid4())
 SEQUENCE = 0
@@ -30,7 +30,7 @@ def append_event(operation, **details):
         "pid": os.getpid(),
         "process_id": PROCESS_ID,
         "sequence": SEQUENCE,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         **details,
     }
     encoded_event = json.dumps(event, separators=(",", ":")).encode("utf-8")
@@ -128,7 +128,11 @@ def run_probe(url, scenario):
     action = claim_action(url_id, "probes", scenario)
     result = action.get("result", "ERROR") if isinstance(action, dict) else action
     wait_for_gate(action, url_id) if isinstance(action, dict) else None
-    stderr = action.get("stderr", scenario.get("probe_stderr")) if isinstance(action, dict) else scenario.get("probe_stderr")
+    stderr = (
+        action.get("stderr", scenario.get("probe_stderr"))
+        if isinstance(action, dict)
+        else scenario.get("probe_stderr")
+    )
     if stderr:
         sys.stderr.write(stderr)
         sys.stderr.flush()
@@ -150,7 +154,11 @@ def run_capture(args, scenario):
     mode = action.get("mode", "success") if isinstance(action, dict) else action
     wait_for_gate(action, url_id) if isinstance(action, dict) else None
     append_event("capture", url_id=url_id, mode=mode, output_basename=output.name)
-    stderr = action.get("stderr", scenario.get("capture_stderr")) if isinstance(action, dict) else scenario.get("capture_stderr")
+    stderr = (
+        action.get("stderr", scenario.get("capture_stderr"))
+        if isinstance(action, dict)
+        else scenario.get("capture_stderr")
+    )
     if stderr:
         sys.stderr.write(stderr)
         sys.stderr.flush()

@@ -8,7 +8,14 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:smoke": "node scripts/docker-integration-smoke.mjs && node scripts/docker-bridge-smoke.mjs",
     "test:smoke:json": "node scripts/docker-integration-smoke.mjs",
-    "test:smoke:bridge": "node scripts/docker-bridge-smoke.mjs"
+    "test:smoke:bridge": "node scripts/docker-bridge-smoke.mjs",
+    "lint": "node scripts/lint-repository.mjs lint",
+    "lint:check": "node scripts/lint-repository.mjs lint",
+    "lint:fix": "node scripts/lint-repository.mjs lint:fix",
+    "format:check": "node scripts/lint-repository.mjs format:check",
+    "format": "node scripts/lint-repository.mjs format:write",
+    "format:write": "node scripts/lint-repository.mjs format:write",
+    "check": "pnpm lint && pnpm format:check"
   },
   "keywords": [],
   "author": "",
@@ -27,8 +34,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.8.0",
+    "eslint-config-prettier": "10.1.8",
     "globals": "^17.9.0",
-    "jiti": "^2.7.0",
-    "typescript-eslint": "^8.65.0"
+    "prettier": "3.8.1"
   }
 }

@@ -12,11 +12,7 @@ export default function Overview() {
     ["Recording targets", recording, "/watch-targets"],
     ["Streams", snapshot.streams.data?.length, "/streams"],
     ["Recordings", snapshot.recordings.data?.length, "/recordings"],
-    [
-      "Target errors",
-      targets?.filter((x) => x.state === "error").length,
-      "/watch-targets",
-    ],
+    ["Target errors", targets?.filter((x) => x.state === "error").length, "/watch-targets"],
   ] as const;
   return (
     <>
@@ -24,10 +20,7 @@ export default function Overview() {
         <div>
           <div className="eyebrow">Operations / Overview</div>
           <h1>Integration overview</h1>
-          <p>
-            A clear view of monitoring configuration and persisted runtime
-            activity.
-          </p>
+          <p>A clear view of monitoring configuration and persisted runtime activity.</p>
         </div>
         <Link className="button primary" href="/watch-targets">
           Manage watch targets →
@@ -42,11 +35,9 @@ export default function Overview() {
           </Link>
         ))}
       </div>
-      {(["creators", "watch-targets", "streams", "recordings"] as const).map(
-        (r) => (
-          <ResourceStatus key={r} resource={r} />
-        ),
-      )}
+      {(["creators", "watch-targets", "streams", "recordings"] as const).map((r) => (
+        <ResourceStatus key={r} resource={r} />
+      ))}
       <section className="panel activity">
         <div className="eyebrow">Worker activity</div>
         <h2>
@@ -57,8 +48,8 @@ export default function Overview() {
               : "No active recording"}
         </h2>
         <p>
-          The current MVP has no Worker heartbeat endpoint. Worker status is
-          inferred only from persisted runtime state.
+          The current MVP has no Worker heartbeat endpoint. Worker status is inferred only from
+          persisted runtime state.
         </p>
         <div className="pipeline">
           <span>Frontend</span>
@@ -70,8 +61,8 @@ export default function Overview() {
           <span>Python Worker</span>
         </div>
         <small>
-          API polling: 5 seconds. Worker detection: 60 seconds by default, plus
-          probe time. Persisted state may be stale.
+          API polling: 5 seconds. Worker detection: 60 seconds by default, plus probe time.
+          Persisted state may be stale.
         </small>
       </section>
       <section className="panel">
@@ -93,10 +84,7 @@ export default function Overview() {
             ))}
           </Table>
         ) : targets ? (
-          <Empty>
-            No watch targets yet. Create a target to begin validating the
-            integration.
-          </Empty>
+          <Empty>No watch targets yet. Create a target to begin validating the integration.</Empty>
         ) : null}
       </section>
     </>

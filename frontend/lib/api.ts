@@ -32,8 +32,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
     status = response.status;
     const raw = await response.text();
-    if (!response.ok)
-      throw new Error(`HTTP ${status}: ${raw || response.statusText}`);
+    if (!response.ok) throw new Error(`HTTP ${status}: ${raw || response.statusText}`);
     return (raw ? JSON.parse(raw) : undefined) as T;
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);

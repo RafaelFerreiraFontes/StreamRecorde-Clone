@@ -29,8 +29,11 @@ export class InternalEventsService {
 
   async handleEvent(dto: InternalEventDto) {
     this.requireRelational();
-    const canonical = Object.fromEntries(Object.entries(dto)
-      .filter(([, value]) => value !== undefined).sort(([left], [right]) => left.localeCompare(right)));
+    const canonical = Object.fromEntries(
+      Object.entries(dto)
+        .filter(([, value]) => value !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right)),
+    );
     const fingerprint = createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
     try {
       return await this.repository.handleWorkerEvent(dto, fingerprint);

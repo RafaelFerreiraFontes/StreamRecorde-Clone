@@ -13,12 +13,7 @@
  * speculative abstractions or a future infrastructure model.
  */
 
-export type RecordingState =
-  | "idle"
-  | "offline"
-  | "recording"
-  | "finished"
-  | "error";
+export type RecordingState = "idle" | "offline" | "recording" | "finished" | "error";
 
 export type StreamPlatform = "youtube" | "twitch" | "kick";
 

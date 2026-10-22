@@ -54,7 +54,11 @@ export class StreamController {
   }
 
   @Patch("/creators/:id")
-  async patchCreator(@Param("id") id: string, @Body() dto: PatchCreatorDto, @Req() req?: Request): Promise<Creator> {
+  async patchCreator(
+    @Param("id") id: string,
+    @Body() dto: PatchCreatorDto,
+    @Req() req?: Request,
+  ): Promise<Creator> {
     return this.streamerService.updateCreator(id, dto, await this.ownerId(req, true));
   }
 
@@ -69,7 +73,10 @@ export class StreamController {
   }
 
   @Get("/creators/:id/watch-targets")
-  async getCreatorWatchTargets(@Param("id") id: string, @Req() req?: Request): Promise<WatchTarget[]> {
+  async getCreatorWatchTargets(
+    @Param("id") id: string,
+    @Req() req?: Request,
+  ): Promise<WatchTarget[]> {
     return this.streamerService.findWatchTargetsByCreator(id, await this.ownerId(req));
   }
 
@@ -84,7 +91,10 @@ export class StreamController {
   }
 
   @Post("/watch-targets")
-  async createWatchTarget(@Body() dto: CreateWatchTargetDto, @Req() req?: Request): Promise<WatchTarget> {
+  async createWatchTarget(
+    @Body() dto: CreateWatchTargetDto,
+    @Req() req?: Request,
+  ): Promise<WatchTarget> {
     return this.streamerService.createWatchTarget(dto, await this.ownerId(req, true));
   }
 
@@ -94,7 +104,7 @@ export class StreamController {
   }
 
   /**
-    * PATCH /watch-targets/:id - Update enabled, recording_subdir, and/or url.
+   * PATCH /watch-targets/:id - Update enabled, recording_subdir, and/or url.
    * Omitted fields are unchanged; an empty recording_subdir clears its override.
    */
   @Patch("/watch-targets/:id")
@@ -117,7 +127,10 @@ export class StreamController {
   }
 
   @Get("/recordings")
-  async getAllRecordings(@Query() query: RecordingQueryDto, @Req() req?: Request): Promise<Recording[]> {
+  async getAllRecordings(
+    @Query() query: RecordingQueryDto,
+    @Req() req?: Request,
+  ): Promise<Recording[]> {
     return this.recordingService.findAllRecordings(query.watchTargetId, await this.ownerId(req));
   }
 

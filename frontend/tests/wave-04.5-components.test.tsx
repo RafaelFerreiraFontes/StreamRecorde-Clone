@@ -21,12 +21,15 @@ HTMLDialogElement.prototype.close = function close() {
   this.removeAttribute("open");
 };
 
-const { cleanup, fireEvent, render, screen, waitFor } =
-  await import("@testing-library/react");
+const { cleanup, fireEvent, render, screen, waitFor } = await import("@testing-library/react");
 const { RecordingBrowser } = await import("../components/recording-browser");
 const { DashboardProvider } = await import("../components/provider");
-const { default: WatchTargets, WatchTargetEnabledSwitch, WatchTargetQualitySelect, WatchTargetUrlEditor } =
-  await import("../app/watch-targets/page");
+const {
+  default: WatchTargets,
+  WatchTargetEnabledSwitch,
+  WatchTargetQualitySelect,
+  WatchTargetUrlEditor,
+} = await import("../app/watch-targets/page");
 
 const target = {
   id: "target-1",
@@ -96,7 +99,10 @@ test("folder picker initializes an edit path, navigates relative paths, selects,
     const path = new URL(String(url), "http://localhost").searchParams.get("path") ?? "";
     calls.push(path);
     if (path === "existing/folder") {
-      return Response.json({ path, entries: [{ name: "nested", path: "existing/folder/nested", kind: "directory" }] });
+      return Response.json({
+        path,
+        entries: [{ name: "nested", path: "existing/folder/nested", kind: "directory" }],
+      });
     }
     if (path === "existing/folder/nested") return Response.json({ path, entries: [] });
     return Response.json({ path, entries: [] });
@@ -138,7 +144,8 @@ test("folder picker supports root breadcrumbs, loading, empty, retryable errors,
   let attempts = 0;
   globalThis.fetch = async (url) => {
     const pathname = new URL(String(url), "http://localhost").pathname;
-    if (pathname.endsWith("/location")) return Response.json({ status: "file_not_found", file: "gone.mp4" });
+    if (pathname.endsWith("/location"))
+      return Response.json({ status: "file_not_found", file: "gone.mp4" });
     attempts += 1;
     if (attempts === 1) throw new Error("offline");
     return Response.json({ path: "", entries: [] });
@@ -172,11 +179,16 @@ test("watch target edit keeps manual entry and saves picker selections through t
       return Response.json({ path: "existing/folder", entries: [] });
     }
     if (pathname.endsWith("/watch-targets")) return Response.json([target]);
-    if (pathname.endsWith("/creators")) return Response.json([{ id: "creator-1", display_name: "Creator" }]);
+    if (pathname.endsWith("/creators"))
+      return Response.json([{ id: "creator-1", display_name: "Creator" }]);
     return Response.json([]);
   };
   try {
-    render(<DashboardProvider><WatchTargets /></DashboardProvider>);
+    render(
+      <DashboardProvider>
+        <WatchTargets />
+      </DashboardProvider>,
+    );
     await screen.findByRole("switch", { name: /Enabled for Channel/ });
     fireEvent.click(screen.getByRole("button", { name: "Edit recording folder" }));
     const input = screen.getByRole("textbox", { name: "Recording folder" });
@@ -210,11 +222,16 @@ test("WatchTarget row keeps enabled, quality, folder, URL, and safe stream navig
       return Response.json(persistedTarget);
     }
     if (pathname.endsWith("/watch-targets")) return Response.json([persistedTarget]);
-    if (pathname.endsWith("/creators")) return Response.json([{ id: "creator-1", display_name: "Creator" }]);
+    if (pathname.endsWith("/creators"))
+      return Response.json([{ id: "creator-1", display_name: "Creator" }]);
     return Response.json([]);
   };
   try {
-    render(<DashboardProvider><WatchTargets /></DashboardProvider>);
+    render(
+      <DashboardProvider>
+        <WatchTargets />
+      </DashboardProvider>,
+    );
     const enabled = await screen.findByRole("switch", { name: /Enabled for Channel/ });
     const quality = screen.getByRole("combobox", { name: /Quality for Channel/ });
     const folder = screen.getByRole("button", { name: "Edit recording folder" });
@@ -235,16 +252,23 @@ test("WatchTarget row keeps enabled, quality, folder, URL, and safe stream navig
       target: { value: "https://www.twitch.tv/updated" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => assert.deepEqual(patches, [
-      { quality: "1080p60" },
-      { url: "https://www.twitch.tv/updated" },
-    ]));
-    await waitFor(() => assert.equal(
-      screen.getByRole("link", { name: /Open stream for Channel/ }).getAttribute("href"),
-      "https://www.twitch.tv/updated",
-    ));
-    assert.equal(screen.getByRole("switch", { name: /Enabled for Channel/ }).getAttribute("aria-checked"), "true");
-    assert.equal((screen.getByRole("combobox", { name: /Quality for Channel/ }) as HTMLSelectElement).value, "1080p60");
+    await waitFor(() =>
+      assert.deepEqual(patches, [{ quality: "1080p60" }, { url: "https://www.twitch.tv/updated" }]),
+    );
+    await waitFor(() =>
+      assert.equal(
+        screen.getByRole("link", { name: /Open stream for Channel/ }).getAttribute("href"),
+        "https://www.twitch.tv/updated",
+      ),
+    );
+    assert.equal(
+      screen.getByRole("switch", { name: /Enabled for Channel/ }).getAttribute("aria-checked"),
+      "true",
+    );
+    assert.equal(
+      (screen.getByRole("combobox", { name: /Quality for Channel/ }) as HTMLSelectElement).value,
+      "1080p60",
+    );
     assert.ok(screen.getByRole("button", { name: "Edit recording folder" }));
     assert.ok(screen.getByRole("button", { name: /Edit URL for Channel/ }));
   } finally {
@@ -254,11 +278,20 @@ test("WatchTarget row keeps enabled, quality, folder, URL, and safe stream navig
 
 test("WatchTargetEnabledSwitch handles error and reverts optimistic state", async () => {
   let resolveRequest!: (value: Response) => void;
-  const request = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+  const request = new Promise<Response>((resolve) => {
+    resolveRequest = resolve;
+  });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => request;
   try {
-    render(<WatchTargetEnabledSwitch target={target} pending={false} afterMutation={async () => {}} onError={() => {}} />);
+    render(
+      <WatchTargetEnabledSwitch
+        target={target}
+        pending={false}
+        afterMutation={async () => {}}
+        onError={() => {}}
+      />,
+    );
     const toggle = screen.getByRole("switch");
     fireEvent.click(toggle);
     assert.equal(toggle.getAttribute("aria-checked"), "false");
@@ -292,7 +325,7 @@ test("WatchTargetQualitySelect renders and updates quality", async () => {
         afterMutationCalled = true;
       }}
       onError={() => {}}
-    />
+    />,
   );
 
   const select = screen.getByRole("combobox") as HTMLSelectElement;
@@ -312,7 +345,7 @@ test("WatchTargetQualitySelect handles custom legacy quality", async () => {
       pending={false}
       afterMutation={async () => {}}
       onError={() => {}}
-    />
+    />,
   );
 
   const select = screen.getByRole("combobox") as HTMLSelectElement;
@@ -339,7 +372,7 @@ test("WatchTargetQualitySelect handles error and reverts optimistic state", asyn
       onError={() => {
         errorCalled = true;
       }}
-    />
+    />,
   );
 
   const select = screen.getByRole("combobox") as HTMLSelectElement;
@@ -350,7 +383,11 @@ test("WatchTargetQualitySelect handles error and reverts optimistic state", asyn
 
   // Should revert to original value
   assert.equal(select.value, "best");
-  assert.ok(Array.from((screen.getByRole("combobox") as HTMLSelectElement).options).some((option) => option.value === "160p"));
+  assert.ok(
+    Array.from((screen.getByRole("combobox") as HTMLSelectElement).options).some(
+      (option) => option.value === "160p",
+    ),
+  );
 });
 
 test("WatchTargetUrlEditor renders and updates url", async () => {
@@ -373,7 +410,7 @@ test("WatchTargetUrlEditor renders and updates url", async () => {
         afterMutationCalled = true;
       }}
       onError={() => {}}
-    />
+    />,
   );
 
   const editButton = screen.getByTitle("Edit URL");
@@ -410,7 +447,7 @@ test("WatchTargetUrlEditor handles error and reverts optimistic state", async ()
       onError={() => {
         errorCalled = true;
       }}
-    />
+    />,
   );
 
   const editButton = screen.getByTitle("Edit URL");
@@ -426,7 +463,10 @@ test("WatchTargetUrlEditor handles error and reverts optimistic state", async ()
   await waitFor(() => assert.ok(errorCalled));
 
   // Should still be in edit mode with the attempted value
-  assert.equal((screen.getByRole("textbox") as HTMLInputElement).value, "https://example.test/error");
+  assert.equal(
+    (screen.getByRole("textbox") as HTMLInputElement).value,
+    "https://example.test/error",
+  );
 });
 
 test("WatchTargetUrlEditor rejects invalid URLs client-side", async () => {
@@ -445,7 +485,7 @@ test("WatchTargetUrlEditor rejects invalid URLs client-side", async () => {
       onError={() => {
         errorCalled = true;
       }}
-    />
+    />,
   );
 
   const editButton = screen.getByTitle("Edit URL");
@@ -475,7 +515,7 @@ test("WatchTargets renders Open Stream link for safe URLs", async () => {
   render(
     <DashboardProvider>
       <WatchTargets />
-    </DashboardProvider>
+    </DashboardProvider>,
   );
 
   await waitFor(() => {
@@ -494,7 +534,7 @@ test("WatchTargets omits Open Stream link for unsafe URLs", async () => {
   render(
     <DashboardProvider>
       <WatchTargets />
-    </DashboardProvider>
+    </DashboardProvider>,
   );
 
   await waitFor(() => {
@@ -502,4 +542,50 @@ test("WatchTargets omits Open Stream link for unsafe URLs", async () => {
     const links = screen.queryAllByRole("link", { name: /Open stream for Channel/i });
     assert.equal(links.length, 0);
   });
+});
+
+test("recording browser ignores a delayed response after switching recordings", async () => {
+  const originalFetch = globalThis.fetch;
+  let finishOld!: (response: Response) => void;
+  const oldResponse = new Promise<Response>((resolve) => {
+    finishOld = resolve;
+  });
+  let oldRequested = false;
+  globalThis.fetch = async (input) => {
+    if (String(input).includes("/old-recording/location")) {
+      oldRequested = true;
+      return oldResponse;
+    }
+    return Response.json({
+      status: "available",
+      directory: {
+        path: "current",
+        entries: [{ name: "current.mp4", path: "current/current.mp4", kind: "file" }],
+      },
+      file: "current.mp4",
+    });
+  };
+  try {
+    const view = render(<RecordingBrowser recordingId="old-recording" onClose={() => {}} />);
+    await waitFor(() => assert.ok(oldRequested));
+    view.rerender(<RecordingBrowser recordingId="new-recording" onClose={() => {}} />);
+    await screen.findByText("current.mp4");
+    finishOld(
+      Response.json({
+        status: "available",
+        directory: {
+          path: "old",
+          entries: [{ name: "old.mp4", path: "old/old.mp4", kind: "file" }],
+        },
+        file: "old.mp4",
+      }),
+    );
+    await oldResponse;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(screen.getByText("current.mp4"));
+    assert.equal(screen.queryByText("old.mp4"), null);
+    view.unmount();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

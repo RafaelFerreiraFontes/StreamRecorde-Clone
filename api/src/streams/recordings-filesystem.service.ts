@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -20,14 +16,14 @@ export interface RecordingLocation {
 /** Single read-only boundary for the recordings tree. No file contents are read. */
 @Injectable()
 export class RecordingsFilesystemService {
-  private readonly root = path.resolve(
-    process.env.RECORDINGS_ROOT?.trim() || "../recordings",
-  );
+  private readonly root = path.resolve(process.env.RECORDINGS_ROOT?.trim() || "../recordings");
 
   relativePath(value: unknown): string {
     if (
       typeof value !== "string" ||
       value.length > 1024 ||
+      // Reject ASCII control characters in untrusted input; these ranges are intentional.
+      // eslint-disable-next-line no-control-regex
       /[\\:%\x00-\x1f\x7f]/.test(value) ||
       path.posix.isAbsolute(value) ||
       path.win32.isAbsolute(value)
@@ -35,9 +31,7 @@ export class RecordingsFilesystemService {
       throw new BadRequestException("Invalid relative recording path");
     }
     const parts = value === "" ? [] : value.split("/");
-    if (
-      parts.some((part) => !part || part.startsWith(".") || /[. ]$/.test(part))
-    ) {
+    if (parts.some((part) => !part || part.startsWith(".") || /[. ]$/.test(part))) {
       throw new BadRequestException("Invalid relative recording path");
     }
     return parts.join("/");
@@ -47,9 +41,7 @@ export class RecordingsFilesystemService {
     const relative = path.relative(root, candidate);
     return (
       relative === "" ||
-      (!relative.startsWith(".." + path.sep) &&
-        relative !== ".." &&
-        !path.isAbsolute(relative))
+      (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative))
     );
   }
 
@@ -59,11 +51,9 @@ export class RecordingsFilesystemService {
     for (const part of relative ? relative.split("/") : []) {
       candidate = path.join(candidate, part);
       const stat = await fs.lstat(candidate);
-      if (stat.isSymbolicLink())
-        throw new Error("Symbolic links are unavailable");
+      if (stat.isSymbolicLink()) throw new Error("Symbolic links are unavailable");
       const canonical = await fs.realpath(candidate);
-      if (!this.inside(root, canonical))
-        throw new Error("Outside recordings root");
+      if (!this.inside(root, canonical)) throw new Error("Outside recordings root");
       candidate = canonical;
     }
     return candidate;
@@ -82,8 +72,7 @@ export class RecordingsFilesystemService {
           truncated = true;
           break;
         }
-        if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile()))
-          continue;
+        if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) continue;
         const child = relative ? relative + "/" + entry.name : entry.name;
         try {
           this.relativePath(child);
@@ -96,9 +85,7 @@ export class RecordingsFilesystemService {
           kind: entry.isDirectory() ? "directory" : "file",
         });
       }
-      entries.sort(
-        (a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name),
-      );
+      entries.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
       return {
         path: relative,
         entries,
@@ -113,20 +100,20 @@ export class RecordingsFilesystemService {
     return this.location(outputFile, true);
   }
 
-  async location(outputFile?: string, metadataOnly = false): Promise<RecordingLocation & { subdir?: string; size?: number }> {
+  async location(
+    outputFile?: string,
+    metadataOnly = false,
+  ): Promise<RecordingLocation & { subdir?: string; size?: number }> {
     if (!outputFile) return { status: "directory_unavailable" };
     let relative: string;
     try {
       // Stored absolute paths are trusted metadata only after root containment validation.
       // Reject traversal before normalization, even in persisted metadata.
-      if (
-        outputFile.split(/[\\/]/).some((part) => part === ".." || part === ".")
-      ) {
+      if (outputFile.split(/[\\/]/).some((part) => part === ".." || part === ".")) {
         return { status: "directory_unavailable" };
       }
       if (path.isAbsolute(outputFile)) {
-        if (!this.inside(this.root, outputFile))
-          return { status: "directory_unavailable" };
+        if (!this.inside(this.root, outputFile)) return { status: "directory_unavailable" };
         relative = this.relativePath(
           path.relative(this.root, outputFile).split(path.sep).join("/"),
         );

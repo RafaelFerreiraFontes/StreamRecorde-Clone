@@ -1,19 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseService } from "../database/database.service";
-import { hashPassword, normalizeEmail, normalizeUsername, validatePasswordInput } from "./credentials";
+import {
+  hashPassword,
+  normalizeEmail,
+  normalizeUsername,
+  validatePasswordInput,
+} from "./credentials";
 
 export type PasswordIO = {
   input: NodeJS.ReadStream;
   output: Pick<NodeJS.WriteStream, "write">;
 };
 
-export async function readPassword(io: PasswordIO = { input: process.stdin, output: process.stderr }): Promise<string> {
+export async function readPassword(
+  io: PasswordIO = { input: process.stdin, output: process.stderr },
+): Promise<string> {
   const { input, output } = io;
   input.setEncoding("utf8");
   if (!input.isTTY) {
     let value = "";
     for await (const chunk of input) {
-      value += chunk.toString();
+      value += String(chunk);
       if (value.length > 258) throw new Error("Password input too long");
     }
     value = value.replace(/\r?\n$/, "");
@@ -34,16 +41,22 @@ export async function readPassword(io: PasswordIO = { input: process.stdin, outp
       output.write("\n");
       if (error) reject(error);
       else {
-        try { resolve(validatePasswordInput(value)); } catch (failure) { reject(failure); }
+        try {
+          resolve(validatePasswordInput(value));
+        } catch (failure) {
+          reject(failure instanceof Error ? failure : new Error(String(failure)));
+        }
       }
     };
     const onError = () => finish(new Error("Password input failed"));
     const onEnd = () => finish(new Error("Password input closed"));
     const onData = (chunk: Buffer | string) => {
       for (const character of chunk.toString()) {
-        if (character === "\u0003" || character === "\u0004") return finish(new Error("Password entry cancelled"));
+        if (character === "\u0003" || character === "\u0004")
+          return finish(new Error("Password entry cancelled"));
         if (character === "\r" || character === "\n") return finish();
-        if (character === "\u007f" || character === "\b") value = Array.from(value).slice(0, -1).join("");
+        if (character === "\u007f" || character === "\b")
+          value = Array.from(value).slice(0, -1).join("");
         else if (character >= " " && character !== "\u007f") value += character;
         if (value.length > 256) return finish(new Error("Password input too long"));
       }
@@ -57,44 +70,102 @@ export async function readPassword(io: PasswordIO = { input: process.stdin, outp
   });
 }
 
-export type UsersCLIOptions = { readPassword?: () => Promise<string>; write?: (value: string) => void };
+export type UsersCLIOptions = {
+  readPassword?: () => Promise<string>;
+  write?: (value: string) => void;
+};
 
-export async function runUsersCLI(args: string[], database: DatabaseService, options: UsersCLIOptions = {}): Promise<void> {
+export async function runUsersCLI(
+  args: string[],
+  database: DatabaseService,
+  options: UsersCLIOptions = {},
+): Promise<void> {
   const [command, ...rest] = args;
-  if (!command || !["create", "set-password", "disable", "enable", "list"].includes(command)) throw new Error("Expected create, set-password, disable, enable or list");
-  if (rest.some((value) => /^--?p(?:assword)?(?:=|$)/.test(value))) throw new Error("Passwords must be supplied via stdin or no-echo prompt, never argv");
-  const validArgs = command === "list" ? rest.length === 0
-    : command === "create" ? rest.length === 1 || (rest.length === 3 && rest[1] === "--email")
-      : rest.length === 1;
-  if (!validArgs || rest.some((value, index) => value.startsWith("-") && !(command === "create" && index === 1 && value === "--email"))) {
+  if (!command || !["create", "set-password", "disable", "enable", "list"].includes(command))
+    throw new Error("Expected create, set-password, disable, enable or list");
+  if (rest.some((value) => /^--?p(?:assword)?(?:=|$)/.test(value)))
+    throw new Error("Passwords must be supplied via stdin or no-echo prompt, never argv");
+  const validArgs =
+    command === "list"
+      ? rest.length === 0
+      : command === "create"
+        ? rest.length === 1 || (rest.length === 3 && rest[1] === "--email")
+        : rest.length === 1;
+  if (
+    !validArgs ||
+    rest.some(
+      (value, index) =>
+        value.startsWith("-") && !(command === "create" && index === 1 && value === "--email"),
+    )
+  ) {
     throw new Error("Unexpected arguments; passwords must never be passed in argv");
   }
   const write = options.write ?? ((value: string) => process.stdout.write(value + "\n"));
   if (command === "list") {
-    const rows = await database.transaction(async (client) => (await client.query(`SELECT id, username, email,
-      disabled_at IS NULL AS enabled, password_hash IS NOT NULL AS has_password, locked_until, created_at FROM users ORDER BY username`)).rows);
+    const rows = await database.transaction(
+      async (client) =>
+        (
+          await client.query<{
+            id: string;
+            username: string;
+            email: string | null;
+            enabled: boolean;
+            has_password: boolean;
+            locked_until: Date | null;
+            created_at: Date;
+          }>(`SELECT id, username, email,
+      disabled_at IS NULL AS enabled, password_hash IS NOT NULL AS has_password, locked_until, created_at FROM users ORDER BY username`)
+        ).rows,
+    );
     write(JSON.stringify(rows));
     return;
   }
   const username = normalizeUsername(rest[0]);
   const email = command === "create" ? normalizeEmail(rest[2]) : null;
-  const passwordHash = command === "create" || command === "set-password"
-    ? await hashPassword(await (options.readPassword ?? readPassword)()) : null;
+  const passwordHash =
+    command === "create" || command === "set-password"
+      ? await hashPassword(await (options.readPassword ?? readPassword)())
+      : null;
   const user = await database.transaction(async (client) => {
     if (command === "create") {
-      return (await client.query("INSERT INTO users (id,username,email,password_hash) VALUES ($1,$2,$3,$4) RETURNING id,username,email", [randomUUID(), username, email, passwordHash])).rows[0];
+      return (
+        await client.query<{ id: string; username: string; email: string | null }>(
+          "INSERT INTO users (id,username,email,password_hash) VALUES ($1,$2,$3,$4) RETURNING id,username,email",
+          [randomUUID(), username, email, passwordHash],
+        )
+      ).rows[0];
     }
-    if (command === "set-password" && username === "local") await database.resolveBootstrapLocalUser(client);
-    const found = await client.query("SELECT id FROM users WHERE username=$1 FOR UPDATE", [username]);
+    if (command === "set-password" && username === "local")
+      await database.resolveBootstrapLocalUser(client);
+    const found = await client.query<{ id: string }>(
+      "SELECT id FROM users WHERE username=$1 FOR UPDATE",
+      [username],
+    );
     if (!found.rows[0]) return null;
     const id = found.rows[0].id;
-    if (command === "set-password") await client.query("UPDATE users SET password_hash=$2, failed_login_count=0, locked_until=NULL, updated_at=NOW() WHERE id=$1", [id, passwordHash]);
+    if (command === "set-password")
+      await client.query(
+        "UPDATE users SET password_hash=$2, failed_login_count=0, locked_until=NULL, updated_at=NOW() WHERE id=$1",
+        [id, passwordHash],
+      );
     if (command === "disable") {
       await client.query("UPDATE users SET disabled_at=NOW(), updated_at=NOW() WHERE id=$1", [id]);
-      await client.query("UPDATE sessions SET revoked_at=NOW() WHERE user_id=$1 AND revoked_at IS NULL", [id]);
+      await client.query(
+        "UPDATE sessions SET revoked_at=NOW() WHERE user_id=$1 AND revoked_at IS NULL",
+        [id],
+      );
     }
-    if (command === "enable") await client.query("UPDATE users SET disabled_at=NULL, failed_login_count=0, locked_until=NULL, updated_at=NOW() WHERE id=$1", [id]);
-    return (await client.query("SELECT id,username,email FROM users WHERE id=$1", [id])).rows[0];
+    if (command === "enable")
+      await client.query(
+        "UPDATE users SET disabled_at=NULL, failed_login_count=0, locked_until=NULL, updated_at=NOW() WHERE id=$1",
+        [id],
+      );
+    return (
+      await client.query<{ id: string; username: string; email: string | null }>(
+        "SELECT id,username,email FROM users WHERE id=$1",
+        [id],
+      )
+    ).rows[0];
   });
   if (!user) throw new Error("User not found");
   write(JSON.stringify(user));
@@ -102,8 +173,12 @@ export async function runUsersCLI(args: string[], database: DatabaseService, opt
 
 if (require.main === module) {
   const database = new DatabaseService();
-  runUsersCLI(process.argv.slice(2), database).catch(() => {
-    process.stderr.write("User command failed. Check arguments, input, account uniqueness and database availability. Passwords must use stdin or a no-echo prompt, never argv.\n");
-    process.exitCode = 1;
-  }).finally(() => database.onModuleDestroy());
+  runUsersCLI(process.argv.slice(2), database)
+    .catch(() => {
+      process.stderr.write(
+        "User command failed. Check arguments, input, account uniqueness and database availability. Passwords must use stdin or a no-echo prompt, never argv.\n",
+      );
+      process.exitCode = 1;
+    })
+    .finally(() => database.onModuleDestroy());
 }

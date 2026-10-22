@@ -21,21 +21,24 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
   useEffect(() => {
     if (!recordings || !target) return;
     let active = true;
-    setError("");
-    setFiltered(undefined);
-    api<Recording[]>(`/recordings?watchTargetId=${encodeURIComponent(target)}`)
-      .then((data) => {
-        if (active) {
-          if (!Array.isArray(data)) throw new Error("Invalid API response: expected an array");
-          setFiltered({ target, data });
-        }
-      })
-      .catch((e) => {
-        if (active) {
-          setFiltered(undefined);
-          setError(String(e));
-        }
-      });
+    Promise.resolve().then(() => {
+      if (!active) return;
+      setError("");
+      setFiltered(undefined);
+      return api<Recording[]>(`/recordings?watchTargetId=${encodeURIComponent(target)}`)
+        .then((data) => {
+          if (active) {
+            if (!Array.isArray(data)) throw new Error("Invalid API response: expected an array");
+            setFiltered({ target, data });
+          }
+        })
+        .catch((e) => {
+          if (active) {
+            setFiltered(undefined);
+            setError(String(e));
+          }
+        });
+    });
     return () => {
       active = false;
     };
@@ -48,19 +51,14 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
       : snapshot.recordings.data
     : snapshot.streams.data;
   const rows = data?.filter(
-    (row) =>
-      (!target || row.watch_target_id === target) &&
-      (!state || row.state === state),
+    (row) => (!target || row.watch_target_id === target) && (!state || row.state === state),
   );
   const targetOptions = new Map(
     (snapshot["watch-targets"].data || []).map((t) => [t.id, t.channel_name]),
   );
   for (const row of snapshot[kind].data || [])
     if (!targetOptions.has(row.watch_target_id))
-      targetOptions.set(
-        row.watch_target_id,
-        `${row.watch_target_id} (removed target)`,
-      );
+      targetOptions.set(row.watch_target_id, `${row.watch_target_id} (removed target)`);
   return (
     <>
       <div className="page-heading">
@@ -105,14 +103,10 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
       {error && target && (
         <div className="error" role="alert">
           <pre>{error}</pre>
-          <button onClick={() => setRetry((n) => n + 1)}>
-            Retry filtered request
-          </button>
+          <button onClick={() => setRetry((n) => n + 1)}>Retry filtered request</button>
         </div>
       )}
-      {recordings && target && !data && !error && (
-        <Empty>Loading filtered recordings…</Empty>
-      )}
+      {recordings && target && !data && !error && <Empty>Loading filtered recordings…</Empty>}
       <section className="panel">
         {rows?.length ? (
           <Table
@@ -133,15 +127,12 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
                   <code>{"session_id" in row ? row.session_id : row.id}</code>
                 </td>
                 <td>
-                  {targetOptions.get(row.watch_target_id) ||
-                    row.watch_target_id}
+                  {targetOptions.get(row.watch_target_id) || row.watch_target_id}
                   <code className="subtext">{row.watch_target_id}</code>
                 </td>
                 {recordings && (
                   <td>
-                    <code>
-                      {(row as Recording).stream_id || "Not persisted"}
-                    </code>
+                    <code>{(row as Recording).stream_id || "Not persisted"}</code>
                   </td>
                 )}
                 <td>
@@ -153,16 +144,15 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
                 <td>
                   <code>{timestamp(row.finished_at)}</code>
                 </td>
-                <td className="nowrap">
-                  {duration(row.started_at, row.finished_at)}
-                </td>
+                <td className="nowrap">{duration(row.started_at, row.finished_at)}</td>
                 {recordings && (
                   <td>
-                    <code className="path">
-                      {(row as Recording).output_file || "—"}
-                    </code>
-                    <button type="button" className="secondary small"
-                      onClick={() => setLocationId((row as Recording).session_id)}>
+                    <code className="path">{(row as Recording).output_file || "—"}</code>
+                    <button
+                      type="button"
+                      className="secondary small"
+                      onClick={() => setLocationId((row as Recording).session_id)}
+                    >
                       Browse location
                     </button>
                   </td>
@@ -172,18 +162,19 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
           </Table>
         ) : rows ? (
           <Empty>
-            No {kind} match this view. History appears after the Worker persists
-            activity.
+            No {kind} match this view. History appears after the Worker persists activity.
           </Empty>
         ) : null}
       </section>
       <p className="note">
-        Timestamps are shown as persisted. The current Worker omits timezone
-        offsets. Duration is calculated only when both timestamps are available.
+        Timestamps are shown as persisted. The current Worker omits timezone offsets. Duration is
+        calculated only when both timestamps are available.
         {recordings &&
           " Stream IDs may not be persisted. Output paths are local Worker filesystem information only."}
       </p>
-      {locationId && <RecordingBrowser recordingId={locationId} onClose={() => setLocationId(undefined)} />}
+      {locationId && (
+        <RecordingBrowser recordingId={locationId} onClose={() => setLocationId(undefined)} />
+      )}
       {data && <Json data={data} />}
     </>
   );

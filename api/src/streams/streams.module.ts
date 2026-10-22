@@ -27,9 +27,10 @@ import { InternalEventsService } from "./internal-events.service";
     {
       provide: StreamsRepository,
       inject: [DatabaseService],
-      useFactory: (database: DatabaseService) => process.env.RELATIONAL_STORAGE === "true"
-        ? new RelationalStreamsRepository(database)
-        : new StreamsRepository(),
+      useFactory: (database: DatabaseService) =>
+        process.env.RELATIONAL_STORAGE === "true"
+          ? new RelationalStreamsRepository(database)
+          : new StreamsRepository(),
     },
     StreamerService,
     SessionService,

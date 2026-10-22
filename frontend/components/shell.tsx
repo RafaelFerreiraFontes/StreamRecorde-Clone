@@ -33,11 +33,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="eyebrow">Integration workspace</div>
         <nav aria-label="Main navigation">
           {navigation.map(([href, title, number]) => (
-            <Link
-              key={href}
-              href={href}
-              aria-current={path === href ? "page" : undefined}
-            >
+            <Link key={href} href={href} aria-current={path === href ? "page" : undefined}>
               <span>{number}</span>
               {title}
             </Link>
@@ -55,11 +51,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <div className="workspace">
         <header>
           <div>
-            <span className={`connection ${failures ? "bad" : ""}`}>●</span>{" "}
-            {status}
+            <span className={`connection ${failures ? "bad" : ""}`}>●</span> {status}
             <small>
-              Last successful API response:{" "}
-              {last ? new Date(last).toLocaleTimeString() : "—"}
+              Last successful API response: {last ? new Date(last).toLocaleTimeString() : "—"}
             </small>
           </div>
           <div className="toolbar">
@@ -78,8 +72,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </header>
         <main>{children}</main>
         <footer>
-          Observed state only · Worker detection interval defaults to 60 seconds
-          · No realtime connection
+          Observed state only · Worker detection interval defaults to 60 seconds · No realtime
+          connection
         </footer>
       </div>
     </div>

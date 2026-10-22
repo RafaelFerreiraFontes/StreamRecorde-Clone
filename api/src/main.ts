@@ -1,3 +1,4 @@
+import type { Server } from "node:http";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 import { validateStartupIdentityMode } from "./database/identity-mode";
@@ -38,14 +39,19 @@ async function bootstrap() {
   try {
     await Promise.all(configuredPaths.map((filePath) => probeAtomicReplace(filePath)));
   } catch (error) {
-    console.error(`Atomic-replace capability probe FAILED | operation=create+write+fsync+replace+read+cleanup | uid=${process.getuid?.() ?? "N/A"} | gid=${process.getgid?.() ?? "N/A"}`);
+    console.error(
+      `Atomic-replace capability probe FAILED | operation=create+write+fsync+replace+read+cleanup | uid=${process.getuid?.() ?? "N/A"} | gid=${process.getgid?.() ?? "N/A"}`,
+    );
     console.error(`Probe error: ${error}`);
     process.exit(1);
   }
 
   const app = await NestFactory.create(AppModule);
   await app.listen(process.env.PORT ?? 3000).then((value) => {
-    console.log(`Server is running on port ${value?.address()?.port}`);
+    const address = (value as Server | undefined)?.address();
+    console.log(
+      `Server is running on port ${typeof address === "object" ? address?.port : undefined}`,
+    );
   });
 }
 

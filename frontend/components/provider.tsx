@@ -1,12 +1,5 @@
 "use client";
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { Creator, WatchTarget, Stream, Recording } from "@/lib/types";
 type Data = {
@@ -16,12 +9,7 @@ type Data = {
   recordings: Recording[];
 };
 export type Resource = keyof Data;
-const resources: Resource[] = [
-  "creators",
-  "watch-targets",
-  "streams",
-  "recordings",
-];
+const resources: Resource[] = ["creators", "watch-targets", "streams", "recordings"];
 type Snapshot = {
   [K in Resource]: { data?: Data[K]; error?: string; updated?: string };
 };
@@ -42,8 +30,7 @@ function useDashboardData() {
       resources.map(async (key) => {
         try {
           const data = await api<Data[typeof key]>(`/${key}`);
-          if (!Array.isArray(data))
-            throw new Error("Invalid API response: expected an array");
+          if (!Array.isArray(data)) throw new Error("Invalid API response: expected an array");
           setSnapshot((old) => ({
             ...old,
             [key]: { data, updated: new Date().toISOString() },

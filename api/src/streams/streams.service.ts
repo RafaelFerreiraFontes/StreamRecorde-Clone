@@ -30,7 +30,10 @@ import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
  * - Check for Windows drive letters after normalization
  * - Max 255 chars
  */
-function validateRecordingSubdirInput(value: unknown, fieldName = "recording_subdir"): string | undefined {
+function validateRecordingSubdirInput(
+  value: unknown,
+  fieldName = "recording_subdir",
+): string | undefined {
   if (value === undefined || value === null) return undefined;
 
   // Reject non-string values explicitly - do not coerce
@@ -41,6 +44,8 @@ function validateRecordingSubdirInput(value: unknown, fieldName = "recording_sub
   const str = value;
 
   // Check for null/control characters before any processing
+  // Reject ASCII control characters in untrusted input; these ranges are intentional.
+  // eslint-disable-next-line no-control-regex
   if (/\x00|[\x01-\x1f]/.test(str)) {
     throw new BadRequestException(`${fieldName} contains invalid characters`);
   }
@@ -62,7 +67,7 @@ function validateRecordingSubdirInput(value: unknown, fieldName = "recording_sub
   }
 
   // Split on both separators to check segments for traversal BEFORE normalization
-  const rawSegments = trimmed.split(/[\/\\]/);
+  const rawSegments = trimmed.split(/[/\\]/);
   for (const seg of rawSegments) {
     if (seg === ".." || seg === ".") {
       throw new BadRequestException(`${fieldName} must not contain traversal patterns`);
@@ -70,10 +75,7 @@ function validateRecordingSubdirInput(value: unknown, fieldName = "recording_sub
   }
 
   // Normalize: separators to forward slash, collapse, trim trailing
-  let normalized = trimmed
-    .replace(/\\/g, "/")
-    .replace(/\/+/g, "/")
-    .replace(/\/$/g, "");
+  const normalized = trimmed.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/g, "");
 
   // Reject empty after normalization
   if (normalized === "") return undefined;
@@ -156,10 +158,20 @@ export class StreamerService {
     return await this.repository.removeWatchTarget(id, ownerId);
   }
 
-  async updateWatchTarget(id: string, dto: PatchWatchTargetDto, ownerId?: string): Promise<WatchTarget> {
+  async updateWatchTarget(
+    id: string,
+    dto: PatchWatchTargetDto,
+    ownerId?: string,
+  ): Promise<WatchTarget> {
     this.rejectOwnerInput(dto);
-    if (!dto || typeof dto !== "object" || Array.isArray(dto) ||
-        Object.keys(dto).some(key => !["enabled", "recording_subdir", "quality", "url"].includes(key))) {
+    if (
+      !dto ||
+      typeof dto !== "object" ||
+      Array.isArray(dto) ||
+      Object.keys(dto).some(
+        (key) => !["enabled", "recording_subdir", "quality", "url"].includes(key),
+      )
+    ) {
       throw new BadRequestException("Unsupported WatchTarget configuration");
     }
     if (dto.enabled !== undefined && typeof dto.enabled !== "boolean") {
@@ -173,7 +185,10 @@ export class StreamerService {
       subdir = validateRecordingSubdirInput(dto.recording_subdir) ?? "";
     }
     if ("quality" in dto && dto.quality !== undefined) {
-      if (typeof dto.quality !== "string" || !WATCH_TARGET_QUALITIES.includes(dto.quality as any)) {
+      if (
+        typeof dto.quality !== "string" ||
+        !WATCH_TARGET_QUALITIES.some((quality) => quality === dto.quality)
+      ) {
         throw new BadRequestException("quality must be a supported Streamlink quality value");
       }
     }
@@ -183,16 +198,22 @@ export class StreamerService {
         throw new BadRequestException("url must be a string");
       }
       if (!isURL(dto.url, WATCH_TARGET_URL_OPTIONS)) {
-        throw new BadRequestException("url must be an absolute HTTP or HTTPS URL without credentials");
+        throw new BadRequestException(
+          "url must be an absolute HTTP or HTTPS URL without credentials",
+        );
       }
       url = dto.url;
     }
-    return this.repository.updateWatchTarget(id, {
-      recordingSubdir: subdir,
-      enabled: dto.enabled,
-      quality: dto.quality,
-      url: url,
-    }, ownerId);
+    return this.repository.updateWatchTarget(
+      id,
+      {
+        recordingSubdir: subdir,
+        enabled: dto.enabled,
+        quality: dto.quality,
+        url: url,
+      },
+      ownerId,
+    );
   }
 
   async findAllStreamer(ownerId?: string): Promise<StreamerDto[]> {

@@ -1,14 +1,15 @@
+import importlib.util
+import io
 import json
 import os
-import importlib.util
 import subprocess
 import tempfile
 import unittest
-import io
 import uuid
-from typing import Any
+from contextlib import suppress
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 worker_spec = importlib.util.spec_from_file_location(
     "worker_module", Path(__file__).with_name("worker.py")
@@ -70,19 +71,41 @@ class OutboxTests(unittest.TestCase):
         self.stream = str(uuid.uuid4())
         self.delivered = []
         self.now = 100.0
-        self.box = worker.Outbox(self.directory.name, "http://example.test", "test-token",
-                                transport=self.transport, clock=lambda: self.now, jitter=lambda: 0.5)
+        self.box = worker.Outbox(
+            self.directory.name,
+            "http://example.test",
+            "test-token",
+            transport=self.transport,
+            clock=lambda: self.now,
+            jitter=lambda: 0.5,
+        )
 
     def transport(self, method, path, payload=None):
         self.delivered.append(payload)
         if payload["event_type"] == "recording.start":
-            return {"acknowledged": True, "session_id": payload["session_id"], "stream_id": self.stream}
-        return {"acknowledged": True, "session_id": payload.get("session_id"), "state": payload.get("state")}
+            return {
+                "acknowledged": True,
+                "session_id": payload["session_id"],
+                "stream_id": self.stream,
+            }
+        return {
+            "acknowledged": True,
+            "session_id": payload.get("session_id"),
+            "state": payload.get("state"),
+        }
 
     def checkpoint(self, pid=None):
-        checkpoint = {"session_id": self.session, "stream_id": self.stream, "watch_target_id": self.target,
-                      "event_id": str(uuid.uuid4()), "started_at": "2026-10-19T10:00:00Z",
-                      "output_file": "private.mp4", "phase": "capturing", "pid": pid, "create_time": None}
+        checkpoint = {
+            "session_id": self.session,
+            "stream_id": self.stream,
+            "watch_target_id": self.target,
+            "event_id": str(uuid.uuid4()),
+            "started_at": "2026-10-19T10:00:00Z",
+            "output_file": "private.mp4",
+            "phase": "capturing",
+            "pid": pid,
+            "create_time": None,
+        }
         self.box.checkpoint(checkpoint)
         return checkpoint
 
@@ -96,9 +119,15 @@ class OutboxTests(unittest.TestCase):
         self.assertFalse(self.box.ready(self.target))
         self.assertTrue(self.box.replay())
         self.assertEqual(self.delivered, [first, second])
-        with patch.object(self.box, "files", return_value=[Path("0000000000000001_000000000001_event.json")] * 1000):
-            with self.assertRaisesRegex(RuntimeError, "saturated"):
-                self.box.enqueue(self.box.event("stream.offline", self.target))
+        with (
+            patch.object(
+                self.box,
+                "files",
+                return_value=[Path("0000000000000001_000000000001_event.json")] * 1000,
+            ),
+            self.assertRaisesRegex(RuntimeError, "saturated"),
+        ):
+            self.box.enqueue(self.box.event("stream.offline", self.target))
 
     def test_retry_backoff_keeps_immutable_event(self):
         event = self.box.event("stream.offline", self.target)
@@ -141,9 +170,11 @@ class OutboxTests(unittest.TestCase):
     def test_atomic_replace_failure_keeps_prior_checkpoint(self):
         checkpoint = self.checkpoint()
         module = __import__(worker.Outbox.__module__, fromlist=["os"])
-        with patch.object(module.os, "replace", side_effect=OSError("disk unavailable")):
-            with self.assertRaises(OSError):
-                self.box.checkpoint({**checkpoint, "phase": "capturing"})
+        with (
+            patch.object(module.os, "replace", side_effect=OSError("disk unavailable")),
+            self.assertRaises(OSError),
+        ):
+            self.box.checkpoint({**checkpoint, "phase": "capturing"})
         self.assertEqual(self.box._read(self.box.active / (self.session + ".json")), checkpoint)
         self.assertFalse(list(self.box.active.glob(".tmp-*")))
 
@@ -159,11 +190,15 @@ class OutboxTests(unittest.TestCase):
         self.assertTrue(self.box.ready(str(uuid.uuid4())))
 
     def test_lost_start_ack_replays_same_identity_and_blocks_unlaunched_attempt(self):
-        with patch.object(self.box, "transport", side_effect=OSError("lost acknowledgement")):
-            with self.assertRaises(RuntimeError):
-                self.box.start(self.target, self.session, self.stream, "private.mp4", "best")
+        with (
+            patch.object(self.box, "transport", side_effect=OSError("lost acknowledgement")),
+            self.assertRaises(RuntimeError),
+        ):
+            self.box.start(self.target, self.session, self.stream, "private.mp4", "best")
         event_id = self.box._read(self.box.files()[0])["event_id"]
-        restarted = worker.Outbox(self.directory.name, "http://example.test", "test-token", transport=self.transport)
+        restarted = worker.Outbox(
+            self.directory.name, "http://example.test", "test-token", transport=self.transport
+        )
         restarted.recover()
         self.assertEqual(self.delivered[-1]["event_id"], event_id)
         self.assertIn(self.target, restarted.blocked_targets)
@@ -190,7 +225,9 @@ class OutboxTests(unittest.TestCase):
         with patch.object(self.box, "transport", side_effect=OSError("unavailable")):
             self.assertFalse(self.box.terminal(checkpoint, "finished", "private.mp4"))
         event_id = checkpoint["terminal_event"]["event_id"]
-        restarted = worker.Outbox(self.directory.name, "http://example.test", "test-token", transport=self.transport)
+        restarted = worker.Outbox(
+            self.directory.name, "http://example.test", "test-token", transport=self.transport
+        )
         restarted.recover()
         self.assertEqual(self.delivered[-1]["event_id"], event_id)
         self.assertEqual(self.delivered[-1]["state"], "finished")
@@ -215,14 +252,14 @@ class ProbeClassificationTests(unittest.TestCase):
             ),
             (1, '{"error": "Twitch API request failed"}', worker.ProbeState.ERROR),
             (1, json.dumps({"error": self.ORIGINAL_TWITCH_INCIDENT}), worker.ProbeState.ERROR),
-            (0, ' ', worker.ProbeState.ERROR),
-            (0, '{', worker.ProbeState.ERROR),
-            (0, 'null', worker.ProbeState.ERROR),
-            (0, '[]', worker.ProbeState.ERROR),
+            (0, " ", worker.ProbeState.ERROR),
+            (0, "{", worker.ProbeState.ERROR),
+            (0, "null", worker.ProbeState.ERROR),
+            (0, "[]", worker.ProbeState.ERROR),
             (0, '"unexpected"', worker.ProbeState.ERROR),
-            (0, '42', worker.ProbeState.ERROR),
-            (0, 'false', worker.ProbeState.ERROR),
-            (0, '{}', worker.ProbeState.ERROR),
+            (0, "42", worker.ProbeState.ERROR),
+            (0, "false", worker.ProbeState.ERROR),
+            (0, "{}", worker.ProbeState.ERROR),
             (2, '{"streams": {"best": {}}}', worker.ProbeState.ERROR),
         )
 
@@ -255,9 +292,7 @@ class ProbeClassificationTests(unittest.TestCase):
         for streams in invalid_values:
             with self.subTest(streams=streams):
                 self.assertEqual(
-                    worker.classify_probe_result(
-                        url, 0, json.dumps({"streams": streams})
-                    ).state,
+                    worker.classify_probe_result(url, 0, json.dumps({"streams": streams})).state,
                     worker.ProbeState.ERROR,
                 )
 
@@ -269,9 +304,7 @@ class ProbeClassificationTests(unittest.TestCase):
                     worker.classify_probe_result(
                         url,
                         0,
-                        json.dumps(
-                            {"error": "Twitch API request failed", "streams": streams}
-                        ),
+                        json.dumps({"error": "Twitch API request failed", "streams": streams}),
                     ).state,
                     worker.ProbeState.ERROR,
                 )
@@ -286,8 +319,9 @@ class ProbeClassificationTests(unittest.TestCase):
         )
 
         for failure in failures:
-            with self.subTest(failure=type(failure).__name__), patch.object(
-                worker.subprocess, "run", side_effect=failure
+            with (
+                self.subTest(failure=type(failure).__name__),
+                patch.object(worker.subprocess, "run", side_effect=failure),
             ):
                 result = worker.is_live(url)
                 self.assertEqual(result.state, worker.ProbeState.ERROR)
@@ -296,11 +330,12 @@ class ProbeClassificationTests(unittest.TestCase):
                     self.assertNotIn(str(failure), repr(result))
 
         for signal_exception in (KeyboardInterrupt(), SystemExit()):
-            with self.subTest(signal=type(signal_exception).__name__), patch.object(
-                worker.subprocess, "run", side_effect=signal_exception
+            with (
+                self.subTest(signal=type(signal_exception).__name__),
+                patch.object(worker.subprocess, "run", side_effect=signal_exception),
+                self.assertRaises(type(signal_exception)),
             ):
-                with self.assertRaises(type(signal_exception)):
-                    worker.is_live(url)
+                worker.is_live(url)
 
     def test_is_live_uses_the_existing_command_and_timeout(self):
         url = "https://twitch.tv/example"
@@ -324,16 +359,26 @@ class ProbeClassificationTests(unittest.TestCase):
         cases = (
             ('{"streams":{"best":{}}}', 0, worker.ProbeState.LIVE, "streams_available"),
             ('{"streams":{}}', 0, worker.ProbeState.OFFLINE, "empty_streams"),
-            (json.dumps({"error": exact_no_streams}), 1, worker.ProbeState.OFFLINE, "no_playable_streams"),
+            (
+                json.dumps({"error": exact_no_streams}),
+                1,
+                worker.ProbeState.OFFLINE,
+                "no_playable_streams",
+            ),
             (json.dumps({"error": exact_no_streams}), 0, worker.ProbeState.ERROR, "error_envelope"),
             ('{"error":"plugin/network failure"}', 1, worker.ProbeState.ERROR, "error_envelope"),
-            (json.dumps({"error": self.ORIGINAL_TWITCH_INCIDENT}), 1, worker.ProbeState.ERROR, "error_envelope"),
+            (
+                json.dumps({"error": self.ORIGINAL_TWITCH_INCIDENT}),
+                1,
+                worker.ProbeState.ERROR,
+                "error_envelope",
+            ),
             ('{"streams":{"best":{}}}', 2, worker.ProbeState.ERROR, "nonzero_exit"),
-            ('{', 0, worker.ProbeState.ERROR, "malformed_json"),
-            ('', 0, worker.ProbeState.ERROR, "empty_output"),
-            (' \t\n', 0, worker.ProbeState.ERROR, "empty_output"),
-            ('{}', 0, worker.ProbeState.ERROR, "missing_streams"),
-            ('[]', 0, worker.ProbeState.ERROR, "invalid_root"),
+            ("{", 0, worker.ProbeState.ERROR, "malformed_json"),
+            ("", 0, worker.ProbeState.ERROR, "empty_output"),
+            (" \t\n", 0, worker.ProbeState.ERROR, "empty_output"),
+            ("{}", 0, worker.ProbeState.ERROR, "missing_streams"),
+            ("[]", 0, worker.ProbeState.ERROR, "invalid_root"),
             ('{"streams":null}', 0, worker.ProbeState.ERROR, "invalid_streams"),
             ('{"streams":"best"}', 0, worker.ProbeState.ERROR, "invalid_streams"),
             ('{"streams":42}', 0, worker.ProbeState.ERROR, "invalid_streams"),
@@ -346,37 +391,50 @@ class ProbeClassificationTests(unittest.TestCase):
         for stdout, returncode, state, reason in cases:
             with self.subTest(stdout=stdout, returncode=returncode):
                 completed = subprocess.CompletedProcess(
-                    ["streamlink"], returncode, stdout=stdout,
+                    ["streamlink"],
+                    returncode,
+                    stdout=stdout,
                     stderr="Authorization: Bearer secret-value",
                 )
                 with patch.object(worker.subprocess, "run", return_value=completed) as run:
                     result = worker.is_live(url)
-                self.assertEqual((result.state, result.reason, result.returncode), (state, reason, returncode))
+                self.assertEqual(
+                    (result.state, result.reason, result.returncode), (state, reason, returncode)
+                )
                 self.assertIsNone(result.stderr_summary)
                 self.assertNotIn("secret-value", repr(result))
                 run.assert_called_once_with(
-                    ["streamlink", "--json", url], capture_output=True,
-                    text=True, timeout=worker.CHECK_TIMEOUT,
+                    ["streamlink", "--json", url],
+                    capture_output=True,
+                    text=True,
+                    timeout=worker.CHECK_TIMEOUT,
                 )
 
     def test_is_live_process_failures_have_safe_metadata(self):
         url = "https://twitch.tv/example"
         for failure in (
             subprocess.TimeoutExpired("streamlink", worker.CHECK_TIMEOUT),
-            FileNotFoundError("secret-value"), OSError("secret-value"),
+            FileNotFoundError("secret-value"),
+            OSError("secret-value"),
             RuntimeError("secret-value"),
         ):
-            with self.subTest(failure=type(failure).__name__), patch.object(
-                worker.subprocess, "run", side_effect=failure
+            with (
+                self.subTest(failure=type(failure).__name__),
+                patch.object(worker.subprocess, "run", side_effect=failure),
             ):
                 result = worker.is_live(url)
             self.assertEqual(result.state, worker.ProbeState.ERROR)
             self.assertNotIn("secret-value", repr(result))
             self.assertNotIn(url, repr(result))
             if isinstance(failure, subprocess.TimeoutExpired):
-                self.assertEqual((result.reason, result.timeout_seconds), ("timeout", worker.CHECK_TIMEOUT))
+                self.assertEqual(
+                    (result.reason, result.timeout_seconds), ("timeout", worker.CHECK_TIMEOUT)
+                )
             else:
-                self.assertEqual((result.reason, result.exception_type), ("process_error", type(failure).__name__))
+                self.assertEqual(
+                    (result.reason, result.exception_type),
+                    ("process_error", type(failure).__name__),
+                )
 
 
 class ProbeObservabilityTests(unittest.TestCase):
@@ -394,11 +452,21 @@ class ProbeObservabilityTests(unittest.TestCase):
 
     def test_sanitize_diagnostic_secret_matrix_never_retains_credentials_or_raw_json(self):
         unsafe_values = (
-            "oauth token=secret", "access token=secret", "refresh token=secret",
-            "Authorization: Basic secret", "Bearer secret", "Cookie: session=secret",
-            "Set-Cookie: session=secret", "signed=secret", "signature=secret",
-            "sig=secret", "key=secret", "https://user:password@example.test/path",
-            "password=secret", "credential=secret", '{"streams":{"best":{}}}',
+            "oauth token=secret",
+            "access token=secret",
+            "refresh token=secret",
+            "Authorization: Basic secret",
+            "Bearer secret",
+            "Cookie: session=secret",
+            "Set-Cookie: session=secret",
+            "signed=secret",
+            "signature=secret",
+            "sig=secret",
+            "key=secret",
+            "https://user:password@example.test/path",
+            "password=secret",
+            "credential=secret",
+            '{"streams":{"best":{}}}',
         )
         for value in unsafe_values:
             with self.subTest(value=value):
@@ -444,21 +512,28 @@ class ProbeObservabilityTests(unittest.TestCase):
         failed = subprocess.CompletedProcess(
             ["streamlink", "--version"], 1, stdout="", stderr="Bearer secret"
         )
-        with patch.object(worker.subprocess, "run", return_value=failed), self.assertLogs(worker.log, "ERROR") as logs:
+        with (
+            patch.object(worker.subprocess, "run", return_value=failed),
+            self.assertLogs(worker.log, "ERROR") as logs,
+        ):
             self.assertIsNone(worker._get_streamlink_version())
         self.assertNotIn("secret", "\n".join(logs.output))
 
     def test_run_worker_does_not_start_when_version_check_fails(self):
-        with patch.object(worker, "_get_streamlink_version", return_value=None), patch.object(
-            worker, "poll_loop"
-        ) as poll_loop:
+        with (
+            patch.object(worker, "_get_streamlink_version", return_value=None),
+            patch.object(worker, "poll_loop") as poll_loop,
+        ):
             self.assertEqual(worker.run_worker(), 1)
         poll_loop.assert_not_called()
 
     def test_run_worker_runtime_initialization_failure_never_logs_ready_or_polls(self):
-        with patch.object(worker, "_get_streamlink_version", return_value="7.0.0"), patch.object(
-            worker, "ensure_runtime_dirs", side_effect=OSError("denied")
-        ), patch.object(worker, "poll_loop") as poll_loop, self.assertLogs(worker.log, "ERROR") as logs:
+        with (
+            patch.object(worker, "_get_streamlink_version", return_value="7.0.0"),
+            patch.object(worker, "ensure_runtime_dirs", side_effect=OSError("denied")),
+            patch.object(worker, "poll_loop") as poll_loop,
+            self.assertLogs(worker.log, "ERROR") as logs,
+        ):
             self.assertEqual(worker.run_worker(), 1)
         poll_loop.assert_not_called()
         self.assertNotIn("Worker started", "\n".join(logs.output))
@@ -470,11 +545,15 @@ class ProbeObservabilityTests(unittest.TestCase):
             "sessions": "/alternate/sessions.json",
             "streams": "/alternate/streams.json",
         }
-        with patch.object(worker, "_get_streamlink_version", return_value="7.0.0"), patch.object(
-            worker, "ensure_runtime_dirs"
-        ), patch.object(worker, "_resolve_all_paths", return_value=paths), patch.object(
-            worker, "poll_loop"
-        ) as poll_loop, patch.object(worker, "shutdown_worker") as shutdown_worker, patch.object(worker, "OUTPUT_DIR", "/alternate/output"), self.assertLogs(worker.log, "INFO") as logs:
+        with (
+            patch.object(worker, "_get_streamlink_version", return_value="7.0.0"),
+            patch.object(worker, "ensure_runtime_dirs"),
+            patch.object(worker, "_resolve_all_paths", return_value=paths),
+            patch.object(worker, "poll_loop") as poll_loop,
+            patch.object(worker, "shutdown_worker") as shutdown_worker,
+            patch.object(worker, "OUTPUT_DIR", "/alternate/output"),
+            self.assertLogs(worker.log, "INFO") as logs,
+        ):
             self.assertEqual(worker.run_worker(), 0)
         poll_loop.assert_called_once_with()
         shutdown_worker.assert_called_once_with()
@@ -485,10 +564,19 @@ class ProbeObservabilityTests(unittest.TestCase):
 
     def test_poll_emits_safe_events_for_probe_outcomes_and_invalid_target(self):
         original_globals = {
-            name: getattr(worker, name) for name in (
-                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
-                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
-                "streams_data", "lock", "shutdown_event",
+            name: getattr(worker, name)
+            for name in (
+                "CONFIG_PATH",
+                "CHANNELS_STATUS_PATH",
+                "SESSIONS_PATH",
+                "STREAMS_PATH",
+                "OUTPUT_DIR",
+                "channels_status",
+                "recordings",
+                "active_recordings",
+                "streams_data",
+                "lock",
+                "shutdown_event",
             )
         }
         temp_dir = tempfile.TemporaryDirectory()
@@ -498,32 +586,59 @@ class ProbeObservabilityTests(unittest.TestCase):
             worker.CHANNELS_STATUS_PATH = str(config_dir / "channels_status.json")
             worker.SESSIONS_PATH = str(config_dir / "sessions.json")
             worker.STREAMS_PATH = str(config_dir / "streams.json")
-            for path, value in ((worker.CHANNELS_STATUS_PATH, "{}"), (worker.SESSIONS_PATH, "[]"), (worker.STREAMS_PATH, "[]")):
+            for path, value in (
+                (worker.CHANNELS_STATUS_PATH, "{}"),
+                (worker.SESSIONS_PATH, "[]"),
+                (worker.STREAMS_PATH, "[]"),
+            ):
                 Path(path).write_text(value, encoding="utf-8")
             worker.channels_status = {}
             worker.recordings = []
             worker.active_recordings = {}
             worker.streams_data = []
-            valid = {"id": "target-1", "channel_name": "example", "platform": "twitch", "url": "https://twitch.tv/example"}
-            invalid = {"id": "bad\nidentifier", "url": "https://user:password@example.test/?token=secret-value"}
+            valid = {
+                "id": "target-1",
+                "channel_name": "example",
+                "platform": "twitch",
+                "url": "https://twitch.tv/example",
+            }
+            invalid = {
+                "id": "bad\nidentifier",
+                "url": "https://user:password@example.test/?token=secret-value",
+            }
             Path(worker.CONFIG_PATH).write_text(json.dumps([valid, invalid]), encoding="utf-8")
-            results = iter((
-                worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", 0),
-                worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams", 0),
-                worker.ProbeResult(worker.ProbeState.ERROR, "timeout", exception_type="TimeoutExpired", timeout_seconds=20),
-            ))
-            with patch.object(worker, "is_live", side_effect=lambda _: next(results)), patch.object(
-                worker, "start_recording"
-            ), patch.object(worker.shutdown_event, "wait", side_effect=[None, None, KeyboardInterrupt]), self.assertLogs(worker.log, "INFO") as logs:
-                with self.assertRaises(KeyboardInterrupt):
-                    worker.poll_loop()
+            results = iter(
+                (
+                    worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", 0),
+                    worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams", 0),
+                    worker.ProbeResult(
+                        worker.ProbeState.ERROR,
+                        "timeout",
+                        exception_type="TimeoutExpired",
+                        timeout_seconds=20,
+                    ),
+                )
+            )
+            with (
+                patch.object(worker, "is_live", side_effect=lambda _: next(results)),
+                patch.object(worker, "start_recording"),
+                patch.object(
+                    worker.shutdown_event, "wait", side_effect=[None, None, KeyboardInterrupt]
+                ),
+                self.assertLogs(worker.log, "INFO") as logs,
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                worker.poll_loop()
             output = "\n".join(logs.output)
             self.assertIn("Checking status... (watch_target_id=target-1)", output)
             self.assertIn("Probe: LIVE", output)
             self.assertIn("Probe: OFFLINE", output)
             self.assertIn("Probe: ERROR", output)
             self.assertIn("Live detected!", output)
-            self.assertIn("Invalid watch target (watch_target_id=bad_identifier, missing_fields=channel_name,platform)", output)
+            self.assertIn(
+                "Invalid watch target (watch_target_id=bad_identifier, missing_fields=channel_name,platform)",
+                output,
+            )
             self.assertNotIn("secret-value", output)
         finally:
             for name, value in original_globals.items():
@@ -534,22 +649,36 @@ class ProbeObservabilityTests(unittest.TestCase):
 class WorkerLifecycleTests(unittest.TestCase):
     def test_bridge_requires_explicit_internal_token(self):
         for token in (None, "", "   "):
-            with self.subTest(token=token), tempfile.TemporaryDirectory() as directory:
-                with patch.dict(os.environ, {"PERSISTENCE_MODE": "bridge", "OUTBOX_DIR": directory}):
-                    if token is None:
-                        os.environ.pop("INTERNAL_API_TOKEN", None)
-                    else:
-                        os.environ["INTERNAL_API_TOKEN"] = token
-                    with patch.object(worker, "bridge", None):
-                        with self.assertRaisesRegex(RuntimeError, "INTERNAL_API_TOKEN must be configured"):
-                            worker.get_bridge()
+            with (
+                self.subTest(token=token),
+                tempfile.TemporaryDirectory() as directory,
+                patch.dict(os.environ, {"PERSISTENCE_MODE": "bridge", "OUTBOX_DIR": directory}),
+            ):
+                if token is None:
+                    os.environ.pop("INTERNAL_API_TOKEN", None)
+                else:
+                    os.environ["INTERNAL_API_TOKEN"] = token
+                with (
+                    patch.object(worker, "bridge", None),
+                    self.assertRaisesRegex(RuntimeError, "INTERNAL_API_TOKEN must be configured"),
+                ):
+                    worker.get_bridge()
 
     def setUp(self):
         self.original_globals = {
-            name: getattr(worker, name) for name in (
-                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
-                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
-                "streams_data", "lock", "shutdown_event",
+            name: getattr(worker, name)
+            for name in (
+                "CONFIG_PATH",
+                "CHANNELS_STATUS_PATH",
+                "SESSIONS_PATH",
+                "STREAMS_PATH",
+                "OUTPUT_DIR",
+                "channels_status",
+                "recordings",
+                "active_recordings",
+                "streams_data",
+                "lock",
+                "shutdown_event",
             )
         }
         self.addCleanup(self.restore_worker_globals)
@@ -584,18 +713,33 @@ class WorkerLifecycleTests(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
         target_id = str(uuid.uuid4())
-        entry = {"id": target_id, "channel_name": "fake", "platform": "twitch",
-                 "url": "https://example.test/fake", "quality": "1080p", "enabled": True}
+        entry = {
+            "id": target_id,
+            "channel_name": "fake",
+            "platform": "twitch",
+            "url": "https://example.test/fake",
+            "quality": "1080p",
+            "enabled": True,
+        }
         events = []
 
         def transport(method, path, event=None):
             if method == "GET":
                 return [entry]
             events.append(event)
-            return {"acknowledged": True, "session_id": event.get("session_id"),
-                    "stream_id": event.get("stream_id"), "state": event.get("state")}
+            return {
+                "acknowledged": True,
+                "session_id": event.get("session_id"),
+                "stream_id": event.get("stream_id"),
+                "state": event.get("state"),
+            }
 
-        outbox = worker.Outbox(Path(self.temp_dir.name) / "outbox", "http://example.test", "test-token", transport=transport)
+        outbox = worker.Outbox(
+            Path(self.temp_dir.name) / "outbox",
+            "http://example.test",
+            "test-token",
+            transport=transport,
+        )
         bridge_patch = patch.object(worker, "bridge", outbox)
         bridge_patch.start()
         self.addCleanup(bridge_patch.stop)
@@ -608,10 +752,15 @@ class WorkerLifecycleTests(unittest.TestCase):
         def launch(*args, **kwargs):
             self.assertEqual(events[0]["event_type"], "recording.start")
             self.assertFalse(outbox.files())
-            self.assertEqual(outbox._read(next(outbox.active.glob("*.json")))["phase"], "start_committed")
+            self.assertEqual(
+                outbox._read(next(outbox.active.glob("*.json")))["phase"], "start_committed"
+            )
             return FakeProcess()
 
-        with patch.object(worker.subprocess, "Popen", side_effect=launch), patch.object(worker.threading, "Thread"):
+        with (
+            patch.object(worker.subprocess, "Popen", side_effect=launch),
+            patch.object(worker.threading, "Thread"),
+        ):
             worker.start_recording(entry, quality="720p")
         info = worker.active_recordings[entry["id"]]
         self.assertEqual(events[0]["quality"], "1080p")
@@ -623,18 +772,24 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(Path(worker.STREAMS_PATH).read_text(), "[]")
 
     def test_bridge_start_outage_blocks_child_and_keeps_checkpoint(self):
-        entry, outbox, events = self.bridge_fixture()
-        with patch.object(outbox, "transport", side_effect=OSError("unavailable")), patch.object(worker.subprocess, "Popen") as launch:
-            with self.assertRaisesRegex(RuntimeError, "acknowledgement pending"):
-                worker.start_recording(entry)
+        entry, outbox, _events = self.bridge_fixture()
+        with (
+            patch.object(outbox, "transport", side_effect=OSError("unavailable")),
+            patch.object(worker.subprocess, "Popen") as launch,
+            self.assertRaisesRegex(RuntimeError, "acknowledgement pending"),
+        ):
+            worker.start_recording(entry)
         launch.assert_not_called()
         self.assertIn(entry["id"], outbox.blocked_targets)
         self.assertEqual(len(list(outbox.active.glob("*.json"))), 1)
         self.assertEqual(len(outbox.files()), 1)
 
     def test_bridge_terminal_outage_retains_media_and_retries(self):
-        entry, outbox, events = self.bridge_fixture()
-        with patch.object(worker.subprocess, "Popen", return_value=FakeProcess()), patch.object(worker.threading, "Thread"):
+        entry, outbox, _events = self.bridge_fixture()
+        with (
+            patch.object(worker.subprocess, "Popen", return_value=FakeProcess()),
+            patch.object(worker.threading, "Thread"),
+        ):
             worker.start_recording(entry)
         info = worker.active_recordings[entry["id"]]
         output = Path(info["output_file"])
@@ -649,26 +804,42 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(worker.channels_status[entry["id"]]["state"], "finished")
 
     def test_bridge_poll_refresh_and_blocked_target_guards(self):
-        entry, outbox, events = self.bridge_fixture()
-        with patch.object(worker.WatchTargetJsonAdapter, "read", side_effect=AssertionError("JSON read")):
+        entry, outbox, _events = self.bridge_fixture()
+        with patch.object(
+            worker.WatchTargetJsonAdapter, "read", side_effect=AssertionError("JSON read")
+        ):
             self.assertEqual(worker.load_watchlist(), [entry])
-        with patch.object(outbox, "configs", side_effect=[[entry], [{**entry, "enabled": False}]]), patch.object(
-            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "available", streams={"best": {}})
-        ), patch.object(worker, "start_recording") as launch, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(outbox, "configs", side_effect=[[entry], [{**entry, "enabled": False}]]),
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "available", streams={"best": {}}
+                ),
+            ),
+            patch.object(worker, "start_recording") as launch,
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
         launch.assert_not_called()
         outbox.blocked_targets.add(entry["id"])
-        with patch.object(worker, "is_live") as probe, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(worker, "is_live") as probe,
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
         probe.assert_not_called()
 
     def test_bridge_launch_failure_is_terminal_and_does_not_keep_active_attempt(self):
         entry, outbox, events = self.bridge_fixture()
-        with patch.object(worker.subprocess, "Popen", side_effect=OSError("launch failure")):
-            with self.assertRaises(OSError):
-                worker.start_recording(entry)
+        with (
+            patch.object(worker.subprocess, "Popen", side_effect=OSError("launch failure")),
+            self.assertRaises(OSError),
+        ):
+            worker.start_recording(entry)
         self.assertEqual(events[-1]["event_type"], "recording.terminal")
         self.assertEqual(events[-1]["state"], "error")
         self.assertEqual(events[-1]["reason"], "launch_failure")
@@ -676,9 +847,12 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertFalse(list(outbox.active.glob("*.json")))
 
     def test_bridge_shutdown_terminates_reaps_and_acknowledges_error(self):
-        entry, outbox, events = self.bridge_fixture()
+        entry, _outbox, events = self.bridge_fixture()
         process = FakeProcess()
-        with patch.object(worker.subprocess, "Popen", return_value=process), patch.object(worker.threading, "Thread"):
+        with (
+            patch.object(worker.subprocess, "Popen", return_value=process),
+            patch.object(worker.threading, "Thread"),
+        ):
             worker.start_recording(entry)
         worker.shutdown_worker()
         self.assertTrue(process._wait_called)
@@ -696,9 +870,10 @@ class WorkerLifecycleTests(unittest.TestCase):
         }
         process = FakeProcess()
 
-        with patch.object(worker.subprocess, "Popen", return_value=process), patch.object(
-            worker.threading, "Thread"
-        ) as thread:
+        with (
+            patch.object(worker.subprocess, "Popen", return_value=process),
+            patch.object(worker.threading, "Thread") as thread,
+        ):
             worker.channels_status["channel-1"] = {
                 "channel_name": "example",
                 "platform": "twitch",
@@ -707,9 +882,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             worker.start_recording(entry)
             thread.assert_called_once()
 
-        persisted_sessions = json.loads(
-            Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")
-        )
+        persisted_sessions = json.loads(Path(worker.SESSIONS_PATH).read_text(encoding="utf-8"))
         self.assertEqual(len(worker.recordings), 1)
         self.assertEqual(worker.recordings[0]["watch_target_id"], "channel-1")
         self.assertEqual(persisted_sessions[0]["channel_id"], "channel-1")
@@ -767,9 +940,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         ]
 
         worker.save_recordings()
-        persisted_session = json.loads(
-            Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")
-        )[0]
+        persisted_session = json.loads(Path(worker.SESSIONS_PATH).read_text(encoding="utf-8"))[0]
 
         self.assertIn("channel_id", persisted_session)
         self.assertNotIn("watch_target_id", persisted_session)
@@ -847,7 +1018,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker.recordings = [
             {
                 "session_id": "session-1",
-            "watch_target_id": "channel-1",
+                "watch_target_id": "channel-1",
                 "started_at": "2026-09-05T00:00:00",
                 "finished_at": None,
                 "output_file": str(output_file),
@@ -881,7 +1052,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker.recordings = [
             {
                 "session_id": "session-1",
-            "watch_target_id": "channel-1",
+                "watch_target_id": "channel-1",
                 "started_at": "2026-09-05T00:00:00",
                 "finished_at": None,
                 "output_file": "missing.mp4",
@@ -918,15 +1089,17 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker_path = worker.CONFIG_PATH
         Path(worker_path).write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(
-            worker,
-            "is_live",
-            return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams"),
-        ), patch.object(
-            worker.subprocess, "Popen"
-        ) as popen, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams"),
+            ),
+            patch.object(worker.subprocess, "Popen") as popen,
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
 
         popen.assert_not_called()
         self.assertEqual(worker.recordings, [])
@@ -941,13 +1114,15 @@ class WorkerLifecycleTests(unittest.TestCase):
                 return
             raise KeyboardInterrupt
 
-        with patch.object(
-            worker.shutdown_event,
-            "wait",
-            side_effect=recreate_watchlist_then_stop,
-        ) as sleep:
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(
+                worker.shutdown_event,
+                "wait",
+                side_effect=recreate_watchlist_then_stop,
+            ) as sleep,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
 
         self.assertEqual(sleep.call_count, 2)
         self.assertTrue(self.watchlist_path.exists())
@@ -982,12 +1157,12 @@ class WorkerLifecycleTests(unittest.TestCase):
             }
         }
 
-        with patch.object(worker, "load_sessions", side_effect=OSError("temporary failure")):
-            with worker.lock:
-                try:
-                    worker.reload_recordings_preserving_active()
-                except OSError:
-                    pass
+        with (
+            patch.object(worker, "load_sessions", side_effect=OSError("temporary failure")),
+            worker.lock,
+            suppress(OSError),
+        ):
+            worker.reload_recordings_preserving_active()
 
         self.assertEqual(worker.recordings, [worker.deserialize_session(session)])
         worker.monitor_recording("channel-1")
@@ -1003,9 +1178,8 @@ class WorkerLifecycleTests(unittest.TestCase):
             }
         }
 
-        with patch.object(worker, "load_channels_status", return_value={}):
-            with worker.lock:
-                worker.reload_channels_status_preserving_active()
+        with patch.object(worker, "load_channels_status", return_value={}), worker.lock:
+            worker.reload_channels_status_preserving_active()
 
         self.assertEqual(
             worker.channels_status["channel-1"],
@@ -1049,9 +1223,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         self.assertEqual(process.returncode, -15)
         self.assertEqual(worker.recordings[0]["state"], "error")
         self.assertIsNotNone(worker.recordings[0]["finished_at"])
-        persisted_sessions = json.loads(
-            Path(worker.SESSIONS_PATH).read_text(encoding="utf-8")
-        )
+        persisted_sessions = json.loads(Path(worker.SESSIONS_PATH).read_text(encoding="utf-8"))
         self.assertEqual(persisted_sessions[0]["state"], "error")
 
     def test_shutdown_with_no_active_recordings_persists_cleanly(self):
@@ -1060,8 +1232,7 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker.channels_status = {}
         worker.recordings = []
 
-        with patch.object(worker, "save_status"), \
-             patch.object(worker, "save_recordings"):
+        with patch.object(worker, "save_status"), patch.object(worker, "save_recordings"):
             worker.handle_shutdown(None, None)
             worker.shutdown_worker()
 
@@ -1094,8 +1265,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             }
         }
 
-        with patch.object(worker, "save_status"), \
-             patch.object(worker, "save_recordings"):
+        with patch.object(worker, "save_status"), patch.object(worker, "save_recordings"):
             worker.handle_shutdown(None, None)
             worker.shutdown_worker()
 
@@ -1150,15 +1320,19 @@ class WorkerLifecycleTests(unittest.TestCase):
             self.assertTrue(worker.lock.locked())
             set_event()
 
-        with patch.object(worker.shutdown_event, "set", side_effect=set_shutdown_event) as set_event_mock, \
-             patch.object(worker.log, "info") as info, \
-             patch.object(worker.log, "warning") as warning, \
-             patch.object(worker.log, "error") as error, \
-             patch.object(worker, "save_status") as save_status, \
-             patch.object(worker, "save_recordings") as save_recordings, \
-             patch.object(worker, "_wait_for_process") as wait_for_process:
-            with worker.lock:
-                worker.handle_shutdown(None, None)
+        with (
+            patch.object(
+                worker.shutdown_event, "set", side_effect=set_shutdown_event
+            ) as set_event_mock,
+            patch.object(worker.log, "info") as info,
+            patch.object(worker.log, "warning") as warning,
+            patch.object(worker.log, "error") as error,
+            patch.object(worker, "save_status") as save_status,
+            patch.object(worker, "save_recordings") as save_recordings,
+            patch.object(worker, "_wait_for_process") as wait_for_process,
+            worker.lock,
+        ):
+            worker.handle_shutdown(None, None)
 
         self.assertTrue(worker.shutdown_event.is_set())
         set_event_mock.assert_called_once_with()
@@ -1172,9 +1346,12 @@ class WorkerLifecycleTests(unittest.TestCase):
         process.wait.assert_not_called()
 
     def test_run_worker_calls_shutdown_once_after_poll_loop_exits(self):
-        with patch.object(worker, "_get_streamlink_version", return_value="7.0.0"), patch.object(
-            worker, "ensure_runtime_dirs"
-        ), patch.object(worker, "poll_loop"), patch.object(worker, "shutdown_worker") as shutdown_worker:
+        with (
+            patch.object(worker, "_get_streamlink_version", return_value="7.0.0"),
+            patch.object(worker, "ensure_runtime_dirs"),
+            patch.object(worker, "poll_loop"),
+            patch.object(worker, "shutdown_worker") as shutdown_worker,
+        ):
             self.assertEqual(worker.run_worker(), 0)
 
         shutdown_worker.assert_called_once_with()
@@ -1203,11 +1380,12 @@ class WorkerLifecycleTests(unittest.TestCase):
             worker.shutdown_event.set()
             return worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")
 
-        with patch.object(worker, "is_live", side_effect=live_then_shutdown) as is_live, patch.object(
-            worker, "create_stream"
-        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
-            worker.subprocess, "Popen"
-        ) as popen:
+        with (
+            patch.object(worker, "is_live", side_effect=live_then_shutdown) as is_live,
+            patch.object(worker, "create_stream") as create_stream,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker.subprocess, "Popen") as popen,
+        ):
             worker.poll_loop()
 
         is_live.assert_called_once_with(entry["url"])
@@ -1307,9 +1485,12 @@ class WorkerLifecycleTests(unittest.TestCase):
         }
         worker.channels_status["channel-1"] = {"state": "idle"}
 
-        with patch.object(worker.subprocess, "Popen", side_effect=OSError("secret-value")), self.assertLogs(worker.log, "ERROR") as logs:
-            with self.assertRaises(OSError):
-                worker.start_recording(entry, "stream-1")
+        with (
+            patch.object(worker.subprocess, "Popen", side_effect=OSError("secret-value")),
+            self.assertLogs(worker.log, "ERROR") as logs,
+            self.assertRaises(OSError),
+        ):
+            worker.start_recording(entry, "stream-1")
 
         output = "\n".join(logs.output)
         self.assertNotIn("Recording started", output)
@@ -1327,11 +1508,13 @@ class WorkerLifecycleTests(unittest.TestCase):
         worker.channels_status["channel-1"] = {"state": "idle"}
 
         process = FakeProcess()
-        with patch.object(worker.subprocess, "Popen", return_value=process), patch.object(
-            worker, "save_recordings", side_effect=OSError("secret-value")
-        ), self.assertLogs(worker.log, "ERROR") as logs:
-            with self.assertRaises(OSError):
-                worker.start_recording(entry, "stream-1")
+        with (
+            patch.object(worker.subprocess, "Popen", return_value=process),
+            patch.object(worker, "save_recordings", side_effect=OSError("secret-value")),
+            self.assertLogs(worker.log, "ERROR") as logs,
+            self.assertRaises(OSError),
+        ):
+            worker.start_recording(entry, "stream-1")
 
         output = "\n".join(logs.output)
         self.assertNotIn("Recording started", output)
@@ -1347,15 +1530,24 @@ class WorkerLifecycleTests(unittest.TestCase):
         output_file.parent.mkdir(parents=True)
         output_file.write_bytes(b"recorded")
         worker.channels_status = {"channel-1": {"state": "recording"}}
-        worker.recordings = [{
-            "session_id": "session-1", "watch_target_id": "channel-1",
-            "started_at": "2026-09-05T00:00:00", "finished_at": None,
-            "output_file": str(output_file), "state": "recording",
-        }]
-        worker.active_recordings = {"channel-1": {
-            "process": FakeProcess(), "output_file": str(output_file),
-            "channel_name": "example", "session_id": "session-1",
-        }}
+        worker.recordings = [
+            {
+                "session_id": "session-1",
+                "watch_target_id": "channel-1",
+                "started_at": "2026-09-05T00:00:00",
+                "finished_at": None,
+                "output_file": str(output_file),
+                "state": "recording",
+            }
+        ]
+        worker.active_recordings = {
+            "channel-1": {
+                "process": FakeProcess(),
+                "output_file": str(output_file),
+                "channel_name": "example",
+                "session_id": "session-1",
+            }
+        }
 
         with patch.object(worker, "save_recordings", side_effect=OSError("denied")):
             worker.monitor_recording("channel-1")
@@ -1375,16 +1567,25 @@ class WorkerLifecycleTests(unittest.TestCase):
         output_file.parent.mkdir(parents=True)
         output_file.write_bytes(b"recorded")
         worker.channels_status = {"channel-1": {"state": "recording"}}
-        worker.recordings = [{
-            "session_id": "session-1", "watch_target_id": "channel-1",
-            "started_at": "2026-09-05T00:00:00", "finished_at": None,
-            "output_file": str(output_file), "state": "recording",
-        }]
-        worker.active_recordings = {"channel-1": {
-            "process": FakeProcess(returncode=0), "output_file": str(output_file),
-            "channel_name": "example", "session_id": "session-1",
-            "shutdown_requested": True,
-        }}
+        worker.recordings = [
+            {
+                "session_id": "session-1",
+                "watch_target_id": "channel-1",
+                "started_at": "2026-09-05T00:00:00",
+                "finished_at": None,
+                "output_file": str(output_file),
+                "state": "recording",
+            }
+        ]
+        worker.active_recordings = {
+            "channel-1": {
+                "process": FakeProcess(returncode=0),
+                "output_file": str(output_file),
+                "channel_name": "example",
+                "session_id": "session-1",
+                "shutdown_requested": True,
+            }
+        }
 
         worker.monitor_recording("channel-1")
 
@@ -1403,9 +1604,11 @@ class WorkerLifecycleTests(unittest.TestCase):
         output_file.parent.mkdir(parents=True)
         output_file.write_bytes(b"recorded")
 
-        with patch.object(worker.subprocess, "Popen", return_value=FakeProcess()), patch.object(
-            worker.threading, "Thread"
-        ), self.assertLogs(worker.log, "INFO") as logs:
+        with (
+            patch.object(worker.subprocess, "Popen", return_value=FakeProcess()),
+            patch.object(worker.threading, "Thread"),
+            self.assertLogs(worker.log, "INFO") as logs,
+        ):
             worker.start_recording(entry, "stream-1")
             info = worker.active_recordings["channel-1"]
             info["output_file"] = str(output_file)
@@ -1464,16 +1667,21 @@ class WorkerLifecycleTests(unittest.TestCase):
         """_wait_for_process should call kill when terminate times out."""
         proc = FakeProcess()
 
-        with patch.object(proc, "kill") as mock_kill:
-            with patch.object(proc, "wait", side_effect=worker.subprocess.TimeoutExpired("cmd", 5)):
-                worker._wait_for_process(proc)
-                mock_kill.assert_called_once()
+        with (
+            patch.object(proc, "kill") as mock_kill,
+            patch.object(proc, "wait", side_effect=worker.subprocess.TimeoutExpired("cmd", 5)),
+        ):
+            worker._wait_for_process(proc)
+            mock_kill.assert_called_once()
 
     def test_wait_for_process_reaps_after_kill_fallback(self):
         proc = FakeProcess()
-        with patch.object(
-            proc, "wait", side_effect=[worker.subprocess.TimeoutExpired("cmd", 5), 0]
-        ) as wait, patch.object(proc, "kill") as kill:
+        with (
+            patch.object(
+                proc, "wait", side_effect=[worker.subprocess.TimeoutExpired("cmd", 5), 0]
+            ) as wait,
+            patch.object(proc, "kill") as kill,
+        ):
             worker._wait_for_process(proc)
         self.assertEqual(wait.call_count, 2)
         kill.assert_called_once_with()
@@ -1487,14 +1695,18 @@ class WorkerLifecycleTests(unittest.TestCase):
 
     def test_wait_for_process_handles_missing_kill_method(self):
         """_wait_for_process should handle processes without kill() method."""
+
         # Create a minimal fake process without kill attribute
         class MinimalFakeProcess:
             def __init__(self):
                 self.returncode = 1
+
             def wait(self, timeout=None):
                 return self.returncode
+
             def terminate(self):
                 pass
+
         proc = MinimalFakeProcess()
 
         with patch.object(proc, "wait", side_effect=worker.subprocess.TimeoutExpired("cmd", 5)):
@@ -1505,10 +1717,18 @@ class WorkerLifecycleTests(unittest.TestCase):
 class WatchTargetEnabledTests(unittest.TestCase):
     def setUp(self):
         self.original_globals = {
-            name: getattr(worker, name) for name in (
-                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
-                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
-                "streams_data", "lock",
+            name: getattr(worker, name)
+            for name in (
+                "CONFIG_PATH",
+                "CHANNELS_STATUS_PATH",
+                "SESSIONS_PATH",
+                "STREAMS_PATH",
+                "OUTPUT_DIR",
+                "channels_status",
+                "recordings",
+                "active_recordings",
+                "streams_data",
+                "lock",
             )
         }
         self.addCleanup(self.restore_worker_globals)
@@ -1551,18 +1771,21 @@ class WatchTargetEnabledTests(unittest.TestCase):
         }
 
     def poll_once(self):
-        with patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
 
     def test_disabled_false_entry_has_no_lifecycle_side_effects(self):
         entry = self.entry(False)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
-        with patch.object(worker, "is_live") as is_live, patch.object(
-            worker, "create_stream"
-        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
-            worker.subprocess, "Popen"
-        ) as popen:
+        with (
+            patch.object(worker, "is_live") as is_live,
+            patch.object(worker, "create_stream") as create_stream,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker.subprocess, "Popen") as popen,
+        ):
             self.poll_once()
         is_live.assert_not_called()
         create_stream.assert_not_called()
@@ -1577,11 +1800,12 @@ class WatchTargetEnabledTests(unittest.TestCase):
             with self.subTest(enabled=invalid_enabled):
                 entry = self.entry(invalid_enabled)
                 Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
-                with patch.object(worker, "is_live") as is_live, patch.object(
-                    worker, "create_stream"
-                ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
-                    worker.subprocess, "Popen"
-                ) as popen:
+                with (
+                    patch.object(worker, "is_live") as is_live,
+                    patch.object(worker, "create_stream") as create_stream,
+                    patch.object(worker, "start_recording") as start_recording,
+                    patch.object(worker.subprocess, "Popen") as popen,
+                ):
                     self.poll_once()
                 is_live.assert_not_called()
                 create_stream.assert_not_called()
@@ -1594,13 +1818,20 @@ class WatchTargetEnabledTests(unittest.TestCase):
     def test_explicit_true_probes_and_launches_recording(self):
         entry = self.entry(True)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
-        with patch.object(
-            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})
-        ) as is_live, patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen, patch.object(
-            worker.threading, "Thread"
-        ), patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "streams_available", streams={"best": {}}
+                ),
+            ) as is_live,
+            patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen,
+            patch.object(worker.threading, "Thread"),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
         is_live.assert_called_once_with(entry["url"])
         popen.assert_called_once()
         self.assertEqual(len(worker.recordings), 1)
@@ -1610,9 +1841,16 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry()
         del entry["enabled"]
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), patch.object(
-            worker, "start_recording"
-        ) as start_recording:
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "streams_available", streams={"best": {}}
+                ),
+            ),
+            patch.object(worker, "start_recording") as start_recording,
+        ):
             self.poll_once()
         start_recording.assert_called_once()
 
@@ -1620,11 +1858,16 @@ class WatchTargetEnabledTests(unittest.TestCase):
         current = self.entry(True)
         disabled = self.entry(False)
         Path(worker.CONFIG_PATH).write_text(json.dumps([current]), encoding="utf-8")
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), patch.object(
-            worker, "load_watchlist", side_effect=[[current], [disabled]]
-        ), patch.object(worker, "create_stream") as create_stream, patch.object(
-            worker, "start_recording"
-        ) as start_recording:
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available"),
+            ),
+            patch.object(worker, "load_watchlist", side_effect=[[current], [disabled]]),
+            patch.object(worker, "create_stream") as create_stream,
+            patch.object(worker, "start_recording") as start_recording,
+        ):
             self.poll_once()
         create_stream.assert_not_called()
         start_recording.assert_not_called()
@@ -1641,11 +1884,18 @@ class WatchTargetEnabledTests(unittest.TestCase):
                 worker.channels_status = {}
                 worker.streams_data = []
                 Path(worker.CONFIG_PATH).write_text(json.dumps([current]), encoding="utf-8")
-                with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")), patch.object(
-                    worker, "load_watchlist", side_effect=[[current], refreshed]
-                ), patch.object(worker, "create_stream") as create_stream, patch.object(
-                    worker, "start_recording"
-                ) as start_recording:
+                with (
+                    patch.object(
+                        worker,
+                        "is_live",
+                        return_value=worker.ProbeResult(
+                            worker.ProbeState.LIVE, "streams_available"
+                        ),
+                    ),
+                    patch.object(worker, "load_watchlist", side_effect=[[current], refreshed]),
+                    patch.object(worker, "create_stream") as create_stream,
+                    patch.object(worker, "start_recording") as start_recording,
+                ):
                     self.poll_once()
                 create_stream.assert_not_called()
                 start_recording.assert_not_called()
@@ -1654,14 +1904,24 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry(False)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         process = MagicMock()
-        worker.streams_data = [{
-            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
-            "started_at": "2026-01-01T00:00:00", "finished_at": None,
-        }]
+        worker.streams_data = [
+            {
+                "id": "stream-1",
+                "watch_target_id": "target-1",
+                "state": "recording",
+                "started_at": "2026-01-01T00:00:00",
+                "finished_at": None,
+            }
+        ]
         worker.active_recordings["target-1"] = {
-            "process": process, "session_id": "session-1", "stream_id": "stream-1",
+            "process": process,
+            "session_id": "session-1",
+            "stream_id": "stream-1",
         }
-        with patch.object(worker, "is_live") as is_live, patch.object(worker, "finalize_stream") as finalize_stream:
+        with (
+            patch.object(worker, "is_live") as is_live,
+            patch.object(worker, "finalize_stream") as finalize_stream,
+        ):
             self.poll_once()
         is_live.assert_not_called()
         finalize_stream.assert_not_called()
@@ -1674,18 +1934,27 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry(False)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         worker.channels_status["target-1"] = {
-            "channel_name": "creator", "platform": "twitch", "state": "recording",
+            "channel_name": "creator",
+            "platform": "twitch",
+            "state": "recording",
         }
-        worker.recordings = [{
-            "session_id": "session-1", "watch_target_id": "target-1",
-            "started_at": "2026-01-01T00:00:00", "finished_at": None,
-            "output_file": "recording.mp4", "state": "recording",
-        }]
+        worker.recordings = [
+            {
+                "session_id": "session-1",
+                "watch_target_id": "target-1",
+                "started_at": "2026-01-01T00:00:00",
+                "finished_at": None,
+                "output_file": "recording.mp4",
+                "state": "recording",
+            }
+        ]
         worker.active_recordings["target-1"] = {
             "session_id": "session-1",
             "pending_terminal": {
-                "state": "finished", "finished_at": "2026-01-01T01:00:00",
-                "output_file": "recording.mp4", "returncode": 0,
+                "state": "finished",
+                "finished_at": "2026-01-01T01:00:00",
+                "output_file": "recording.mp4",
+                "returncode": 0,
             },
         }
         with patch.object(worker, "is_live") as is_live:
@@ -1698,18 +1967,27 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry(False)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         worker.channels_status["target-1"] = {
-            "channel_name": "creator", "platform": "twitch", "state": "recording",
+            "channel_name": "creator",
+            "platform": "twitch",
+            "state": "recording",
         }
-        worker.recordings = [{
-            "session_id": "session-1", "watch_target_id": "target-1",
-            "started_at": "2026-01-01T00:00:00", "finished_at": None,
-            "output_file": "recording.mp4", "state": "recording",
-        }]
+        worker.recordings = [
+            {
+                "session_id": "session-1",
+                "watch_target_id": "target-1",
+                "started_at": "2026-01-01T00:00:00",
+                "finished_at": None,
+                "output_file": "recording.mp4",
+                "state": "recording",
+            }
+        ]
         worker.active_recordings["target-1"] = {
             "session_id": "session-1",
             "pending_terminal": {
-                "state": "error", "finished_at": "2026-01-01T01:00:00",
-                "output_file": "recording.mp4", "returncode": 1,
+                "state": "error",
+                "finished_at": "2026-01-01T01:00:00",
+                "output_file": "recording.mp4",
+                "returncode": 1,
             },
         }
         with patch.object(worker, "is_live") as is_live:
@@ -1724,29 +2002,43 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry(False)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         open_stream = {
-            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
-            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+            "id": "stream-1",
+            "watch_target_id": "target-1",
+            "state": "recording",
+            "started_at": "2026-01-01T00:00:00",
+            "finished_at": None,
         }
         worker.streams_data = [open_stream]
         worker.channels_status["target-1"] = {
-            "channel_name": "creator", "platform": "twitch", "state": "recording",
+            "channel_name": "creator",
+            "platform": "twitch",
+            "state": "recording",
         }
-        worker.recordings = [{
-            "session_id": "session-1", "watch_target_id": "target-1",
-            "started_at": "2026-01-01T00:00:00", "finished_at": None,
-            "output_file": "recording.mp4", "state": "recording",
-        }]
+        worker.recordings = [
+            {
+                "session_id": "session-1",
+                "watch_target_id": "target-1",
+                "started_at": "2026-01-01T00:00:00",
+                "finished_at": None,
+                "output_file": "recording.mp4",
+                "state": "recording",
+            }
+        ]
         worker.active_recordings["target-1"] = {
             "session_id": "session-1",
             "pending_terminal": {
-                "state": "error", "finished_at": "2026-01-01T01:00:00",
-                "output_file": "recording.mp4", "returncode": 1,
+                "state": "error",
+                "finished_at": "2026-01-01T01:00:00",
+                "output_file": "recording.mp4",
+                "returncode": 1,
             },
         }
         self.poll_once()
-        with patch.object(worker, "is_live") as is_live, patch.object(
-            worker, "start_recording"
-        ) as start_recording, patch.object(worker.subprocess, "Popen") as popen:
+        with (
+            patch.object(worker, "is_live") as is_live,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker.subprocess, "Popen") as popen,
+        ):
             self.poll_once()
         is_live.assert_not_called()
         start_recording.assert_not_called()
@@ -1757,16 +2049,28 @@ class WatchTargetEnabledTests(unittest.TestCase):
     def test_reenable_resumes_live_capture_using_existing_open_stream(self):
         disabled = self.entry(False)
         enabled = self.entry(True)
-        worker.streams_data = [{
-            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
-            "started_at": "2026-01-01T00:00:00", "finished_at": None,
-        }]
+        worker.streams_data = [
+            {
+                "id": "stream-1",
+                "watch_target_id": "target-1",
+                "state": "recording",
+                "started_at": "2026-01-01T00:00:00",
+                "finished_at": None,
+            }
+        ]
         Path(worker.CONFIG_PATH).write_text(json.dumps([disabled]), encoding="utf-8")
         self.poll_once()
         Path(worker.CONFIG_PATH).write_text(json.dumps([enabled]), encoding="utf-8")
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), patch.object(
-            worker, "start_recording"
-        ) as start_recording:
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "streams_available", streams={"best": {}}
+                ),
+            ),
+            patch.object(worker, "start_recording") as start_recording,
+        ):
             self.poll_once()
         start_recording.assert_called_once_with(enabled, "stream-1", "best")
 
@@ -1775,11 +2079,15 @@ class WatchTargetEnabledTests(unittest.TestCase):
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         process = MagicMock()
         worker.active_recordings["target-1"] = {
-            "process": process, "session_id": "session-1", "stream_id": "stream-1",
+            "process": process,
+            "session_id": "session-1",
+            "stream_id": "stream-1",
         }
-        with patch.object(worker, "is_live") as is_live, patch.object(
-            worker, "start_recording"
-        ) as start_recording, patch.object(worker.subprocess, "Popen") as popen:
+        with (
+            patch.object(worker, "is_live") as is_live,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker.subprocess, "Popen") as popen,
+        ):
             self.poll_once()
         is_live.assert_not_called()
         start_recording.assert_not_called()
@@ -1789,13 +2097,17 @@ class WatchTargetEnabledTests(unittest.TestCase):
     def test_watchlist_refresh_failure_after_live_blocks_before_stream_creation(self):
         entry = self.entry(True)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
-        with patch.object(
-            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")
-        ), patch.object(worker, "load_watchlist", side_effect=[[entry], OSError("unavailable")]), patch.object(
-            worker, "create_stream"
-        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
-            worker.subprocess, "Popen"
-        ) as popen:
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available"),
+            ),
+            patch.object(worker, "load_watchlist", side_effect=[[entry], OSError("unavailable")]),
+            patch.object(worker, "create_stream") as create_stream,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker.subprocess, "Popen") as popen,
+        ):
             self.poll_once()
         create_stream.assert_not_called()
         start_recording.assert_not_called()
@@ -1806,13 +2118,21 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry(True)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         stream = {
-            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
-            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+            "id": "stream-1",
+            "watch_target_id": "target-1",
+            "state": "recording",
+            "started_at": "2026-01-01T00:00:00",
+            "finished_at": None,
         }
         worker.streams_data = [stream]
-        with patch.object(
-            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")
-        ) as is_live, patch.object(worker.subprocess, "Popen") as popen:
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams"),
+            ) as is_live,
+            patch.object(worker.subprocess, "Popen") as popen,
+        ):
             self.poll_once()
         is_live.assert_called_once_with(entry["url"])
         popen.assert_not_called()
@@ -1824,19 +2144,30 @@ class WatchTargetEnabledTests(unittest.TestCase):
         entry = self.entry(True)
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         stream = {
-            "id": "stream-1", "watch_target_id": "target-1", "state": "recording",
-            "started_at": "2026-01-01T00:00:00", "finished_at": None,
+            "id": "stream-1",
+            "watch_target_id": "target-1",
+            "state": "recording",
+            "started_at": "2026-01-01T00:00:00",
+            "finished_at": None,
         }
         worker.streams_data = [stream]
         worker.channels_status["target-1"] = {
-            "channel_name": "creator", "platform": "twitch", "state": "recording",
+            "channel_name": "creator",
+            "platform": "twitch",
+            "state": "recording",
         }
-        Path(worker.CHANNELS_STATUS_PATH).write_text(json.dumps(worker.channels_status), encoding="utf-8")
-        with patch.object(
-            worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.ERROR, "timeout")
-        ) as is_live, patch.object(worker, "start_recording") as start_recording, patch.object(
-            worker.subprocess, "Popen"
-        ) as popen:
+        Path(worker.CHANNELS_STATUS_PATH).write_text(
+            json.dumps(worker.channels_status), encoding="utf-8"
+        )
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.ERROR, "timeout"),
+            ) as is_live,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker.subprocess, "Popen") as popen,
+        ):
             self.poll_once()
         is_live.assert_called_once_with(entry["url"])
         start_recording.assert_not_called()
@@ -1849,9 +2180,16 @@ class WatchTargetEnabledTests(unittest.TestCase):
         disabled = self.entry(False)
         enabled = {**self.entry(True), "id": "target-2"}
         Path(worker.CONFIG_PATH).write_text(json.dumps([disabled, enabled]), encoding="utf-8")
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})) as is_live, patch.object(
-            worker, "start_recording"
-        ) as start_recording:
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "streams_available", streams={"best": {}}
+                ),
+            ) as is_live,
+            patch.object(worker, "start_recording") as start_recording,
+        ):
             self.poll_once()
         is_live.assert_called_once_with(enabled["url"])
         start_recording.assert_called_once()
@@ -1861,10 +2199,19 @@ class WatchTargetEnabledTests(unittest.TestCase):
 class ProbeRecordingIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.original_globals = {
-            name: getattr(worker, name) for name in (
-                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
-                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
-                "streams_data", "lock", "shutdown_event",
+            name: getattr(worker, name)
+            for name in (
+                "CONFIG_PATH",
+                "CHANNELS_STATUS_PATH",
+                "SESSIONS_PATH",
+                "STREAMS_PATH",
+                "OUTPUT_DIR",
+                "channels_status",
+                "recordings",
+                "active_recordings",
+                "streams_data",
+                "lock",
+                "shutdown_event",
             )
         }
         self.addCleanup(self.restore_worker_globals)
@@ -1908,9 +2255,11 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
         }
 
     def poll_once(self):
-        with patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
 
     def test_live_fallback_quality_reaches_streamlink(self):
         entry = self.entry("1080p60")
@@ -1919,9 +2268,11 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
             worker.ProbeState.LIVE, "streams_available", streams={"720p60": {}, "720p": {}}
         )
 
-        with patch.object(worker, "is_live", return_value=probe_result) as is_live, patch.object(
-            worker.subprocess, "Popen", return_value=FakeProcess()
-        ) as popen, patch.object(worker.threading, "Thread"):
+        with (
+            patch.object(worker, "is_live", return_value=probe_result) as is_live,
+            patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen,
+            patch.object(worker.threading, "Thread"),
+        ):
             self.poll_once()
 
         command = popen.call_args.args[0]
@@ -1941,9 +2292,11 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
             worker.ProbeState.LIVE, "streams_available", streams={"720p": {}}
         )
 
-        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
-            worker.subprocess, "Popen", return_value=FakeProcess()
-        ) as popen, patch.object(worker.threading, "Thread"):
+        with (
+            patch.object(worker, "is_live", return_value=probe_result),
+            patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen,
+            patch.object(worker.threading, "Thread"),
+        ):
             self.poll_once()
 
         command = popen.call_args.args[0]
@@ -1960,15 +2313,14 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
             }
         }
         Path(worker.CHANNELS_STATUS_PATH).write_text(json.dumps(status), encoding="utf-8")
-        probe_result = worker.ProbeResult(
-            worker.ProbeState.LIVE, "streams_available", streams={}
-        )
+        probe_result = worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={})
 
-        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
-            worker, "create_stream"
-        ) as create_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
-            worker, "finalize_stream"
-        ) as finalize_stream:
+        with (
+            patch.object(worker, "is_live", return_value=probe_result),
+            patch.object(worker, "create_stream") as create_stream,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker, "finalize_stream") as finalize_stream,
+        ):
             self.poll_once()
 
         create_stream.assert_not_called()
@@ -1991,10 +2343,11 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
             worker.ProbeState.LIVE, "streams_available", streams={"720p": {}, "480p": {}}
         )
 
-        with patch.object(worker, "load_watchlist", side_effect=[[initial], [refreshed]]), patch.object(
-            worker, "is_live", return_value=probe_result
-        ) as is_live, patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen, patch.object(
-            worker.threading, "Thread"
+        with (
+            patch.object(worker, "load_watchlist", side_effect=[[initial], [refreshed]]),
+            patch.object(worker, "is_live", return_value=probe_result) as is_live,
+            patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen,
+            patch.object(worker.threading, "Thread"),
         ):
             self.poll_once()
 
@@ -2007,9 +2360,11 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         probe_result = worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")
 
-        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
-            worker, "select_quality"
-        ) as select_quality, patch.object(worker, "finalize_stream") as finalize_stream:
+        with (
+            patch.object(worker, "is_live", return_value=probe_result),
+            patch.object(worker, "select_quality") as select_quality,
+            patch.object(worker, "finalize_stream") as finalize_stream,
+        ):
             self.poll_once()
 
         select_quality.assert_not_called()
@@ -2020,9 +2375,11 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
         Path(worker.CONFIG_PATH).write_text(json.dumps([entry]), encoding="utf-8")
         probe_result = worker.ProbeResult(worker.ProbeState.ERROR, "timeout")
 
-        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
-            worker, "select_quality"
-        ) as select_quality, patch.object(worker, "finalize_stream") as finalize_stream:
+        with (
+            patch.object(worker, "is_live", return_value=probe_result),
+            patch.object(worker, "select_quality") as select_quality,
+            patch.object(worker, "finalize_stream") as finalize_stream,
+        ):
             self.poll_once()
 
         select_quality.assert_not_called()
@@ -2032,8 +2389,9 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
         entry = self.entry("1080p")
         worker.channels_status["target-1"] = {"state": "idle"}
 
-        with patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen, patch.object(
-            worker.threading, "Thread"
+        with (
+            patch.object(worker.subprocess, "Popen", return_value=FakeProcess()) as popen,
+            patch.object(worker.threading, "Thread"),
         ):
             worker.start_recording(entry, "stream-1", "720p60")
 
@@ -2048,9 +2406,12 @@ class ProbeRecordingIntegrationTests(unittest.TestCase):
             worker.ProbeState.LIVE, "streams_available", streams={"720p": {}}
         )
 
-        with patch.object(worker, "is_live", return_value=probe_result), patch.object(
-            worker.subprocess, "Popen", return_value=FakeProcess()
-        ), patch.object(worker.threading, "Thread"), self.assertLogs(worker.log, "INFO") as logs:
+        with (
+            patch.object(worker, "is_live", return_value=probe_result),
+            patch.object(worker.subprocess, "Popen", return_value=FakeProcess()),
+            patch.object(worker.threading, "Thread"),
+            self.assertLogs(worker.log, "INFO") as logs,
+        ):
             self.poll_once()
 
         output = "\n".join(logs.output)
@@ -2066,10 +2427,19 @@ if __name__ == "__main__":
 class StreamDetectionTests(unittest.TestCase):
     def setUp(self):
         self.original_globals = {
-            name: getattr(worker, name) for name in (
-                "CONFIG_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH",
-                "OUTPUT_DIR", "channels_status", "recordings", "active_recordings",
-                "streams_data", "lock", "shutdown_event",
+            name: getattr(worker, name)
+            for name in (
+                "CONFIG_PATH",
+                "CHANNELS_STATUS_PATH",
+                "SESSIONS_PATH",
+                "STREAMS_PATH",
+                "OUTPUT_DIR",
+                "channels_status",
+                "recordings",
+                "active_recordings",
+                "streams_data",
+                "lock",
+                "shutdown_event",
             )
         }
         self.addCleanup(self.restore_worker_globals)
@@ -2100,12 +2470,16 @@ class StreamDetectionTests(unittest.TestCase):
             setattr(worker, name, value)
 
     def poll_once(self, probe_result, process=None):
-        with patch.object(worker, "is_live", return_value=probe_result) as is_live_mock, \
-             patch.object(worker.subprocess, "Popen", return_value=process or FakeProcess()) as popen_mock, \
-             patch.object(worker.threading, "Thread"), \
-             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(worker, "is_live", return_value=probe_result) as is_live_mock,
+            patch.object(
+                worker.subprocess, "Popen", return_value=process or FakeProcess()
+            ) as popen_mock,
+            patch.object(worker.threading, "Thread"),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
         return is_live_mock, popen_mock
 
     def test_first_positive_poll_creates_stream(self):
@@ -2123,10 +2497,18 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), \
-             patch.object(worker.subprocess, "Popen") as popen_mock, \
-             patch.object(worker.threading, "Thread"), \
-             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "streams_available", streams={"best": {}}
+                ),
+            ),
+            patch.object(worker.subprocess, "Popen") as popen_mock,
+            patch.object(worker.threading, "Thread"),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+        ):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
@@ -2138,26 +2520,39 @@ class StreamDetectionTests(unittest.TestCase):
 
     def test_real_probe_lifecycle_reuses_stream_after_error_and_finalizes_only_offline(self):
         entry = {
-            "id": "channel-1", "channel_name": "example", "platform": "twitch",
-            "url": "https://twitch.tv/example", "quality": "best",
+            "id": "channel-1",
+            "channel_name": "example",
+            "platform": "twitch",
+            "url": "https://twitch.tv/example",
+            "quality": "best",
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
-        probe_outputs = iter((
-            subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
-            subprocess.CompletedProcess(["streamlink"], 1, stdout='{"error":"Twitch API failed"}'),
-            subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
-            subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{}}'),
-            subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
-        ))
+        probe_outputs = iter(
+            (
+                subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
+                subprocess.CompletedProcess(
+                    ["streamlink"], 1, stdout='{"error":"Twitch API failed"}'
+                ),
+                subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
+                subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{}}'),
+                subprocess.CompletedProcess(["streamlink"], 0, stdout='{"streams":{"best":{}}}'),
+            )
+        )
         processes = [FakeProcess(returncode=1), FakeProcess(returncode=1), FakeProcess()]
 
         def poll_once():
-            with patch.object(worker.subprocess, "run", side_effect=lambda *args, **kwargs: next(probe_outputs)), \
-                 patch.object(worker.subprocess, "Popen", side_effect=processes), \
-                 patch.object(worker.threading, "Thread"), \
-                 patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-                with self.assertRaises(KeyboardInterrupt):
-                    worker.poll_loop()
+            with (
+                patch.object(
+                    worker.subprocess,
+                    "run",
+                    side_effect=lambda *args, **kwargs: next(probe_outputs),
+                ),
+                patch.object(worker.subprocess, "Popen", side_effect=processes),
+                patch.object(worker.threading, "Thread"),
+                patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                worker.poll_loop()
 
         poll_once()
         first_stream_id = worker.streams_data[0]["id"]
@@ -2213,10 +2608,16 @@ class StreamDetectionTests(unittest.TestCase):
             "stream_id": "stream-123",
         }
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available")) as is_live_mock, \
-             patch.object(worker.subprocess, "Popen") as popen_mock, \
-             patch.object(worker.threading, "Thread"), \
-             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available"),
+            ) as is_live_mock,
+            patch.object(worker.subprocess, "Popen") as popen_mock,
+            patch.object(worker.threading, "Thread"),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+        ):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
@@ -2250,16 +2651,22 @@ class StreamDetectionTests(unittest.TestCase):
         }
         worker.streams_data.append(existing_stream)
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")), \
-             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams"),
+            ),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
 
         self.assertIsNotNone(worker.streams_data[0]["finished_at"])
         self.assertEqual(worker.streams_data[0]["state"], "finished")
 
     def test_negative_poll_does_not_finalize_stream_when_recording_active(self):
-        entry = {
+        _entry = {
             "id": "channel-1",
             "channel_name": "example",
             "platform": "twitch",
@@ -2286,10 +2693,16 @@ class StreamDetectionTests(unittest.TestCase):
             "stream_id": "stream-123",
         }
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams")), \
-             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.OFFLINE, "empty_streams"),
+            ),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
 
         self.assertIsNone(worker.streams_data[0]["finished_at"])
         self.assertEqual(worker.streams_data[0]["state"], "recording")
@@ -2384,33 +2797,37 @@ class StreamDetectionTests(unittest.TestCase):
             "quality": "best",
         }
         status_bytes = (
-            b'{\n'
+            b"{\n"
             b'  "channel-1": {"channel_name": "example", "platform": "twitch", '
             b'"state": "error"}\n'
-            b'}\n'
+            b"}\n"
         )
         Path(worker.CHANNELS_STATUS_PATH).write_bytes(status_bytes)
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(
-            worker,
-            "is_live",
-            return_value=worker.ProbeResult(
-                worker.ProbeState.ERROR,
-                "error_envelope",
-                returncode=0,
-                exception_type="RuntimeError",
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.ERROR,
+                    "error_envelope",
+                    returncode=0,
+                    exception_type="RuntimeError",
+                ),
             ),
-        ), patch.object(worker, "create_stream") as create_stream, patch.object(
-            worker, "finalize_stream"
-        ) as finalize_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
-            worker, "save_status"
-        ) as save_status, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt), self.assertLogs(
-            worker.log,
-            level="WARNING",
-        ) as logs:
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+            patch.object(worker, "create_stream") as create_stream,
+            patch.object(worker, "finalize_stream") as finalize_stream,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker, "save_status") as save_status,
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertLogs(
+                worker.log,
+                level="WARNING",
+            ) as logs,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
 
         self.assertEqual(Path(worker.CHANNELS_STATUS_PATH).read_bytes(), status_bytes)
         self.assertEqual(worker.channels_status["channel-1"]["state"], "error")
@@ -2434,20 +2851,24 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(
-            worker,
-            "is_live",
-            return_value=worker.ProbeResult(worker.ProbeState.ERROR, "timeout"),
-        ), patch.object(worker, "create_stream") as create_stream, patch.object(
-            worker, "finalize_stream"
-        ) as finalize_stream, patch.object(worker, "start_recording") as start_recording, patch.object(
-            worker, "save_status"
-        ) as save_status, patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt), self.assertLogs(
-            worker.log,
-            level="WARNING",
-        ) as logs:
-            with self.assertRaises(KeyboardInterrupt):
-                worker.poll_loop()
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(worker.ProbeState.ERROR, "timeout"),
+            ),
+            patch.object(worker, "create_stream") as create_stream,
+            patch.object(worker, "finalize_stream") as finalize_stream,
+            patch.object(worker, "start_recording") as start_recording,
+            patch.object(worker, "save_status") as save_status,
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+            self.assertLogs(
+                worker.log,
+                level="WARNING",
+            ) as logs,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            worker.poll_loop()
 
         self.assertEqual(worker.channels_status["channel-1"]["state"], "idle")
         self.assertIn("returncode=absent", logs.output[0])
@@ -2481,10 +2902,18 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), \
-             patch.object(worker.subprocess, "Popen") as popen_mock, \
-             patch.object(worker.threading, "Thread"), \
-             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "streams_available", streams={"best": {}}
+                ),
+            ),
+            patch.object(worker.subprocess, "Popen") as popen_mock,
+            patch.object(worker.threading, "Thread"),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+        ):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
@@ -2509,10 +2938,18 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), \
-             patch.object(worker.subprocess, "Popen") as popen_mock, \
-             patch.object(worker.threading, "Thread"), \
-             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "streams_available", streams={"best": {}}
+                ),
+            ),
+            patch.object(worker.subprocess, "Popen") as popen_mock,
+            patch.object(worker.threading, "Thread"),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+        ):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
@@ -2537,17 +2974,23 @@ class StreamDetectionTests(unittest.TestCase):
         }
         self.watchlist_path.write_text(json.dumps([entry]), encoding="utf-8")
 
-        with patch.object(worker, "is_live", return_value=worker.ProbeResult(worker.ProbeState.LIVE, "streams_available", streams={"best": {}})), \
-             patch.object(worker.subprocess, "Popen") as popen_mock, \
-             patch.object(worker.threading, "Thread"), \
-             patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt):
+        with (
+            patch.object(
+                worker,
+                "is_live",
+                return_value=worker.ProbeResult(
+                    worker.ProbeState.LIVE, "streams_available", streams={"best": {}}
+                ),
+            ),
+            patch.object(worker.subprocess, "Popen") as popen_mock,
+            patch.object(worker.threading, "Thread"),
+            patch.object(worker.shutdown_event, "wait", side_effect=KeyboardInterrupt),
+        ):
             popen_mock.return_value = FakeProcess()
             with self.assertRaises(KeyboardInterrupt):
                 worker.poll_loop()
 
-        persisted_streams = json.loads(
-            Path(worker.STREAMS_PATH).read_text(encoding="utf-8")
-        )
+        persisted_streams = json.loads(Path(worker.STREAMS_PATH).read_text(encoding="utf-8"))
         self.assertEqual(len(persisted_streams), 1)
         self.assertNotIn("channel_id", persisted_streams[0])
         self.assertEqual(persisted_streams[0]["watch_target_id"], "channel-1")
@@ -2568,17 +3011,18 @@ class StreamDetectionTests(unittest.TestCase):
             "platform": "twitch",
         }
 
-        with patch.object(worker, "load_streams", return_value=[existing_stream]):
-            with worker.lock:
-                worker.reload_streams_preserving_active()
+        with (
+            patch.object(worker, "load_streams", return_value=[existing_stream]),
+            worker.lock,
+        ):
+            worker.reload_streams_preserving_active()
 
         # Active stream from disk is preserved in memory
         self.assertEqual(len(worker.streams_data), 1)
         self.assertEqual(worker.streams_data[0]["id"], "stream-123")
 
-        with patch.object(worker, "load_streams", return_value=[]):
-            with worker.lock:
-                worker.reload_streams_preserving_active()
+        with patch.object(worker, "load_streams", return_value=[]), worker.lock:
+            worker.reload_streams_preserving_active()
 
         # Active stream remains even when disk has nothing new
         self.assertEqual(len(worker.streams_data), 1)
@@ -2855,7 +3299,9 @@ class ConfigPathTests(unittest.TestCase):
         # Should fall through to module-relative default
         default_dir = worker._get_default_config_dir().replace("\\", "/")
         self.assertEqual(result["watchlist"].replace("\\", "/"), f"{default_dir}/watchlist.json")
-        self.assertEqual(result["channels_status"].replace("\\", "/"), f"{default_dir}/channels_status.json")
+        self.assertEqual(
+            result["channels_status"].replace("\\", "/"), f"{default_dir}/channels_status.json"
+        )
         self.assertEqual(result["sessions"].replace("\\", "/"), f"{default_dir}/sessions.json")
         self.assertEqual(result["streams"].replace("\\", "/"), f"{default_dir}/streams.json")
 
@@ -2865,7 +3311,9 @@ class ConfigPathTests(unittest.TestCase):
 
         default_dir = worker._get_default_config_dir().replace("\\", "/")
         self.assertEqual(result["watchlist"].replace("\\", "/"), f"{default_dir}/watchlist.json")
-        self.assertEqual(result["channels_status"].replace("\\", "/"), f"{default_dir}/channels_status.json")
+        self.assertEqual(
+            result["channels_status"].replace("\\", "/"), f"{default_dir}/channels_status.json"
+        )
         self.assertEqual(result["sessions"].replace("\\", "/"), f"{default_dir}/sessions.json")
         self.assertEqual(result["streams"].replace("\\", "/"), f"{default_dir}/streams.json")
 
@@ -2878,7 +3326,9 @@ class ConfigPathTests(unittest.TestCase):
         result = worker._resolve_all_paths(env)
 
         self.assertEqual(result["watchlist"], "/individual/watch.json")
-        self.assertEqual(result["channels_status"].replace("\\", "/"), "/config/dir/channels_status.json")
+        self.assertEqual(
+            result["channels_status"].replace("\\", "/"), "/config/dir/channels_status.json"
+        )
         self.assertEqual(result["sessions"].replace("\\", "/"), "/config/dir/sessions.json")
         self.assertEqual(result["streams"].replace("\\", "/"), "/config/dir/streams.json")
 
@@ -2891,7 +3341,9 @@ class ConfigPathTests(unittest.TestCase):
         result = worker._resolve_all_paths(env)
 
         self.assertEqual(result["watchlist"], "/spaced/watch.json")
-        self.assertEqual(result["channels_status"].replace("\\", "/"), "/spaced/config/channels_status.json")
+        self.assertEqual(
+            result["channels_status"].replace("\\", "/"), "/spaced/config/channels_status.json"
+        )
 
 
 class RuntimeFilesTests(unittest.TestCase):
@@ -2909,13 +3361,13 @@ class RuntimeFilesTests(unittest.TestCase):
 
             worker.initialize_runtime_files(paths)
 
-            with open(paths["watchlist"], "r") as f:
+            with open(paths["watchlist"]) as f:
                 self.assertEqual(json.load(f), [])
-            with open(paths["channels_status"], "r") as f:
+            with open(paths["channels_status"]) as f:
                 self.assertEqual(json.load(f), {})
-            with open(paths["sessions"], "r") as f:
+            with open(paths["sessions"]) as f:
                 self.assertEqual(json.load(f), [])
-            with open(paths["streams"], "r") as f:
+            with open(paths["streams"]) as f:
                 self.assertEqual(json.load(f), [])
 
     def test_runtime_files_existing_contents_preserved(self):
@@ -2935,7 +3387,7 @@ class RuntimeFilesTests(unittest.TestCase):
 
             worker.initialize_runtime_files(paths)
 
-            with open(watchlist_path, "r") as f:
+            with open(watchlist_path) as f:
                 self.assertEqual(json.load(f), existing_content)
 
     def test_runtime_files_override_paths_in_separate_missing_parents_created(self):
@@ -2966,14 +3418,22 @@ class RuntimeFilesTests(unittest.TestCase):
             target = Path(temp_dir) / "watchlist.json"
             target.write_text("[]", encoding="utf-8")
             import json_adapters
-            with patch.object(json_adapters, "write_json_atomically", side_effect=OSError("write denied")):
-                with self.assertRaisesRegex(OSError, "write denied"):
-                    worker._probe_atomic_replace(str(target))
+
+            with (
+                patch.object(
+                    json_adapters, "write_json_atomically", side_effect=OSError("write denied")
+                ),
+                self.assertRaisesRegex(OSError, "write denied"),
+            ):
+                worker._probe_atomic_replace(str(target))
             self.assertEqual(target.read_text(encoding="utf-8"), "[]")
             self.assertEqual(list(Path(temp_dir).glob("*.probe")), [])
 
     def test_probe_output_dir_cleans_temp_file_after_fsync_failure(self):
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(os, "fsync", side_effect=OSError("sync denied")):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(os, "fsync", side_effect=OSError("sync denied")),
+        ):
             with self.assertRaisesRegex(OSError, "sync denied"):
                 worker._probe_output_dir(temp_dir)
             self.assertEqual(list(Path(temp_dir).glob(".worker-output-probe.*.tmp")), [])
@@ -3089,9 +3549,11 @@ class TestAtomicReplaceFaults(unittest.TestCase):
         """mkstemp raises PermissionError -> function raises; destination untouched; no leftover temp."""
         import json_adapters
 
-        with patch.object(tempfile, "mkstemp", side_effect=PermissionError("mock denied")):
-            with self.assertRaises(PermissionError):
-                json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
+        with (
+            patch.object(tempfile, "mkstemp", side_effect=PermissionError("mock denied")),
+            self.assertRaises(PermissionError),
+        ):
+            json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
         # Destination must be untouched
         self.assertEqual(self.target_path.read_text(encoding="utf-8"), "{}")
         # No leftover temp files
@@ -3111,14 +3573,16 @@ class TestAtomicReplaceFaults(unittest.TestCase):
 
         def silent_close(fd):
             # Avoid masking the original OSError when fd was never actually opened
-            try:
+            with suppress(OSError):
                 real_close(fd)
-            except OSError:
-                pass
 
-        with patch.object(tempfile, "mkstemp", return_value=(999, str(self.config_dir / "test.tmp"))), \
-             patch("os.fdopen", side_effect=bad_fdopen), \
-             patch.object(os, "close", side_effect=silent_close):
+        with (
+            patch.object(
+                tempfile, "mkstemp", return_value=(999, str(self.config_dir / "test.tmp"))
+            ),
+            patch("os.fdopen", side_effect=bad_fdopen),
+            patch.object(os, "close", side_effect=silent_close),
+        ):
             with self.assertRaises(OSError) as ctx:
                 json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
             self.assertIn("EACCES", str(ctx.exception))
@@ -3145,11 +3609,15 @@ class TestAtomicReplaceFaults(unittest.TestCase):
         def fake_fdopen(fd, mode, *, encoding=None):
             return fake_handle
 
-        with patch.object(tempfile, "mkstemp", return_value=(42, str(self.config_dir / ".test.tmp"))), \
-             patch("os.fdopen", side_effect=fake_fdopen), \
-             patch("os.fsync", side_effect=OSError("sync failed")), \
-             patch("os.replace"), \
-             patch("os.chmod"):
+        with (
+            patch.object(
+                tempfile, "mkstemp", return_value=(42, str(self.config_dir / ".test.tmp"))
+            ),
+            patch("os.fdopen", side_effect=fake_fdopen),
+            patch("os.fsync", side_effect=OSError("sync failed")),
+            patch("os.replace"),
+            patch("os.chmod"),
+        ):
             with self.assertRaises(OSError) as ctx:
                 json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
             self.assertIn("sync failed", str(ctx.exception))
@@ -3170,28 +3638,29 @@ class TestAtomicReplaceFaults(unittest.TestCase):
 
         # A real file object opened in write mode so json.dump succeeds.
         # mkstemp is patched to return this same path, then os.replace moves it to target.
-        real_write_handle = open(temp_path, "w", encoding="utf-8")
+        with open(temp_path, "w", encoding="utf-8") as real_write_handle:
+            call_count = [0]
+            real_replace = os.replace
 
-        call_count = [0]
-        real_replace = os.replace
+            def flaky_replace(src, dst):
+                call_count[0] += 1
+                if call_count[0] <= 2:
+                    raise PermissionError("mock transient lock")
+                real_replace(src, dst)
 
-        def flaky_replace(src, dst):
-            call_count[0] += 1
-            if call_count[0] <= 2:
-                raise PermissionError("mock transient lock")
-            real_replace(src, dst)
+            def fdopen_stub(fd, mode, *, encoding=None):
+                # Return our pre-opened real handle so json.dump can write to it.
+                return real_write_handle
 
-        def fdopen_stub(fd, mode, *, encoding=None):
-            # Return our pre-opened real handle so json.dump can write to it.
-            return real_write_handle
-
-        # Patch mkstemp so the function's temp file is our .test.tmp (which gets replaced),
-        # patch fdopen so json.dump writes to our real handle, and patch replace for retry.
-        with patch.object(tempfile, "mkstemp", return_value=(42, temp_path)), \
-             patch("os.fdopen", side_effect=fdopen_stub), \
-             patch("os.close"), \
-             patch.object(os, "replace", side_effect=flaky_replace):
-            json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
+            # Patch mkstemp so the function's temp file is our .test.tmp (which gets replaced),
+            # patch fdopen so json.dump writes to our real handle, and patch replace for retry.
+            with (
+                patch.object(tempfile, "mkstemp", return_value=(42, temp_path)),
+                patch("os.fdopen", side_effect=fdopen_stub),
+                patch("os.close"),
+                patch.object(os, "replace", side_effect=flaky_replace),
+            ):
+                json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
 
         # Destination must be updated
         result = json.loads(self.target_path.read_text(encoding="utf-8"))
@@ -3209,9 +3678,11 @@ class TestAtomicReplaceFaults(unittest.TestCase):
         temp_path = str(self.config_dir / ".test.tmp")
         Path(temp_path).write_text('{"temp": true}', encoding="utf-8")
 
-        with patch.object(os, "replace", side_effect=PermissionError("mock persistent lock")):
-            with self.assertRaises(PermissionError):
-                json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
+        with (
+            patch.object(os, "replace", side_effect=PermissionError("mock persistent lock")),
+            self.assertRaises(PermissionError),
+        ):
+            json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
 
         # Destination must be untouched
         self.assertEqual(self.target_path.read_text(encoding="utf-8"), original_content)
@@ -3231,8 +3702,10 @@ class TestAtomicReplaceFaults(unittest.TestCase):
                 raise PermissionError("mock unlink denied")
             # Second call succeeds
 
-        with patch.object(os, "replace", side_effect=OSError("boom")), \
-             patch.object(os, "unlink", side_effect=flaky_unlink):
+        with (
+            patch.object(os, "replace", side_effect=OSError("boom")),
+            patch.object(os, "unlink", side_effect=flaky_unlink),
+        ):
             with self.assertRaises(OSError) as ctx:
                 json_adapters.write_json_atomically(str(self.target_path), {"key": "value"})
             self.assertIn("boom", str(ctx.exception))
@@ -3252,7 +3725,6 @@ class TestAtomicReplaceFaults(unittest.TestCase):
 
     def test_ensure_runtime_dirs_readonly_directory__probe_fails_with_structured_error(self):
         """ensure_runtime_dirs against read-only directory -> probe fails with structured error and exit code."""
-        import json_adapters
         import sys
 
         readonly_dir = self.config_dir / "readonly"
@@ -3262,13 +3734,17 @@ class TestAtomicReplaceFaults(unittest.TestCase):
 
         # Patch _probe_atomic_replace to raise EACCES, then ensure sys.exit is called
         probe_path = str(readonly_file)
-        with patch.object(worker, "_probe_atomic_replace", side_effect=OSError("EACCES permission denied")):
-            with patch.object(sys, "exit") as mock_exit:
-                try:
-                    worker._probe_atomic_replace(probe_path)
-                except OSError:
-                    sys.exit(78)
-                mock_exit.assert_called_once_with(78)
+        with (
+            patch.object(
+                worker, "_probe_atomic_replace", side_effect=OSError("EACCES permission denied")
+            ),
+            patch.object(sys, "exit") as mock_exit,
+        ):
+            try:
+                worker._probe_atomic_replace(probe_path)
+            except OSError:
+                sys.exit(78)
+            mock_exit.assert_called_once_with(78)
 
     def test_stale_temp_file_sweep_removes_it_init_succeeds(self):
         """Pre-existing stale .channels_status.json.abc12345.tmp -> sweep removes it; init still succeeds."""
@@ -3286,13 +3762,15 @@ class TestAtomicReplaceFaults(unittest.TestCase):
             "sessions": str(config_dir / "sessions.json"),
             "streams": str(config_dir / "streams.json"),
         }
-        with patch.object(worker, "CONFIG_PATH", test_paths["watchlist"]), \
-             patch.object(worker, "CHANNELS_STATUS_PATH", test_paths["channels_status"]), \
-             patch.object(worker, "SESSIONS_PATH", test_paths["sessions"]), \
-             patch.object(worker, "STREAMS_PATH", test_paths["streams"]), \
-             patch.object(worker, "OUTPUT_DIR", str(config_dir / "recordings")), \
-             patch.object(worker, "_resolve_all_paths", return_value=test_paths), \
-             patch.object(worker, "_probe_atomic_replace"):
+        with (
+            patch.object(worker, "CONFIG_PATH", test_paths["watchlist"]),
+            patch.object(worker, "CHANNELS_STATUS_PATH", test_paths["channels_status"]),
+            patch.object(worker, "SESSIONS_PATH", test_paths["sessions"]),
+            patch.object(worker, "STREAMS_PATH", test_paths["streams"]),
+            patch.object(worker, "OUTPUT_DIR", str(config_dir / "recordings")),
+            patch.object(worker, "_resolve_all_paths", return_value=test_paths),
+            patch.object(worker, "_probe_atomic_replace"),
+        ):
             worker.ensure_runtime_dirs()
 
         # Stale file should be removed
@@ -3303,9 +3781,11 @@ class TestAtomicReplaceFaults(unittest.TestCase):
         import json_adapters
 
         # First probe fails (simulated)
-        with patch.object(json_adapters, "write_json_atomically", side_effect=OSError("EACCES")):
-            with self.assertRaises(OSError):
-                json_adapters.write_json_atomically(str(self.target_path), {"probe": True})
+        with (
+            patch.object(json_adapters, "write_json_atomically", side_effect=OSError("EACCES")),
+            self.assertRaises(OSError),
+        ):
+            json_adapters.write_json_atomically(str(self.target_path), {"probe": True})
 
         # Now make it work
         json_adapters.write_json_atomically(str(self.target_path), {"probe": True})
@@ -3360,9 +3840,7 @@ class ProbeStreamsTests(unittest.TestCase):
         self.assertIsNone(result.streams)
 
     def test_probe_result_repr_omits_streams_content(self):
-        stdout = json.dumps(
-            {"streams": {"1080p60": {"url": "https://secret.example.com/stream"}}}
-        )
+        stdout = json.dumps({"streams": {"1080p60": {"url": "https://secret.example.com/stream"}}})
         result = worker.classify_probe_result("https://twitch.tv/example", 0, stdout)
         representation = repr(result)
 

@@ -1,4 +1,11 @@
-import { Test, TestingModule } from "@nestjs/testing";
+import {
+  writeJsonAtomically,
+  sweepStaleTempFiles,
+  probeAtomicReplace,
+} from "../json-compatibility.adapters";
+import fsPromises from "fs/promises";
+import type { TestingModule } from "@nestjs/testing";
+import { Test } from "@nestjs/testing";
 import { BadRequestException } from "@nestjs/common";
 import { plainToInstance } from "class-transformer";
 import { validate } from "class-validator";
@@ -15,11 +22,7 @@ import {
 import { StreamsRepository } from "../streams.repository";
 import { WatchTargetJsonAdapter } from "../json-compatibility.adapters";
 import { PatchWatchTargetDto } from "../dto/watch-target.dto";
-import {
-  legacyChannelStatus,
-  legacySessions,
-  legacyWatchlist,
-} from "./fixtures/legacy-data";
+import { legacyChannelStatus, legacySessions, legacyWatchlist } from "./fixtures/legacy-data";
 
 const originalEnv = { ...process.env };
 
@@ -27,15 +30,10 @@ describe("StreamController", () => {
   let controller: StreamController;
 
   beforeEach(async () => {
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "stream-controller-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stream-controller-"));
     process.env.CONFIG_DIR = tempDir;
     process.env.WATCHLIST_PATH = path.join(tempDir, "watchlist.json");
-    process.env.CHANNELS_STATUS_PATH = path.join(
-      tempDir,
-      "channels_status.json",
-    );
+    process.env.CHANNELS_STATUS_PATH = path.join(tempDir, "channels_status.json");
     process.env.SESSIONS_PATH = path.join(tempDir, "sessions.json");
     process.env.STREAMS_PATH = path.join(tempDir, "streams.json");
 
@@ -49,11 +47,7 @@ describe("StreamController", () => {
       JSON.stringify(legacyChannelStatus, null, 2),
       "utf-8",
     );
-    await fs.writeFile(
-      process.env.SESSIONS_PATH,
-      JSON.stringify(legacySessions, null, 2),
-      "utf-8",
-    );
+    await fs.writeFile(process.env.SESSIONS_PATH, JSON.stringify(legacySessions, null, 2), "utf-8");
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [StreamController],
@@ -69,7 +63,7 @@ describe("StreamController", () => {
     controller = module.get<StreamController>(StreamController);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     process.env = { ...originalEnv };
   });
 
@@ -166,18 +160,14 @@ describe("StreamController", () => {
       id: "Streamer 1",
       display_name: "Streamer 1",
     });
-    await expect(
-      controller.getCreatorWatchTargets("Streamer 1"),
-    ).resolves.toHaveLength(1);
+    await expect(controller.getCreatorWatchTargets("Streamer 1")).resolves.toHaveLength(1);
     await expect(controller.getAllWatchTargets()).resolves.toHaveLength(2);
     await expect(controller.getWatchTarget("1")).resolves.toMatchObject({
       id: "1",
       creator_id: "Streamer 1",
       enabled: true,
     });
-    await expect(controller.getWatchTarget("missing")).rejects.toThrow(
-      "not found",
-    );
+    await expect(controller.getWatchTarget("missing")).rejects.toThrow("not found");
   });
 
   it("should persist created watch targets through the Worker-compatible adapter", async () => {
@@ -197,9 +187,7 @@ describe("StreamController", () => {
       enabled: true,
       state: "idle",
     });
-    await expect(
-      WatchTargetJsonAdapter.read(watchlistPath),
-    ).resolves.toContainEqual({
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toContainEqual({
       id: target.id,
       display_name: "New Creator",
       channel_name: "new-channel",
@@ -214,15 +202,17 @@ describe("StreamController", () => {
     const watchlistPath = process.env.WATCHLIST_PATH!;
     await fs.writeFile(
       watchlistPath,
-      JSON.stringify([{
-        id: "disabled-target",
-        display_name: "Creator",
-        channel_name: "channel",
-        platform: "twitch",
-        url: "https://twitch.tv/channel",
-        quality: "best",
-        enabled: false,
-      }]),
+      JSON.stringify([
+        {
+          id: "disabled-target",
+          display_name: "Creator",
+          channel_name: "channel",
+          platform: "twitch",
+          url: "https://twitch.tv/channel",
+          quality: "best",
+          enabled: false,
+        },
+      ]),
       "utf-8",
     );
 
@@ -249,7 +239,9 @@ describe("StreamController", () => {
       state: "idle" as const,
     };
 
-    expect(WatchTargetJsonAdapter.toDomain(WatchTargetJsonAdapter.fromDomain(target)).enabled).toBe(false);
+    expect(WatchTargetJsonAdapter.toDomain(WatchTargetJsonAdapter.fromDomain(target)).enabled).toBe(
+      false,
+    );
   });
 
   it("defaults omitted enabled to true and rejects malformed persisted values", () => {
@@ -273,9 +265,7 @@ describe("StreamController", () => {
     await expect(controller.getAllWatchTargets()).resolves.toEqual([
       expect.objectContaining({ id: "2" }),
     ]);
-    await expect(controller.deleteWatchTarget("missing")).rejects.toThrow(
-      "not found",
-    );
+    await expect(controller.deleteWatchTarget("missing")).rejects.toThrow("not found");
   });
 
   it("should resolve streams by stream identity rather than watch target identity", async () => {
@@ -308,9 +298,7 @@ describe("StreamController", () => {
 
     expect(recordings).toHaveLength(3);
     expect(recordings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ session_id: "1", watch_target_id: "1" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ session_id: "1", watch_target_id: "1" })]),
     );
     for (const recording of recordings) {
       expect(recording).not.toHaveProperty("channel_id");
@@ -616,12 +604,31 @@ describe("StreamController", () => {
   it("PATCH quality only changes quality and preserves enabled, recording_subdir, url, and sibling entries", async () => {
     const watchlistPath = process.env.WATCHLIST_PATH!;
     const watchlist = [
-      { id: "first", display_name: "Creator", channel_name: "first", platform: "twitch", url: "https://twitch.tv/first", quality: "best", enabled: false, recording_subdir: "archive" },
-      { id: "second", display_name: "Creator", channel_name: "second", platform: "twitch", url: "https://twitch.tv/second", quality: "480p", enabled: true },
+      {
+        id: "first",
+        display_name: "Creator",
+        channel_name: "first",
+        platform: "twitch",
+        url: "https://twitch.tv/first",
+        quality: "best",
+        enabled: false,
+        recording_subdir: "archive",
+      },
+      {
+        id: "second",
+        display_name: "Creator",
+        channel_name: "second",
+        platform: "twitch",
+        url: "https://twitch.tv/second",
+        quality: "480p",
+        enabled: true,
+      },
     ];
     await fs.writeFile(watchlistPath, JSON.stringify(watchlist), "utf-8");
 
-    await expect(controller.patchWatchTarget("first", { quality: "720p" })).resolves.toMatchObject({ quality: "720p" });
+    await expect(controller.patchWatchTarget("first", { quality: "720p" })).resolves.toMatchObject({
+      quality: "720p",
+    });
     await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
       { ...watchlist[0], quality: "720p" },
       watchlist[1],
@@ -637,33 +644,54 @@ describe("StreamController", () => {
   });
 
   it("PATCH quality 160p is accepted", async () => {
-    await expect(controller.patchWatchTarget("1", { quality: "160p" })).resolves.toMatchObject({ quality: "160p" });
+    await expect(controller.patchWatchTarget("1", { quality: "160p" })).resolves.toMatchObject({
+      quality: "160p",
+    });
   });
 
   it("PATCH omitting quality leaves existing quality unchanged", async () => {
     await controller.patchWatchTarget("1", { enabled: false });
-    await expect(controller.getWatchTarget("1")).resolves.toMatchObject({ quality: "1080p", enabled: false });
+    await expect(controller.getWatchTarget("1")).resolves.toMatchObject({
+      quality: "1080p",
+      enabled: false,
+    });
   });
 
   it("PATCH quality combined with enabled works", async () => {
-    await expect(controller.patchWatchTarget("1", { quality: "720p", enabled: false })).resolves.toMatchObject({ quality: "720p", enabled: false });
+    await expect(
+      controller.patchWatchTarget("1", { quality: "720p", enabled: false }),
+    ).resolves.toMatchObject({ quality: "720p", enabled: false });
   });
 
   it("PATCH rejects unsupported quality value", async () => {
-    await expect(controller.patchWatchTarget("1", { quality: "invalid-quality" })).rejects.toThrow(BadRequestException);
+    await expect(controller.patchWatchTarget("1", { quality: "invalid-quality" })).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it("PATCH rejects empty string quality", async () => {
-    await expect(controller.patchWatchTarget("1", { quality: "" })).rejects.toThrow(BadRequestException);
+    await expect(controller.patchWatchTarget("1", { quality: "" })).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it("PATCH rejects unknown key alongside quality", async () => {
-    await expect(controller.patchWatchTarget("1", { quality: "720p", unknownField: "x" } as never)).rejects.toThrow(BadRequestException);
+    await expect(
+      controller.patchWatchTarget("1", { quality: "720p", unknownField: "x" } as never),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it("WatchTargetJsonAdapter round trip preserves custom quality value", () => {
-    const entry = { id: "custom", channel_name: "channel", platform: "twitch", url: "https://twitch.tv/channel", quality: "custom-variant" };
-    expect(WatchTargetJsonAdapter.fromDomain(WatchTargetJsonAdapter.toDomain(entry))).toMatchObject({ quality: "custom-variant" });
+    const entry = {
+      id: "custom",
+      channel_name: "channel",
+      platform: "twitch",
+      url: "https://twitch.tv/channel",
+      quality: "custom-variant",
+    };
+    expect(WatchTargetJsonAdapter.fromDomain(WatchTargetJsonAdapter.toDomain(entry))).toMatchObject(
+      { quality: "custom-variant" },
+    );
   });
 });
 
@@ -687,10 +715,7 @@ describe("StreamRepository", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "stream-repo-"));
     process.env.CONFIG_DIR = tempDir;
     process.env.WATCHLIST_PATH = path.join(tempDir, "watchlist.json");
-    process.env.CHANNELS_STATUS_PATH = path.join(
-      tempDir,
-      "channels_status.json",
-    );
+    process.env.CHANNELS_STATUS_PATH = path.join(tempDir, "channels_status.json");
     process.env.SESSIONS_PATH = path.join(tempDir, "sessions.json");
     process.env.STREAMS_PATH = path.join(tempDir, "streams.json");
 
@@ -704,14 +729,10 @@ describe("StreamRepository", () => {
       JSON.stringify(legacyChannelStatus, null, 2),
       "utf-8",
     );
-    await fs.writeFile(
-      process.env.SESSIONS_PATH,
-      JSON.stringify(legacySessions, null, 2),
-      "utf-8",
-    );
+    await fs.writeFile(process.env.SESSIONS_PATH, JSON.stringify(legacySessions, null, 2), "utf-8");
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     process.env = { ...originalEnv };
   });
 
@@ -738,11 +759,7 @@ describe("StreamRepository", () => {
       },
     ];
 
-    await fs.writeFile(
-      streamsPath,
-      JSON.stringify(testStreams, null, 2),
-      "utf-8",
-    );
+    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
 
     const repo = new StreamsRepository();
     const streams = await repo.findAllStreams();
@@ -773,11 +790,7 @@ describe("StreamRepository", () => {
       },
     ];
 
-    await fs.writeFile(
-      streamsPath,
-      JSON.stringify(testStreams, null, 2),
-      "utf-8",
-    );
+    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
 
     const repo = new StreamsRepository();
     const activeStream = await repo.findActiveStreamByWatchTarget("1");
@@ -794,8 +807,7 @@ describe("StreamRepository", () => {
     await fs.writeFile(streamsPath, JSON.stringify([], null, 2), "utf-8");
 
     const repo = new StreamsRepository();
-    const activeStream =
-      await repo.findActiveStreamByWatchTarget("nonexistent");
+    const activeStream = await repo.findActiveStreamByWatchTarget("nonexistent");
 
     expect(activeStream).toBeNull();
   });
@@ -830,21 +842,14 @@ describe("StreamRepository", () => {
       },
     ];
 
-    await fs.writeFile(
-      streamsPath,
-      JSON.stringify(testStreams, null, 2),
-      "utf-8",
-    );
+    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
 
     const repo = new StreamsRepository();
 
     const allStreams = await repo.findStreamsByWatchTarget("1");
     expect(allStreams).toHaveLength(2);
 
-    const recentStreams = await repo.findStreamsByWatchTarget(
-      "1",
-      "2026-09-13T12:00:00.000Z",
-    );
+    const recentStreams = await repo.findStreamsByWatchTarget("1", "2026-09-13T12:00:00.000Z");
     expect(recentStreams).toHaveLength(1);
     expect(recentStreams[0].id).toBe("stream-1");
   });
@@ -865,11 +870,7 @@ describe("StreamRepository", () => {
       },
     ];
 
-    await fs.writeFile(
-      streamsPath,
-      JSON.stringify(testStreams, null, 2),
-      "utf-8",
-    );
+    await fs.writeFile(streamsPath, JSON.stringify(testStreams, null, 2), "utf-8");
 
     const repo = new StreamsRepository();
     const streams = await repo.findAllStreams();
@@ -892,14 +893,10 @@ describe("JSON compatibility adapters", () => {
 
   it("uses an empty default only when the watchlist is missing", async () => {
     const watchlistPath = path.join(tempDir, "watchlist.json");
-    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual(
-      [],
-    );
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([]);
 
     await fs.writeFile(watchlistPath, "{", "utf-8");
-    await expect(WatchTargetJsonAdapter.read(watchlistPath)).rejects.toThrow(
-      SyntaxError,
-    );
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).rejects.toThrow(SyntaxError);
   });
 
   it("atomically replaces the watchlist without leaving temporary files", async () => {
@@ -917,12 +914,8 @@ describe("JSON compatibility adapters", () => {
 
     await WatchTargetJsonAdapter.write(watchlistPath, watchlist);
 
-    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual(
-      watchlist,
-    );
-    expect(
-      (await fs.readdir(tempDir)).filter((name) => name.endsWith(".tmp")),
-    ).toEqual([]);
+    await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual(watchlist);
+    expect((await fs.readdir(tempDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });
 
@@ -1303,7 +1296,13 @@ describe("WatchTarget URL PATCH", () => {
     await fs.writeFile(process.env.STREAMS_PATH, "[]", "utf-8");
     const module = await Test.createTestingModule({
       controllers: [StreamController],
-      providers: [StreamsRepository, StreamerService, SessionService, StreamService, RecordingService],
+      providers: [
+        StreamsRepository,
+        StreamerService,
+        SessionService,
+        StreamService,
+        RecordingService,
+      ],
     }).compile();
     controller = module.get<StreamController>(StreamController);
   });
@@ -1314,21 +1313,27 @@ describe("WatchTarget URL PATCH", () => {
   });
 
   it("PATCH url only persists new URL and returns updated target", async () => {
-    await expect(controller.patchWatchTarget(target.id, { url: "https://www.twitch.tv/new" })).resolves.toMatchObject({ url: "https://www.twitch.tv/new" });
+    await expect(
+      controller.patchWatchTarget(target.id, { url: "https://www.twitch.tv/new" }),
+    ).resolves.toMatchObject({ url: "https://www.twitch.tv/new" });
     await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
-      expect.objectContaining({ url: "https://www.twitch.tv/new" }), sibling,
+      expect.objectContaining({ url: "https://www.twitch.tv/new" }),
+      sibling,
     ]);
   });
 
   it("PATCH url preserves all other fields and sibling", async () => {
     await controller.patchWatchTarget(target.id, { url: "https://www.twitch.tv/new" });
     await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([
-      { ...target, url: "https://www.twitch.tv/new" }, sibling,
+      { ...target, url: "https://www.twitch.tv/new" },
+      sibling,
     ]);
   });
 
   it("PATCH url with HTTP is accepted", async () => {
-    await expect(controller.patchWatchTarget(target.id, { url: "http://www.twitch.tv/channel" })).resolves.toMatchObject({ url: "http://www.twitch.tv/channel" });
+    await expect(
+      controller.patchWatchTarget(target.id, { url: "http://www.twitch.tv/channel" }),
+    ).resolves.toMatchObject({ url: "http://www.twitch.tv/channel" });
   });
 
   it("omitting url in PATCH is a no-op", async () => {
@@ -1337,8 +1342,16 @@ describe("WatchTarget URL PATCH", () => {
   });
 
   it("PATCH url combined with enabled and recording_subdir", async () => {
-    await controller.patchWatchTarget(target.id, { url: "https://kick.com/channel", enabled: false, recording_subdir: "kick/channel" });
-    expect((await WatchTargetJsonAdapter.read(watchlistPath))[0]).toMatchObject({ url: "https://kick.com/channel", enabled: false, recording_subdir: "kick/channel" });
+    await controller.patchWatchTarget(target.id, {
+      url: "https://kick.com/channel",
+      enabled: false,
+      recording_subdir: "kick/channel",
+    });
+    expect((await WatchTargetJsonAdapter.read(watchlistPath))[0]).toMatchObject({
+      url: "https://kick.com/channel",
+      enabled: false,
+      recording_subdir: "kick/channel",
+    });
   });
 
   it.each([
@@ -1354,7 +1367,9 @@ describe("WatchTarget URL PATCH", () => {
   });
 
   it("PATCH url rejects unknown key alongside url without a partial write", async () => {
-    await expect(controller.patchWatchTarget(target.id, { url: "https://twitch.tv/x", unknown: "x" } as never)).rejects.toThrow();
+    await expect(
+      controller.patchWatchTarget(target.id, { url: "https://twitch.tv/x", unknown: "x" } as never),
+    ).rejects.toThrow();
     await expect(WatchTargetJsonAdapter.read(watchlistPath)).resolves.toEqual([target, sibling]);
   });
 
@@ -1369,20 +1384,22 @@ describe("WatchTarget URL PATCH", () => {
       enabled: true,
       state: "idle" as const,
     };
-    expect(WatchTargetJsonAdapter.toDomain(WatchTargetJsonAdapter.fromDomain(domainTarget)).url).toBe(domainTarget.url);
+    expect(
+      WatchTargetJsonAdapter.toDomain(WatchTargetJsonAdapter.fromDomain(domainTarget)).url,
+    ).toBe(domainTarget.url);
   });
 
   it("legacy malformed URL survives unrelated PATCH", async () => {
     await writeFixture([{ ...target, url: "not-a-url" }, sibling]);
     await controller.patchWatchTarget(target.id, { enabled: false });
-    expect((await WatchTargetJsonAdapter.read(watchlistPath))[0]).toMatchObject({ url: "not-a-url", enabled: false });
+    expect((await WatchTargetJsonAdapter.read(watchlistPath))[0]).toMatchObject({
+      url: "not-a-url",
+      enabled: false,
+    });
   });
 });
 
 describe("AtomicReplaceFaults", () => {
-  const { writeJsonAtomically, sweepStaleTempFiles, probeAtomicReplace } = require("../json-compatibility.adapters");
-  const fsPromises = require("fs/promises") as typeof import("fs/promises");
-
   it("writeJsonAtomically sets mode to 0o644 after successful write", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "atomic-test-"));
     const targetPath = path.join(tempDir, "test.json");
@@ -1433,7 +1450,7 @@ describe("AtomicReplaceFaults", () => {
     jest.spyOn(fsPromises, "rename").mockRejectedValue({
       code: "EACCES",
       message: "Permission denied",
-    } as NodeJS.ErrnoException);
+    });
 
     try {
       await expect(writeJsonAtomically(targetPath, { value: 1 })).rejects.toMatchObject({
@@ -1518,7 +1535,7 @@ describe("AtomicReplaceFaults", () => {
     accessError.code = "EACCES";
     try {
       await expect(
-        probeAtomicReplace(targetPath, async () => { throw accessError; }),
+        probeAtomicReplace(targetPath, () => Promise.reject(accessError)),
       ).rejects.toMatchObject({ code: "EACCES" });
     } finally {
       jest.restoreAllMocks();

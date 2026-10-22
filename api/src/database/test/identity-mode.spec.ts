@@ -20,10 +20,14 @@ describe("identity mode", () => {
     expect(() => validateStartupIdentityMode(env)).toThrow(message);
   });
 
-  it.each([undefined, "false"])("validates JSON mode without a database when RELATIONAL_STORAGE is %p", (storage) => {
-    const env: NodeJS.ProcessEnv = storage === undefined ? {} : { RELATIONAL_STORAGE: storage };
-    expect(validateStartupIdentityMode({ ...env, IDENTITY_MODE: "local" })).toBe("local");
-    expect(() => validateStartupIdentityMode({ ...env, IDENTITY_MODE: "authenticated" }))
-      .toThrow("authenticated mode not yet available");
-  });
+  it.each([undefined, "false"])(
+    "validates JSON mode without a database when RELATIONAL_STORAGE is %p",
+    (storage) => {
+      const env: NodeJS.ProcessEnv = storage === undefined ? {} : { RELATIONAL_STORAGE: storage };
+      expect(validateStartupIdentityMode({ ...env, IDENTITY_MODE: "local" })).toBe("local");
+      expect(() => validateStartupIdentityMode({ ...env, IDENTITY_MODE: "authenticated" })).toThrow(
+        "authenticated mode not yet available",
+      );
+    },
+  );
 });

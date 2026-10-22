@@ -1,4 +1,4 @@
-﻿# StreamRecorder integration frontend
+# StreamRecorder integration frontend
 
 This is a technical API + Worker testing console, not the final product UI. It provides a foundation for inspecting the current domain and debugging local integration without adding future infrastructure.
 
@@ -150,3 +150,7 @@ The browser knows only logical relative paths. RECORDINGS_ROOT belongs to the AP
 Compose maps it to the Worker's recordings volume. Client-side folder/file inputs
 and showDirectoryPicker are deliberately not used. Browsing is bounded to 1,000
 immediate entries, hides dot entries and excludes symlinks.
+
+## Linting and Formatting
+
+See [repository linting and formatting](../README-LINTING.md) for setup, read-only checks, explicit fixes and coverage.

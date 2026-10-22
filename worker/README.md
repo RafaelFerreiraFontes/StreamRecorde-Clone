@@ -821,3 +821,7 @@ A integração atual é uma arquitetura de MVP baseada em arquivos JSON comparti
 ## Resumo executivo
 
 O Worker Python atual é a camada operacional do MVP. Ele observa WatchTargets habilitados, classifica probes com segurança, cria/reutiliza `Stream`, cria `Recording`, executa shutdown cooperativo e coleta processos filhos de mídia, persiste estados e mantém compatibilidade com formatos JSON legados. O modelo é funcional e local, mas ainda sujeito às limitações do MVP: persistência JSON, sem fila, sem banco e sem cloud final.
+
+## Linting and Formatting
+
+See [repository linting and formatting](../README-LINTING.md) for setup, read-only checks, explicit fixes and coverage.

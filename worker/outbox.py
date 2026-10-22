@@ -8,16 +8,15 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-
 
 log = logging.getLogger("worker")
 
 
 def utc_now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def pid_is_dead(pid):
@@ -52,11 +51,20 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class Outbox:
-    def __init__(self, directory, base_url, token, transport=None, clock=time.monotonic, jitter=random.random):
+    def __init__(
+        self, directory, base_url, token, transport=None, clock=time.monotonic, jitter=random.random
+    ):
         if not isinstance(token, str) or not token.strip():
             raise RuntimeError("INTERNAL_API_TOKEN must be configured when bridge mode is enabled")
         parsed = urlsplit(base_url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ValueError("Invalid bridge base URL")
         self.pending = pathlib.Path(directory) / "pending"
         self.active = pathlib.Path(directory) / "active"
@@ -77,8 +85,12 @@ class Outbox:
 
     def _request(self, method, path, payload=None):
         body = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = Request(self.base_url + path, data=body, method=method,
-                          headers={"X-Internal-Token": self.token, "Content-Type": "application/json"})
+        request = Request(
+            self.base_url + path,
+            data=body,
+            method=method,
+            headers={"X-Internal-Token": self.token, "Content-Type": "application/json"},
+        )
         with build_opener(NoRedirect()).open(request, timeout=10) as response:
             data = response.read(1024 * 1024 + 1)
             if len(data) > 1024 * 1024:
@@ -94,7 +106,9 @@ class Outbox:
                 raise ValueError("Invalid bridge execution configs")
         except Exception:
             self.config_failures += 1
-            self.config_retry = self.clock() + min(60, 2 ** min(self.config_failures, 6)) * (0.5 + self.jitter())
+            self.config_retry = self.clock() + min(60, 2 ** min(self.config_failures, 6)) * (
+                0.5 + self.jitter()
+            )
             raise
         self.config_failures = 0
         self.config_retry = 0
@@ -136,8 +150,13 @@ class Outbox:
             self._write(self.active / (session_id + ".json"), payload)
 
     def event(self, event_type, target_id, **values):
-        return {"event_id": str(uuid.uuid4()), "event_type": event_type,
-                "occurred_at": utc_now(), "watch_target_id": target_id, **values}
+        return {
+            "event_id": str(uuid.uuid4()),
+            "event_type": event_type,
+            "occurred_at": utc_now(),
+            "watch_target_id": target_id,
+            **values,
+        }
 
     def files(self):
         return sorted(self.pending.glob("*.json"))
@@ -159,10 +178,14 @@ class Outbox:
                 log.error("Worker outbox saturated; blocking new launches")
                 raise RuntimeError("Outbox saturated")
             self.sequence += 1
-            timestamp = max(int(time.time() * 1000), int(files[-1].name.split("_")[0]) if files else 0)
+            timestamp = max(
+                int(time.time() * 1000), int(files[-1].name.split("_")[0]) if files else 0
+            )
             if files:
                 self.sequence = max(self.sequence, int(files[-1].name.split("_")[1]) + 1)
-            self._write(self.pending / f"{timestamp:016d}_{self.sequence:012d}_{event_id}.json", event)
+            self._write(
+                self.pending / f"{timestamp:016d}_{self.sequence:012d}_{event_id}.json", event
+            )
 
     def replay(self):
         with self.mutex:
@@ -173,36 +196,56 @@ class Outbox:
                     event = self._read(path)
                     uuid.UUID(event["event_id"])
                     uuid.UUID(event["watch_target_id"])
-                    if event["event_type"] not in ("recording.start", "recording.terminal", "stream.offline"):
+                    if event["event_type"] not in (
+                        "recording.start",
+                        "recording.terminal",
+                        "stream.offline",
+                    ):
                         raise ValueError("Invalid event type")
                     response = self.transport("POST", "/internal/v1/events", event)
                     if not isinstance(response, dict) or response.get("acknowledged") is not True:
                         raise ValueError("Missing durable acknowledgement")
                     session_id = event.get("session_id")
-                    checkpoint_path = self.active / (str(uuid.UUID(session_id)) + ".json") if session_id else None
+                    checkpoint_path = (
+                        self.active / (str(uuid.UUID(session_id)) + ".json") if session_id else None
+                    )
                     if event["event_type"] == "recording.start":
                         if response.get("session_id") != session_id:
                             raise ValueError("Mismatched acknowledgement")
                         uuid.UUID(response["stream_id"])
                         if checkpoint_path.exists():
                             checkpoint = self._read(checkpoint_path)
-                            checkpoint.update(phase="start_committed", stream_id=response["stream_id"])
+                            checkpoint.update(
+                                phase="start_committed", stream_id=response["stream_id"]
+                            )
                             self.checkpoint(checkpoint)
                     elif event["event_type"] == "recording.terminal":
-                        if response.get("session_id") != session_id or response.get("state") != event["state"]:
+                        if (
+                            response.get("session_id") != session_id
+                            or response.get("state") != event["state"]
+                        ):
                             raise ValueError("Mismatched terminal acknowledgement")
                         if checkpoint_path.exists():
                             checkpoint_path.unlink()
                             self._sync_directory(self.active)
-                        if not any(self._read(active_path).get("watch_target_id") == event["watch_target_id"]
-                                   for active_path in self.active.glob("*.json")):
+                        if not any(
+                            self._read(active_path).get("watch_target_id")
+                            == event["watch_target_id"]
+                            for active_path in self.active.glob("*.json")
+                        ):
                             self.blocked_targets.discard(event["watch_target_id"])
                     path.unlink()
                     self._sync_directory(self.pending)
                 except Exception as error:
                     self.failures += 1
-                    self.next_retry = self.clock() + min(60, 2 ** min(self.failures, 6)) * (0.5 + self.jitter())
-                    log.warning("Worker bridge replay pending (exception_type=%s, failures=%s)", type(error).__name__, self.failures)
+                    self.next_retry = self.clock() + min(60, 2 ** min(self.failures, 6)) * (
+                        0.5 + self.jitter()
+                    )
+                    log.warning(
+                        "Worker bridge replay pending (exception_type=%s, failures=%s)",
+                        type(error).__name__,
+                        self.failures,
+                    )
                     return False
             self.failures = 0
             self.next_retry = 0
@@ -212,11 +255,25 @@ class Outbox:
         with self.mutex:
             if not self.ready(target_id):
                 raise RuntimeError("Bridge not ready for launch")
-            event = self.event("recording.start", target_id, session_id=session_id,
-                               stream_id=stream_id or str(uuid.uuid4()), output_file=output_file, quality=quality)
-            checkpoint = {"session_id": session_id, "stream_id": event["stream_id"], "watch_target_id": target_id,
-                          "event_id": event["event_id"], "started_at": event["occurred_at"],
-                          "output_file": output_file, "phase": "start_pending", "pid": None, "create_time": None}
+            event = self.event(
+                "recording.start",
+                target_id,
+                session_id=session_id,
+                stream_id=stream_id or str(uuid.uuid4()),
+                output_file=output_file,
+                quality=quality,
+            )
+            checkpoint = {
+                "session_id": session_id,
+                "stream_id": event["stream_id"],
+                "watch_target_id": target_id,
+                "event_id": event["event_id"],
+                "started_at": event["occurred_at"],
+                "output_file": output_file,
+                "phase": "start_pending",
+                "pid": None,
+                "create_time": None,
+            }
             self.checkpoint(checkpoint)
             self.blocked_targets.add(target_id)
             self.enqueue(event)
@@ -233,9 +290,14 @@ class Outbox:
         with self.mutex:
             event = checkpoint.get("terminal_event")
             if event is None:
-                event = self.event("recording.terminal", checkpoint["watch_target_id"],
-                                   session_id=checkpoint["session_id"], stream_id=checkpoint["stream_id"],
-                                   state=state, output_file=output_file)
+                event = self.event(
+                    "recording.terminal",
+                    checkpoint["watch_target_id"],
+                    session_id=checkpoint["session_id"],
+                    stream_id=checkpoint["stream_id"],
+                    state=state,
+                    output_file=output_file,
+                )
                 if occurred_at:
                     event["occurred_at"] = occurred_at
                 if reason:
@@ -259,6 +321,14 @@ class Outbox:
                     raise ValueError("Invalid active checkpoint filename")
                 self.blocked_targets.add(target_id)
                 if checkpoint.get("terminal_event") or pid_is_dead(checkpoint.get("pid")):
-                    self.terminal(checkpoint, "error", checkpoint.get("output_file"), reason="worker_restart_interruption")
+                    self.terminal(
+                        checkpoint,
+                        "error",
+                        checkpoint.get("output_file"),
+                        reason="worker_restart_interruption",
+                    )
                 else:
-                    log.warning("Ambiguous active capture ownership for target %s; blocking new launches until reconciliation", target_id)
+                    log.warning(
+                        "Ambiguous active capture ownership for target %s; blocking new launches until reconciliation",
+                        target_id,
+                    )

@@ -15,8 +15,17 @@ export class AuthController {
 
   @Post("login")
   @HttpCode(200)
-  async login(@Body() body: unknown, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
-    const result = await this.auth.login(body, request.headers, request.socket.remoteAddress ?? "unknown", request.headers.cookie);
+  async login(
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.auth.login(
+      body,
+      request.headers,
+      request.socket.remoteAddress ?? "unknown",
+      request.headers.cookie,
+    );
     response.setHeader("Set-Cookie", sessionCookie(result.token, result.origin));
     return { identityMode: "authenticated", persistence: "relational", user: result.user };
   }

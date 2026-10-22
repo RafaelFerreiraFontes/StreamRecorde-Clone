@@ -1,5 +1,4 @@
-export type RecordingState =
-  "idle" | "offline" | "recording" | "finished" | "error";
+export type RecordingState = "idle" | "offline" | "recording" | "finished" | "error";
 export interface Creator {
   id: string;
   display_name: string;
@@ -36,13 +35,7 @@ export type CreateWatchTarget = Pick<
   WatchTarget,
   "creator_id" | "channel_name" | "platform" | "url" | "quality"
 >;
-export const states: RecordingState[] = [
-  "idle",
-  "offline",
-  "recording",
-  "finished",
-  "error",
-];
+export const states: RecordingState[] = ["idle", "offline", "recording", "finished", "error"];
 export const qualities = [
   "best",
   "worst",

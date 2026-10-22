@@ -11,9 +11,7 @@ test("route handler exports all required HTTP methods", () => {
   const source = readFileSync(routePath, "utf-8");
 
   // Check final export statement contains all expected methods
-  const exportMatch = source.match(
-    /export\s*{\s*([^}]+)}\s*;?\s*$/m,
-  );
+  const exportMatch = source.match(/export\s*{\s*([^}]+)}\s*;?\s*$/m);
   assert.ok(exportMatch, "Route must have a named export statement");
 
   const exportedNames = exportMatch[1]
@@ -21,20 +19,11 @@ test("route handler exports all required HTTP methods", () => {
     .map((s) => s.trim().split(" as ")[1]?.trim() || s.trim())
     .filter(Boolean);
 
-  assert.ok(
-    exportedNames.includes("GET"),
-    "GET handler must be exported",
-  );
-  assert.ok(
-    exportedNames.includes("POST"),
-    "POST handler must be exported",
-  );
+  assert.ok(exportedNames.includes("GET"), "GET handler must be exported");
+  assert.ok(exportedNames.includes("POST"), "POST handler must be exported");
   assert.ok(
     exportedNames.includes("PATCH"),
     "PATCH handler must be exported - without this, PATCH returns 405",
   );
-  assert.ok(
-    exportedNames.includes("DELETE"),
-    "DELETE handler must be exported",
-  );
+  assert.ok(exportedNames.includes("DELETE"), "DELETE handler must be exported");
 });

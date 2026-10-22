@@ -10,12 +10,11 @@ function CreatorRow({ creator }: { creator: Creator }) {
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const { snapshot } = useDashboard();
+  const targetsUpdated = snapshot["watch-targets"].updated;
   useEffect(() => {
     if (!open) return;
     let active = true;
-    api<WatchTarget[]>(
-      `/creators/${encodeURIComponent(creator.id)}/watch-targets`,
-    )
+    api<WatchTarget[]>(`/creators/${encodeURIComponent(creator.id)}/watch-targets`)
       .then((data) => {
         if (active) {
           setTargets(data);
@@ -28,14 +27,10 @@ function CreatorRow({ creator }: { creator: Creator }) {
     return () => {
       active = false;
     };
-  }, [open, creator.id, snapshot["watch-targets"].updated, retry]);
+  }, [open, creator.id, targetsUpdated, retry]);
   return (
     <section className="panel creator">
-      <button
-        className="creator-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
+      <button className="creator-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span>
           <strong>{creator.display_name}</strong>
           <code className="subtext">{creator.id}</code>
@@ -85,10 +80,7 @@ export default function Creators() {
         <div>
           <div className="eyebrow">Domain / Grouped identities</div>
           <h1>Creators</h1>
-          <p>
-            One Creator can have multiple WatchTargets across Twitch, YouTube
-            and Kick.
-          </p>
+          <p>One Creator can have multiple WatchTargets across Twitch, YouTube and Kick.</p>
         </div>
       </div>
       <ResourceStatus resource="creators" />
@@ -96,13 +88,11 @@ export default function Creators() {
         <CreatorRow key={c.id} creator={c} />
       ))}
       {data?.length === 0 && (
-        <Empty>
-          No Creators yet. Create a WatchTarget to establish a Creator.
-        </Empty>
+        <Empty>No Creators yet. Create a WatchTarget to establish a Creator.</Empty>
       )}
       <p className="note">
-        Creator IDs are currently derived from display names. Expand a Creator
-        to query its WatchTargets.
+        Creator IDs are currently derived from display names. Expand a Creator to query its
+        WatchTargets.
       </p>
       {data && <Json data={data} />}
     </>

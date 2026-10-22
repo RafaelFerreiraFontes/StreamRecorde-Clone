@@ -18,26 +18,18 @@ function isSameOrigin(request: NextRequest): boolean {
   }
 }
 
-async function proxy(
-  request: NextRequest,
-  context: { params: Promise<{ path: string[] }> },
-) {
+async function proxy(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
   const [resource, id, child] = path;
   const readable =
-    [
-      "creators",
-      "watch-targets",
-      "streams",
-      "recordings",
-      "streamer",
-      "session",
-    ].includes(resource) &&
+    ["creators", "watch-targets", "streams", "recordings", "streamer", "session"].includes(
+      resource,
+    ) &&
     (path.length === 1 ||
       (path.length === 2 && !!id) ||
       (path.length === 3 &&
         ((resource === "creators" && child === "watch-targets") ||
-         (resource === "recordings" && child === "location"))));
+          (resource === "recordings" && child === "location"))));
   const writable =
     resource === "watch-targets" &&
     ((request.method === "POST" && path.length === 1) ||
@@ -45,34 +37,16 @@ async function proxy(
       (request.method === "DELETE" && path.length === 2));
   if (
     !(request.method === "GET" ? readable : writable) ||
-    path.some(
-      (segment) => segment === "." || segment === ".." || /[\\/]/.test(segment),
-    )
+    path.some((segment) => segment === "." || segment === ".." || /[\\/]/.test(segment))
   )
     return Response.json({ message: "Unsupported API route" }, { status: 404 });
-  if (
-    request.method !== "GET" &&
-    request.headers.get("origin") &&
-    !isSameOrigin(request)
-  )
-    return Response.json(
-      { message: "Cross-origin mutation rejected" },
-      { status: 403 },
-    );
+  if (request.method !== "GET" && request.headers.get("origin") && !isSameOrigin(request))
+    return Response.json({ message: "Cross-origin mutation rejected" }, { status: 403 });
   try {
     const base = new URL(process.env.API_BASE_URL || "http://localhost:3000");
-    const url = new URL(
-      path.map(encodeURIComponent).join("/"),
-      base.href.replace(/\/?$/, "/"),
-    );
-    if (
-      resource === "recordings" &&
-      request.nextUrl.searchParams.has("watchTargetId")
-    )
-      url.searchParams.set(
-        "watchTargetId",
-        request.nextUrl.searchParams.get("watchTargetId")!,
-      );
+    const url = new URL(path.map(encodeURIComponent).join("/"), base.href.replace(/\/?$/, "/"));
+    if (resource === "recordings" && request.nextUrl.searchParams.has("watchTargetId"))
+      url.searchParams.set("watchTargetId", request.nextUrl.searchParams.get("watchTargetId")!);
     if (resource === "recordings" && id === "filesystem" && path.length === 2) {
       url.searchParams.set("path", request.nextUrl.searchParams.get("path") ?? "");
     }
@@ -84,22 +58,17 @@ async function proxy(
       body: ["POST", "PATCH"].includes(request.method) ? await request.text() : undefined,
       signal: AbortSignal.timeout(10000),
     });
-    return new Response(
-      response.status === 204 ? null : await response.text(),
-      {
-        status: response.status,
-        headers: {
-          "Content-Type":
-            response.headers.get("content-type") || "application/json",
-          "Cache-Control": "no-store",
-        },
+    return new Response(response.status === 204 ? null : await response.text(), {
+      status: response.status,
+      headers: {
+        "Content-Type": response.headers.get("content-type") || "application/json",
+        "Cache-Control": "no-store",
       },
-    );
+    });
   } catch (error) {
     return Response.json(
       {
-        message:
-          "NestJS API unavailable. Check API_BASE_URL and the API process.",
+        message: "NestJS API unavailable. Check API_BASE_URL and the API process.",
         detail: error instanceof Error ? error.message : String(error),
       },
       { status: 502 },

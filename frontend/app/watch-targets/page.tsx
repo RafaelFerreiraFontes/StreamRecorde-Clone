@@ -3,10 +3,7 @@ import { RecordingBrowser } from "@/components/recording-browser";
 import { useState } from "react";
 import { useDashboard } from "@/components/provider";
 import { api } from "@/lib/api";
-import {
-  qualities,
-  type WatchTarget,
-} from "@/lib/types";
+import { qualities, type WatchTarget } from "@/lib/types";
 import { Badge, Empty, Json, ResourceStatus, Table } from "@/components/ui";
 
 type EditingTarget = { id: string; recording_subdir?: string } | null;
@@ -98,7 +95,7 @@ export function WatchTargetQualitySelect({
     }
   }
 
-  const qualityOptions = qualities.includes(currentQuality as any)
+  const qualityOptions = qualities.some((quality) => quality === currentQuality)
     ? qualities
     : [currentQuality, ...qualities];
 
@@ -186,11 +183,7 @@ export function WatchTargetUrlEditor({
         >
           Save
         </button>
-        <button
-          className="secondary small"
-          onClick={cancelEdit}
-          disabled={saving}
-        >
+        <button className="secondary small" onClick={cancelEdit} disabled={saving}>
           Cancel
         </button>
       </div>
@@ -199,7 +192,10 @@ export function WatchTargetUrlEditor({
 
   return (
     <div className="url-cell">
-      <span className={isSafeHttpUrl(target.url) ? "path url-truncate" : "muted"} title={target.url}>
+      <span
+        className={isSafeHttpUrl(target.url) ? "path url-truncate" : "muted"}
+        title={target.url}
+      >
         {isSafeHttpUrl(target.url) ? target.url : "—"}
       </span>
       <button
@@ -332,10 +328,7 @@ export default function WatchTargets() {
         <div>
           <div className="eyebrow">Operations / Configuration</div>
           <h1>Watch Targets</h1>
-          <p>
-            Persistent monitoring configuration. Each target belongs to one
-            Creator.
-          </p>
+          <p>Persistent monitoring configuration. Each target belongs to one Creator.</p>
         </div>
         <button className="primary" onClick={() => setShowForm(!showForm)}>
           {showForm ? "Close form" : "+ Create WatchTarget"}
@@ -355,9 +348,8 @@ export default function WatchTargets() {
         <section className="panel form-panel">
           <h2>Create WatchTarget</h2>
           <p>
-            Choose an existing Creator or type a new display name. The current
-            API uses this value as <code>creator_id</code>; there is no separate
-            Creator creation endpoint.
+            Choose an existing Creator or type a new display name. The current API uses this value
+            as <code>creator_id</code>; there is no separate Creator creation endpoint.
           </p>
           <form onSubmit={create}>
             <div className="form-grid">
@@ -380,12 +372,7 @@ export default function WatchTargets() {
               </label>
               <label>
                 Channel Name
-                <input
-                  name="channel_name"
-                  required
-                  maxLength={200}
-                  placeholder="Channel name"
-                />
+                <input name="channel_name" required maxLength={200} placeholder="Channel name" />
               </label>
               <label>
                 Platform
@@ -415,17 +402,27 @@ export default function WatchTargets() {
               </label>
               <label className="full">
                 Recording Folder
-                <div className="folder-input"><input
-                  value={createFolder}
-                  onChange={event => setCreateFolder(event.target.value)}
-                  name="recording_subdir"
-                  placeholder="Relative path (e.g. twitch/favorites)"
-                  maxLength={255}
-                />
-                <button type="button" className="secondary" aria-label="Browse recording folders" onClick={() => setPicker("create")} disabled={pending}>Browse</button></div>
+                <div className="folder-input">
+                  <input
+                    value={createFolder}
+                    onChange={(event) => setCreateFolder(event.target.value)}
+                    name="recording_subdir"
+                    placeholder="Relative path (e.g. twitch/favorites)"
+                    maxLength={255}
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    aria-label="Browse recording folders"
+                    onClick={() => setPicker("create")}
+                    disabled={pending}
+                  >
+                    Browse
+                  </button>
+                </div>
                 <span className="hint">
-                  Optional. Path relative to the server's recordings root. Leave
-                  empty to use the default (channel name).
+                  Optional. Path relative to the server&apos;s recordings root. Leave empty to use
+                  the default (channel name).
                 </span>
               </label>
             </div>
@@ -474,8 +471,8 @@ export default function WatchTargets() {
                   )}
                 </td>
                 <td>
-                  {snapshot.creators.data?.find((c) => c.id === t.creator_id)
-                    ?.display_name || t.creator_id}
+                  {snapshot.creators.data?.find((c) => c.id === t.creator_id)?.display_name ||
+                    t.creator_id}
                 </td>
                 <td>{t.platform}</td>
                 <td>
@@ -497,28 +494,30 @@ export default function WatchTargets() {
                 <td>
                   {editingTarget?.id === t.id ? (
                     <div className="edit-subdir">
-                      <div className="folder-input"><input
-                        aria-label="Recording folder"
-                        type="text"
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        placeholder="Relative path"
-                        maxLength={255}
-                        disabled={pending}
-                      />
-                      <button type="button" className="secondary small" aria-label="Browse recording folders" onClick={() => setPicker("edit")} disabled={pending}>Browse</button></div>
-                      <button
-                        className="primary small"
-                        onClick={saveEdit}
-                        disabled={pending}
-                      >
+                      <div className="folder-input">
+                        <input
+                          aria-label="Recording folder"
+                          type="text"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          placeholder="Relative path"
+                          maxLength={255}
+                          disabled={pending}
+                        />
+                        <button
+                          type="button"
+                          className="secondary small"
+                          aria-label="Browse recording folders"
+                          onClick={() => setPicker("edit")}
+                          disabled={pending}
+                        >
+                          Browse
+                        </button>
+                      </div>
+                      <button className="primary small" onClick={saveEdit} disabled={pending}>
                         Save
                       </button>
-                      <button
-                        className="secondary small"
-                        onClick={cancelEdit}
-                        disabled={pending}
-                      >
+                      <button className="secondary small" onClick={cancelEdit} disabled={pending}>
                         Cancel
                       </button>
                     </div>
@@ -551,11 +550,7 @@ export default function WatchTargets() {
                   <Badge state={t.state} />
                 </td>
                 <td>
-                  <button
-                    className="danger"
-                    disabled={pending}
-                    onClick={() => void remove(t)}
-                  >
+                  <button className="danger" disabled={pending} onClick={() => void remove(t)}>
                     Delete
                   </button>
                 </td>
@@ -563,21 +558,21 @@ export default function WatchTargets() {
             ))}
           </Table>
         ) : targets ? (
-          <Empty>
-            No watch targets. Create your first monitoring configuration above.
-          </Empty>
+          <Empty>No watch targets. Create your first monitoring configuration above.</Empty>
         ) : null}
       </section>
       <p className="note">
-        Enabled is saved per target. The existing Worker skips new probes for disabled
-        targets; active recordings continue. Changes take effect when configuration
-        is re-read. This wave does not change Worker execution behavior.
+        Enabled is saved per target. The existing Worker skips new probes for disabled targets;
+        active recordings continue. Changes take effect when configuration is re-read. This wave
+        does not change Worker execution behavior.
       </p>
-      {picker && <RecordingBrowser
-        initialPath={picker === "edit" ? editValue : undefined}
-        onClose={() => setPicker(null)}
-        onSelect={picker === "create" ? setCreateFolder : setEditValue}
-      />}
+      {picker && (
+        <RecordingBrowser
+          initialPath={picker === "edit" ? editValue : undefined}
+          onClose={() => setPicker(null)}
+          onSelect={picker === "create" ? setCreateFolder : setEditValue}
+        />
+      )}
       {targets && <Json data={targets} />}
     </>
   );

@@ -1,10 +1,4 @@
-import {
-  IsUUID,
-  IsString,
-  IsDateString,
-  IsIn,
-  IsOptional,
-} from "class-validator";
+import { IsUUID, IsString, IsDateString, IsIn, IsOptional } from "class-validator";
 import { Transform, Type } from "class-transformer";
 
 export class SessionDto {
@@ -31,15 +25,11 @@ export class SessionDto {
 
   @IsIn(["idle", "offline", "recording", "finished", "error"])
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "idle",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "idle")
   state: string;
 
   @IsIn(["youtube", "twitch", "kick"])
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "youtube",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "youtube")
   platform: string;
 }

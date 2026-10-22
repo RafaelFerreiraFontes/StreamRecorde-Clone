@@ -5,6 +5,8 @@ export default defineConfig({
   out: "./drizzle/migrations",
   dialect: "postgresql",
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? "postgresql://streamrecorder:streamrecorder_dev_local@127.0.0.1:5432/streamrecorder",
+    url:
+      process.env.DATABASE_URL ??
+      "postgresql://streamrecorder:streamrecorder_dev_local@127.0.0.1:5432/streamrecorder",
   },
 });

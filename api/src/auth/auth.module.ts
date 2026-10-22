@@ -13,9 +13,11 @@ import { AUTH_OPTIONS, AuthService } from "./auth.service";
 })
 export class AuthModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply((_request: Request, response: Response, next: NextFunction) => {
-      response.setHeader("Cache-Control", "no-store");
-      next();
-    }).forRoutes(AuthController);
+    consumer
+      .apply((_request: Request, response: Response, next: NextFunction) => {
+        response.setHeader("Cache-Control", "no-store");
+        next();
+      })
+      .forRoutes(AuthController);
   }
 }

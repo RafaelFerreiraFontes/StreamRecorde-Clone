@@ -483,3 +483,7 @@ Consulte o [Runbook de Banco de Dados](api/README.database.md) para procedimento
 - A exportação para Google Drive, Dropbox ou OneDrive é secundária e opcional, pertencente às **Waves 09 e 10**.
 
 Consulte [PROJECT-STATUS.md](PROJECT-STATUS.md) para o roadmap completo do projeto.
+
+## Linting and Formatting
+
+See [repository linting and formatting](README-LINTING.md) for setup, read-only checks, explicit fixes and coverage.

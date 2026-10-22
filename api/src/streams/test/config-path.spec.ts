@@ -1,10 +1,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import {
-  resolveAllConfigPaths,
-  initializeRuntimeFiles,
-} from "../json-compatibility.adapters";
+import { resolveAllConfigPaths, initializeRuntimeFiles } from "../json-compatibility.adapters";
 
 describe("resolveAllConfigPaths", () => {
   const localDefaultBase = path.join(process.cwd(), "..", "worker", "config");
@@ -142,7 +139,10 @@ describe("initializeRuntimeFiles", () => {
     await initializeRuntimeFiles(paths);
 
     for (const filePath of Object.values(paths)) {
-      const exists = await fs.access(filePath).then(() => true).catch(() => false);
+      const exists = await fs
+        .access(filePath)
+        .then(() => true)
+        .catch(() => false);
       expect(exists).toBe(true);
     }
 

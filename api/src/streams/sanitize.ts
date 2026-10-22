@@ -1,5 +1,5 @@
 export function normalizeTextInput(value: string): string {
-   if (typeof value !== "string") {
+  if (typeof value !== "string") {
     return "";
   }
 
