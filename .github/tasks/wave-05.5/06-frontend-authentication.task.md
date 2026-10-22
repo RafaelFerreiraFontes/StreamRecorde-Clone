@@ -3,7 +3,7 @@ name: Wave 05.5 — Task 06 — Frontend Identity, Proxy and Session UX
 wave: "05.5"
 order: 06
 depends_on:
-  - 05-worker-filesystem-ownership.task.md
+  - 05.5-repository-linting-code-readability.task.md
 status: planned
 ---
 
@@ -47,7 +47,7 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Automated Tests / Verification
 
-Run focused proxy and component tests for login/logout, cookie propagation, CSRF, 401, delayed requests and account switching. Run frontend package test scripts, typecheck/build and affected API integration tests; record exact commands and git diff --check.
+Run the read-only lint and format checks established by T05.5 for all affected files; fix findings explicitly without weakening the accepted policy. Run focused proxy and component tests for login/logout, cookie propagation, CSRF, 401, delayed requests and account switching. Run frontend package test scripts, typecheck/build and affected API integration tests; record exact commands and git diff --check.
 
 Use current scripts/frameworks; resolve exact safe commands during planning. No live platforms or real user data as fixtures. Dependencies/images may require separate preparation. Report unavailable prerequisites honestly; do not replace required database/integration evidence with mocks.
 

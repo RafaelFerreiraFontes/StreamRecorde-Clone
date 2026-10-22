@@ -2,13 +2,13 @@
 
 ## Status and Objective
 
-Planned. All seven task files are specifications only; no task has started. This README is the umbrella specification, not an eighth executable task.
+Wave in progress. T01-T05 are recorded as done in their task files; T05.5, T06 and T07 remain planned. This README is the umbrella specification, not an additional executable task. Adding T05.5 does not start it or re-certify prior validation.
 
 Introduce stable User identity, a low-friction local account, credential/session handling and backend resource isolation. Local Mode remains primary; authenticated operation is a capability to validate locally, not authorization for hosted deployment.
 
-## Baseline and Evidence
+## Historical Planning Baseline and Evidence
 
-Planning baseline: master at 28e42a1b8b96724b3e1eb7f057b836b65bf8a7f5 (post-Wave 05). Recheck the actual branch and changes when execution is authorized.
+Original planning baseline: master at 28e42a1b8b96724b3e1eb7f057b836b65bf8a7f5 (post-Wave 05). The observations below describe that historical baseline, not the current implementation after T01-T05. Read current task reports, accepted decisions and code before execution.
 
 - PostgreSQL 17, Drizzle migrations and relational Creator/WatchTarget/Stream/Recording persistence exist.
 - Default Compose remains JSON-authoritative: RELATIONAL_STORAGE=false and Worker PERSISTENCE_MODE=direct_json. PostgreSQL presence does not attest installation cutover.
@@ -24,17 +24,20 @@ Planning baseline: master at 28e42a1b8b96724b3e1eb7f057b836b65bf8a7f5 (post-Wave
 
 | Order | Task | Depends on | Status |
 | --- | --- | --- | --- |
-| 01 | [Identity, Authentication and Ownership Decisions](01-authentication-ownership-decisions.task.md) | Wave 05 completion | planned |
-| 02 | [User Schema, Local Account and Ownership Migration](02-user-schema-migration.task.md) | 05.5-T01 | planned |
-| 03 | [Authentication and Session Lifecycle](03-authentication-session.task.md) | 05.5-T02 | planned |
-| 04 | [Domain Ownership and Legacy Route Authorization](04-domain-authorization.task.md) | 05.5-T03 | planned |
-| 05 | [Worker Ownership and Filesystem Access Boundaries](05-worker-filesystem-ownership.task.md) | 05.5-T04 | planned |
-| 06 | [Frontend Identity, Proxy and Session UX](06-frontend-authentication.task.md) | 05.5-T05 | planned |
+| 01 | [Identity, Authentication and Ownership Decisions](01-authentication-ownership-decisions.task.md) | Wave 05 completion | done |
+| 02 | [User Schema, Local Account and Ownership Migration](02-user-schema-migration.task.md) | 05.5-T01 | done |
+| 03 | [Authentication and Session Lifecycle](03-authentication-session.task.md) | 05.5-T02 | done |
+| 04 | [Domain Ownership and Legacy Route Authorization](04-domain-authorization.task.md) | 05.5-T03 | done |
+| 05 | [Worker Ownership and Filesystem Access Boundaries](05-worker-filesystem-ownership.task.md) | 05.5-T04 | done |
+| 05.5 | [Repository Linting and Code Readability](05.5-repository-linting-code-readability.task.md) | 05.5-T05 | planned |
+| 06 | [Frontend Identity, Proxy and Session UX](06-frontend-authentication.task.md) | 05.5-T05.5 | planned |
 | 07 | [Wave Integration QA and Operational Documentation](07-wave-integration-qa-documentation.task.md) | 05.5-T06 | planned |
 
-Execute sequentially: T01 decisions -> T02 schema/migration -> T03 authentication -> T04 domain authorization -> T05 Worker/filesystem -> T06 frontend -> T07 integration/documentation. A completed implementation is not accepted dependency evidence; follow validation, review and human acceptance gates.
+Execute sequentially: T01 decisions -> T02 schema/migration -> T03 authentication -> T04 domain authorization -> T05 Worker/filesystem -> T05.5 linting/code remediation -> T06 frontend -> T07 integration/documentation. A completed implementation is not accepted dependency evidence; follow validation, review and human acceptance gates.
 
-T01 must produce authentication-ownership-decisions.md when it is actually executed. That decision record is intentionally not fabricated by this planning change.
+T05.5 is task 05.5 within this wave, not a new wave. It establishes Ruff for Python, ESLint/Prettier for frontend/API/scripts, and corrects existing in-scope code. T06/T07 must preserve the resulting read-only quality gates. The supplied Grok proposal is a reference to adapt, not a command to execute verbatim.
+
+T01 owns authentication-ownership-decisions.md. Consult the accepted decision record for downstream work; this task insertion does not replace or modify those decisions.
 
 ## Decisions Required Before Implementation
 
@@ -71,6 +74,7 @@ Redis/BullMQ/jobs (06), Tags (06.5), general file-management/retention (07/07.5 
 | Service identity, replay, account state and capture continuity | T01 | T05 | T07 |
 | Directory and sibling metadata isolation | T01 | T05 | T07 |
 | Proxy transport and stale-response/account-switch handling | T01 | T06 | T07 |
+| Lint/format coverage and behavior-preserving code remediation | T05.5 plan | T05.5; maintained by T06 | T07 |
 
 ## Validation and Agent Workflow
 

@@ -25,6 +25,7 @@ Validate the complete wave in isolated environments and document explicit rollou
 - Run the complete ownership route matrix including legacy filters, name lookup, filesystem listings/location siblings, forged owner fields and internal service boundary.
 - Exercise session expiry/revocation/restart, logout during capture, delayed frontend responses, Worker outage/restart/outbox replay and account-status changes.
 - Verify migration idempotence, manifests, preserved UUIDs/timestamps/unknown links/history/media metadata, transaction rollback and mode activation ordering.
+- Re-run the repository-wide read-only lint and format checks established by T05.5, covering frontend, API, Node scripts and Worker, including subsequent T06 changes. Verify no source mutation or silent scope omissions.
 - Run existing JSON and bridge regressions using synthetic fixtures and fake Streamlink. Never use normal runtime-data, recordings, containers or database volumes.
 - Update PROJECT-STATUS.md, root/component READMEs and applicable instructions to describe actual supported modes, safe account setup, configuration, migration, secret handling and rollback checkpoints.
 - Remove obsolete partial-rollout gates only when all required protections are verified. Keep operational activation explicit and opt-in; do not deploy or migrate normal user data.
@@ -40,6 +41,7 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Acceptance Criteria
 
+- [ ] Repository-wide lint/format checks pass without rewriting source or suppressing new findings.
 - [ ] All supported install/upgrade/mode paths pass with reproducible isolated evidence.
 - [ ] Two-user isolation covers all modern, legacy, proxy and filesystem paths.
 - [ ] Capture recovery and ownership survive service restarts and human session changes.
