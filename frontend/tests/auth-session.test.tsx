@@ -269,7 +269,7 @@ test("failed logout hides protected data and offers explicit retry rather than c
     "Sign out could not be confirmed. Retry sign out or verify your session.",
   );
   assert.equal(screen.queryByTestId("domain"), null);
-  assert.equal(dashboard.authState, "authentication_error");
+  await waitFor(() => assert.equal(dashboard.authState, "authentication_error"));
   failLogout = false;
   fireEvent.click(screen.getByRole("button", { name: "Retry sign out" }));
   await waitFor(() => assert.equal(dashboard.authState, "unauthenticated"));

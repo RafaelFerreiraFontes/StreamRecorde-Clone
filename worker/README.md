@@ -1,5 +1,15 @@
 # Worker — StreamRecorder Clone
 
+## Post-Wave 05.5 Operational Checkpoint
+
+The existing English/Portuguese sections remain below. See [root mode contracts](../README.md#5-deployment-modes) and [human stability tests](../docs/DOCKER-STABILITY-TESTING.md).
+
+Approved A uses `PERSISTENCE_MODE=direct_json`; B/C use `bridge` with shared API/Worker `INTERNAL_API_TOKEN`, PostgreSQL 17 and durable `OUTBOX_DIR=/outbox` on named volume `worker-outbox`. B/C additionally require `POSTGRES_PASSWORD` in database configuration. Host mounts use `RUNTIME_DATA_DIR=./runtime-data` and `RECORDINGS_DIR=./recordings`; container `CONFIG_DIR=/data`, `OUTPUT_DIR=/recordings`. These are deployment defaults: select the relational/authenticated overlays explicitly.
+
+During API/database outage preserve pending events and active checkpoints. Restore connectivity, observe retries and durable acknowledgment, then reconcile Streams/Recordings; restarting a container alone is not recovery evidence. Never clear the outbox manually or change to stale JSON. Disabling a WatchTarget prevents new probes/captures but does not cancel an already active capture or terminal persistence. Human logout/account disable is a separate authorization concern, not an instruction to erase Worker recovery data.
+
+Use fake Streamlink and isolated storage for deterministic outage/restart/shutdown tests. Successful capture remains `finished`; nonempty output is not proof of playable MP4, and no explicit separate FFmpeg finalization is invoked. No new live-platform or human stability result is claimed.
+
 ## Wave 05.5 Identity And Recovery / Identidade e recuperação
 
 **English:** The Worker uses the internal token, not a human session. Human

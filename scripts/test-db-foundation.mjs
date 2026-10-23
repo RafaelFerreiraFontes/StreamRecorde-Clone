@@ -1,4 +1,15 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const python =
+  process.env.PYTHON ??
+  [join(root, ".venv", "Scripts", "python.exe"), join(root, ".venv", "bin", "python")].find(
+    existsSync,
+  ) ??
+  "python";
 
 const compose = ["compose", "-f", "compose.test-db.yml", "-p", "streamrecorder-test-db"];
 const databaseUrl =
@@ -16,7 +27,7 @@ try {
   run(
     process.execPath,
     ["-r", "ts-node/register", "src/database/migrate.ts"],
-    { ...process.env, DATABASE_URL: databaseUrl },
+    { ...process.env, PYTHON: python, DATABASE_URL: databaseUrl },
     "api",
   );
   run(
@@ -24,6 +35,7 @@ try {
     ["scripts/test-db-integration.mjs"],
     {
       ...process.env,
+      PYTHON: python,
       DATABASE_URL: databaseUrl,
       RELATIONAL_TEST_DATABASE_URL: databaseUrl,
       BRIDGE_TEST_DB_RESTART: "true",

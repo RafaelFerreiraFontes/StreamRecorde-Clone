@@ -5,7 +5,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "pnpm test:api && pnpm test:frontend && pnpm test:worker",
     "test:smoke": "node scripts/docker-integration-smoke.mjs && node scripts/docker-bridge-smoke.mjs",
     "test:smoke:json": "node scripts/docker-integration-smoke.mjs",
     "test:smoke:bridge": "node scripts/docker-bridge-smoke.mjs",
@@ -15,7 +15,17 @@
     "format:check": "node scripts/lint-repository.mjs format:check",
     "format": "node scripts/lint-repository.mjs format:write",
     "format:write": "node scripts/lint-repository.mjs format:write",
-    "check": "pnpm lint && pnpm format:check"
+    "check": "pnpm lint && pnpm format:check",
+    "test:api": "pnpm --dir api test --runInBand",
+    "test:frontend": "pnpm --dir frontend test",
+    "test:worker": "node scripts/test-worker.mjs",
+    "typecheck": "pnpm --dir api exec tsc --noEmit && pnpm --dir frontend typecheck",
+    "build": "pnpm --dir api build && pnpm --dir frontend build",
+    "test:db": "node scripts/test-db-foundation.mjs",
+    "test:rehearsal": "node scripts/test-wave05-rehearsal.mjs",
+    "compose:config": "docker compose -f compose.yml config --quiet",
+    "compose:config:relational": "docker compose -f compose.yml -f compose.relational.yml config --quiet",
+    "compose:config:authenticated": "docker compose -f compose.yml -f compose.relational.yml -f compose.authenticated.yml config --quiet"
   },
   "keywords": [],
   "author": "",

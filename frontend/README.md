@@ -1,5 +1,13 @@
 # StreamRecorder integration frontend
 
+## Post-Wave 05.5 Browser Operations
+
+See [deployment modes](../README.md#5-deployment-modes) and [human stability matrix](../docs/DOCKER-STABILITY-TESTING.md). Approved Compose frontend host port is `FRONTEND_HOST_PORT=3001` on loopback; current checkout still uses `FRONTEND_HOST_PORT=3001`, so verify effective configuration before opening the browser. Source `pnpm --dir frontend dev` still uses port 3001. Compose overlays are explicitly selected, never implicitly loaded.
+
+For C, configure the exact browser origin (for example `http://127.0.0.1:3001`) in API `AUTH_TRUSTED_ORIGINS`; `http://127.0.0.1:3001` is a different origin. `API_BASE_URL` is server-side and points to the API container, not the browser URL. Do not put internal tokens or database credentials in browser/public environment variables.
+
+Test login, refresh, protected deep links, logout and a replay of the old session after logout/account disable; never save raw session cookies as evidence. Confirm ownership using two separate accounts/browser sessions and isolated fixture data. A/B local identity is not a human login boundary. API availability, dashboard polling and retained recording state do not establish Worker liveness. Human results remain unfilled until executed.
+
 ## Wave 05.5 Operational Boundary
 
 The default JSON/local dashboard needs no account or database. Opt-in
@@ -61,7 +69,7 @@ pnpm install
 pnpm dev
 ```
 
-Open http://localhost:3001. NestJS defaults to port 3000. The Worker is optional for configuration CRUD and empty-history inspection.
+Open http://127.0.0.1:3001. NestJS defaults to port 3000. The Worker is optional for configuration CRUD and empty-history inspection.
 
 ```env
 API_BASE_URL=http://localhost:3000
@@ -159,7 +167,6 @@ pnpm test:integration
 The integration test creates two disposable targets at example.invalid, checks grouping, filtering and deletion, verifies proxy restrictions, and cleans up only its own targets. Keep the Worker stopped for this test. It does not use real channels or edit runtime files directly.
 
 Implementation evidence includes deterministic Worker coverage (180 tests) and the root `pnpm test:smoke` Docker Gates A-D: classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. The smoke uses deterministic fake Streamlink; it does not validate a real platform, network, captured media, or playable MP4. Browser automation timed out repeatedly, so visual rendering, responsive layout and browser-driven create/delete/polling interactions still require the manual workflow above.
-
 
 ## Wave 04.5 recording storage controls
 

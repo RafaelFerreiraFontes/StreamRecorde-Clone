@@ -1,9 +1,36 @@
 # StreamRecorder Clone — Project Status
 
+## Post-Wave 05.5 Operational Readiness Checkpoint
+
+Documentation checkpoint only; existing wave statuses and human approvals below remain unchanged. New Docker stability testing has **not** been claimed or recorded. See [the operational guide](README.md#1-operational-checkpoint-status) and [unfilled human test matrix](docs/DOCKER-STABILITY-TESTING.md).
+
+Approved deployment contract: A = three-service JSON/local without PostgreSQL; B = relational/local with PostgreSQL 17 and persistent Worker outbox; C = relational/authenticated with exact `AUTH_TRUSTED_ORIGINS`. B/C require `POSTGRES_PASSWORD` and shared `INTERNAL_API_TOKEN`.
+
+Operational packaging now uses explicit tracked overlays and production CLI wrappers. Automated validation is reported separately; human stability testing remains unrecorded.
+
+### Docker Modes Verification Matrix
+
+| Mode                                    | Compose Configuration (`COMPOSE_CONFIG_PASS`) | Isolated Runtime Execution (`ISOLATED_RUNTIME_PASS`)             | Human Stability Testing (`USER_STABILITY_TEST_PENDING`) |
+| --------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------- |
+| **Mode A** (JSON / local)               | **PASS** (`compose.yml`)                      | **PASS** (API & Frontend `/health` 200 in disposable project)    | **PENDING** (Reserved for human evaluation)             |
+| **Mode B** (PostgreSQL / local)         | **PASS** (A + `compose.relational.yml`)       | **PASS** (Migrated PostgreSQL 17, Bridge, API/Frontend 200)      | **PENDING** (Reserved for human evaluation)             |
+| **Mode C** (PostgreSQL / authenticated) | **PASS** (B + `compose.authenticated.yml`)    | **PASS** (Migrated, enrolled user, API/Frontend 200, unauth 401) | **PENDING** (Reserved for human evaluation)             |
+
+### Production Administrative CLI Verification
+
+- **Production Migration CLI (`dist/database/migrate.js`)**: **PASS** (Executed in disposable container against isolated PostgreSQL 17 instance; verified schema and constraints applied cleanly).
+- **Production User Management CLI (`dist/auth/users-cli.js`)**:
+  - `create <username> --email <email>` via stdin password: **PASS** (Executed with noninteractive stdin in isolated production container; verified no password in command arguments, logs, or image layers).
+  - `list`: **PASS** (JSON parsed; confirmed created user with `enabled: true`, `has_password: true`).
+  - `disable <username>`: **PASS** (Verified user transitioned to `enabled: false`).
+  - `enable <username>`: **PASS** (Verified user restored to `enabled: true`).
+  - Interactive TTY no-echo prompt: **PENDING** (Requires interactive human terminal; separated from automated noninteractive stdin verification).
+
 ## Wave 05.5 — User, Authentication and Ownership (Completed & Human-Approved)
 
 Wave 05.5 implementation, integration QA (Phases A, B, C) and operational
 documentation are complete and formally human-approved.
+
 - Authenticated startup implementation: completed.
 - Authenticated startup QA: passed across unit, isolated PostgreSQL integration, and Docker smoke suites.
 - Authenticated startup capability: explicit opt-in with fail-closed prerequisite validation (`RELATIONAL_STORAGE=true`, valid PostgreSQL `DATABASE_URL`, non-empty `AUTH_TRUSTED_ORIGINS`, reachable database, Wave 05.5 ownership schema/composite constraints, and an enabled password-enrolled user).
@@ -25,6 +52,7 @@ does not prove playable MP4.
 
 Terra and Coordinator validation (2026-10-23, verified with Node 25.9.0, pnpm 11.20.0,
 Python 3.12.4 and `.venv` Python 3.13.9 / Ruff 0.15.6):
+
 - `pnpm lint` (`node scripts/lint-repository.mjs lint`): PASS (exit 0, 0 ESLint/Ruff diagnostics across `scripts`, `api`, `frontend`, `worker`; SHA-256 tracked-file inventory identical before and after).
 - `pnpm format:check` (`node scripts/lint-repository.mjs format:check`): PASS (exit 0, Prettier and Ruff format checks clean; SHA-256 tracked-file inventory identical before and after).
 - `git diff --check`: PASS (exit 0).
@@ -34,8 +62,6 @@ Python 3.12.4 and `.venv` Python 3.13.9 / Ruff 0.15.6):
 - `pnpm --dir frontend run typecheck`, `pnpm --dir frontend run test` (38 passed, 0 failed), `pnpm --dir frontend run build`, and `pnpm --dir frontend run test:integration` (isolated localhost stack): PASS (exit 0).
 - `C:\Python312\python.exe -m unittest discover -s worker -p "test_*.py"` (198 passed) and `C:\Python312\python.exe -m pytest worker/test_worker.py` (198 passed): PASS (exit 0).
 - `docker compose -f compose.yml config --quiet` and `pnpm test:smoke` (18 JSON gates + relational bridge E2E proxy, Worker outbox recovery, zero duplicates, and DB/API restart durability): PASS (exit 0).
-- Test containers/volumes and private temporary fixtures were removed (`docker ps -a` and `docker volume ls` empty); pre-existing application image tags were restored. No normal storage, engines, dependencies or global runtimes were changed.
-- `docker compose -f compose.yml config --quiet` and `pnpm test:smoke` (`node scripts/docker-integration-smoke.mjs && node scripts/docker-bridge-smoke.mjs` in isolated projects `streamrecorder-smoke-*` and `streamrecorder-wave05-relational-qa-c3746edf607e`): PASS (exit 0; 18 JSON gates + relational bridge E2E proxy/internal boundary, Worker restart outbox replay, zero duplicates and DB/API restart durability).
 - Test containers/volumes and private temporary fixtures were removed (`docker ps -a` and `docker volume ls` empty); pre-existing application image tags were restored. No normal storage, engines, dependencies or global runtimes were changed.
 
 ## Current Milestone
@@ -95,12 +121,12 @@ Historical Wave 05 Task 07 verification: API 157 passed / 37 DB-gated skipped (a
 
 ## Transitional Architecture / Technical Debt
 
-| Shared JSON | Responsibility today |
-| --- | --- |
-| watchlist.json | WatchTarget configuration and name-based Creator grouping |
-| channels_status.json | Operational/runtime snapshot |
-| streams.json | Stream history |
-| sessions.json | Legacy Recording history (channel_id compatibility) |
+| Shared JSON          | Responsibility today                                      |
+| -------------------- | --------------------------------------------------------- |
+| watchlist.json       | WatchTarget configuration and name-based Creator grouping |
+| channels_status.json | Operational/runtime snapshot                              |
+| streams.json         | Stream history                                            |
+| sessions.json        | Legacy Recording history (channel_id compatibility)       |
 
 The table describes default JSON mode. In relational bridge mode PostgreSQL is
 domain authority and channels_status.json is a replaceable operational snapshot.
@@ -121,6 +147,7 @@ Redis/BullMQ; queue-backed Recording Jobs; Tags; SSE; Worker heartbeat; Tauri; G
 ### Completed Waves
 
 The inspected Wave 04, 04.5, 04.75, 05, and 05.5 task frontmatter is done:
+
 - Wave 04/04.5/04.75: Worker reliability/probe corrections; enabled and recording-folder/browser controls; quality/URL editing and adaptive quality integration.
 - Wave 05 ([PostgreSQL + Definitive Domain Persistence](.github/tasks/wave-05/README.md)): Architecture decisions (T01), PostgreSQL 17 + Drizzle foundation (T02), Creator & WatchTarget relational persistence (T03), Stream & Recording persistence with composite foreign key (T04), Option A Worker bridge with durable outbox and fail-closed checkpoints (T05), Legacy JSON migration CLI with transactional import and SHA-256 manifests (T06), and Docker live integration QA (Scenarios A and B) and documentation (T07).
 - Wave 05.5 ([User, Authentication and Ownership](.github/tasks/wave-05.5/README.md)): Identity & ownership decisions (T01), User schema & local account migration (T02), Authentication & session lifecycle (T03), Domain ownership & legacy authorization (T04), Worker ownership & filesystem isolation (T05), Repository linting & code readability (T05.5), Frontend authentication & proxy isolation (T06), and Wave integration QA, Phase B startup prerequisite validation & operational documentation (T07). All tasks completed and human-approved on branch `wave-05.5-user-authentication-ownership`.
@@ -131,21 +158,21 @@ Wave 06 — Redis/BullMQ + Recording Jobs: planned. Background queue orchestrati
 
 ### Planned Waves
 
-| Wave | Direction |
-| --- | --- |
-| 06 | Redis/BullMQ + Recording Jobs |
-| 06.5 | Tags + advanced filters |
-| 07 | Local Recording Storage + file lifecycle |
+| Wave | Direction                                            |
+| ---- | ---------------------------------------------------- |
+| 06   | Redis/BullMQ + Recording Jobs                        |
+| 06.5 | Tags + advanced filters                              |
+| 07   | Local Recording Storage + file lifecycle             |
 | 07.5 | Local recording management + storage policies/limits |
-| 08 | SSE + Worker heartbeat |
-| 08.5 | Tauri 2 Desktop Application |
-| 09 | Google Drive + CloudStorageConnection + OAuth |
-| 09.5 | Optional Cloud Export / Upload |
-| 10 | Dropbox + OneDrive |
-| 10.5 | Local/cloud retention and cleanup policies |
-| 11 | Invite-only + user limits for future Hosted Mode |
-| 12 | Hosted deployment + production hardening |
-| 13 | Compliance/legal + observability + release hardening |
+| 08   | SSE + Worker heartbeat                               |
+| 08.5 | Tauri 2 Desktop Application                          |
+| 09   | Google Drive + CloudStorageConnection + OAuth        |
+| 09.5 | Optional Cloud Export / Upload                       |
+| 10   | Dropbox + OneDrive                                   |
+| 10.5 | Local/cloud retention and cleanup policies           |
+| 11   | Invite-only + user limits for future Hosted Mode     |
+| 12   | Hosted deployment + production hardening             |
+| 13   | Compliance/legal + observability + release hardening |
 
 Roadmap numbering may evolve. Wave 07 extends existing local capture/browser foundations; it does not mean local output is absent today.
 Possible later desktop subtasks: Desktop Shell, Native Recording Folder Integration, Local Runtime Manager, System Tray / Background Behavior, Packaging / Installer, Desktop Integration QA. No such tasks are created now; service packaging remains undecided.

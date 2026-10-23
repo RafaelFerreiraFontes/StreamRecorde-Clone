@@ -114,7 +114,15 @@ try {
   const env = { ...process.env, DATABASE_URL: dynamicDatabaseUrl };
 
   console.log("1. Applying Drizzle migrations...");
-  run(process.execPath, ["-r", "ts-node/register", "src/database/migrate.ts"], env, "api");
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      run(process.execPath, ["-r", "ts-node/register", "src/database/migrate.ts"], env, "api");
+      break;
+    } catch (error) {
+      if (attempt === 5) throw error;
+      execFileSync("node", ["-e", "setTimeout(() => {}, 1000)"]);
+    }
+  }
   console.log("PASS 1: Clean migrations applied");
 
   console.log("2. Running legacy dry-run...");

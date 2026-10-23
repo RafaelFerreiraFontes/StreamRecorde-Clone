@@ -545,7 +545,7 @@ async function runGateC2() {
     `${volumes.runtime}:/data`,
     "--entrypoint",
     "sh",
-    "streamrecorder-worker:wave-05",
+    "streamrecorder-worker:wave-05.5",
     "-ceu",
     "chown root:root /data /data/*.json; chmod 0555 /data; chmod 0444 /data/*.json",
   ]);
@@ -558,7 +558,7 @@ async function runGateC2() {
     `${volumes.runtime}:/data`,
     "--entrypoint",
     "sh",
-    "streamrecorder-worker:wave-05",
+    "streamrecorder-worker:wave-05.5",
     "-ceu",
     'probe=/data/.c2-sibling-create-must-fail; if (: > "$probe") 2>/dev/null; then rm -f "$probe"; exit 1; fi',
   ]);
@@ -610,7 +610,7 @@ async function runGateC2() {
     `${volumes.runtime}:/data`,
     "--entrypoint",
     "python",
-    "streamrecorder-worker:wave-05",
+    "streamrecorder-worker:wave-05.5",
     "-c",
     "import json,os,tempfile; p='/data/watchlist.json'; v=json.load(open(p)); v[0]['enabled']=False; fd,t=tempfile.mkstemp(prefix='.watchlist.',dir='/data'); f=os.fdopen(fd,'w'); json.dump(v,f,separators=(',',':')); f.close(); os.chown(t,0,0); os.chmod(t,0o444); os.replace(t,p)",
   ]);
@@ -624,7 +624,7 @@ async function runGateC2() {
     `${volumes.runtime}:/data`,
     "--entrypoint",
     "sh",
-    "streamrecorder-worker:wave-05",
+    "streamrecorder-worker:wave-05.5",
     "-ceu",
     "chown 1000:1000 /data /data/*.json; chmod 2775 /data; chmod 0664 /data/*.json",
   ]);
@@ -637,7 +637,7 @@ async function runGateC2() {
     `${volumes.runtime}:/data`,
     "--entrypoint",
     "sh",
-    "streamrecorder-worker:wave-05",
+    "streamrecorder-worker:wave-05.5",
     "-ceu",
     'python -c \'import json,os,tempfile; p="/data/watchlist.json"; v=json.load(open(p)); v[0]["enabled"]=False; fd,t=tempfile.mkstemp(prefix=".watchlist.",dir="/data"); f=os.fdopen(fd,"w"); json.dump(v,f,separators=(",",":")); f.close(); os.replace(t,p)\'; probe=/data/.c2-recovery-probe; printf c2 > "$probe.tmp"; mv "$probe.tmp" "$probe"; test "$(cat "$probe")" = c2; rm "$probe"',
   ]);
@@ -758,7 +758,7 @@ async function resetGateD(scenario, clearWatchlist = false) {
     `${volumes.recordings}:/recordings`,
     "--entrypoint",
     "sh",
-    "streamrecorder-worker:wave-05",
+    "streamrecorder-worker:wave-05.5",
     "-ceu",
     "rm -rf /recordings/*",
   ]);
@@ -1069,7 +1069,7 @@ async function inspectNormal(name) {
         `${name}:ro`,
         "--entrypoint",
         "python",
-        "streamrecorder-worker:wave-05",
+        "streamrecorder-worker:wave-05.5",
         "-c",
         auditSource,
       ])
@@ -1180,7 +1180,7 @@ async function main() {
     `${volumes.state}:/smoke-state`,
     "--entrypoint",
     "sh",
-    "streamrecorder-worker:wave-05",
+    "streamrecorder-worker:wave-05.5",
     "-ceu",
     "mkdir -p /runtime /recordings /smoke-state; chown 1000:1000 /runtime /recordings /smoke-state; chmod 2775 /runtime /recordings /smoke-state",
   ]);
@@ -1199,7 +1199,7 @@ async function main() {
       `${volumes.runtime}:/data`,
       "--entrypoint",
       "python",
-      "streamrecorder-worker:wave-05",
+      "streamrecorder-worker:wave-05.5",
       "-c",
       "import json,pathlib; root=pathlib.Path('/data'); values={'watchlist.json':[{'id':'smoke-seed','channel_name':'smoke-seed','platform':'twitch','url':'https://smoke.invalid/seed','quality':'best','enabled':True}],'channels_status.json':{},'streams.json':[],'sessions.json':[]}; [(root/name).write_text(json.dumps(value)) for name,value in values.items()]",
     ]);
@@ -1218,7 +1218,7 @@ async function main() {
           `${volumes.runtime}:/isolated`,
           "--entrypoint",
           "python",
-          "streamrecorder-worker:wave-05",
+          "streamrecorder-worker:wave-05.5",
           "-c",
           importSource,
         ])
@@ -1251,7 +1251,7 @@ async function main() {
     `${volumes.state}:/smoke-state`,
     "--entrypoint",
     "sh",
-    "streamrecorder-worker:wave-05",
+    "streamrecorder-worker:wave-05.5",
     "-ceu",
     `python --version; /usr/local/bin/streamlink --version; python -m pip check; id; ${runtimeProbe}`,
   ]);

@@ -1,12 +1,22 @@
 # Wave 05 PostgreSQL Persistence And Operations
 
+## Post-Wave 05.5 Production Operations
+
+Approved checkpoint modes B/C add `compose.relational.yml` to base Compose for PostgreSQL 17 and Worker bridge persistence. C also adds `compose.authenticated.yml`. See the [root operational guide](../README.md#1-operational-checkpoint-status). B/C require private `POSTGRES_PASSWORD` and matching API/Worker `INTERNAL_API_TOKEN`; C requires exact `AUTH_TRUSTED_ORIGINS`.
+
+For a built production API image run `node dist/database/migrate.js`, then `node dist/auth/users-cli.js create <username> [--email <email>]` with interactive no-echo password entry. Approved production wrappers are `db:migrate:prod` and `users:prod`. Existing source scripts remain `pnpm --dir api db:migrate` and `pnpm --dir api users ...`. Do not run source/ts-node scripts in the production image. Use a one-off container if the API cannot start before migration/account enrollment; the CLI does not require the HTTP server to be healthy.
+
+Authenticated startup fails closed for missing relational configuration, unreachable database, missing ownership schema/constraints or lack of an enabled password-enrolled account. It does not migrate or import automatically. Back up and quiesce writers before the legacy migration procedure below. After cutover, PostgreSQL is authority; operational `channels_status.json` is not a domain backup and stale JSON is not rollback.
+
+Preserve the bridge named volume `worker-outbox` mounted at `/outbox`, including pending events and active checkpoints, alongside database/media backups. Stop new work, allow or account for active captures, and record pending state before backup. Recover by restoring database/API connectivity and observing durable event acknowledgment; never delete outbox files to make a backlog disappear. Use the [unfilled stability matrix](../docs/DOCKER-STABILITY-TESTING.md) for outage/restart evidence. No new human recovery test is claimed here.
+
 ## Wave 05.5 Operations: Supported Modes And Activation Gate
 
-| Persistence / identity | Normal startup | Operator contract |
-| --- | --- | --- |
-| JSON / local | Default | `RELATIONAL_STORAGE=false`, `IDENTITY_MODE=local`, `PERSISTENCE_MODE=direct_json`; no login, DB or User creation. |
-| PostgreSQL / local | Opt-in | `RELATIONAL_STORAGE=true`, `IDENTITY_MODE=local`, explicit migrations and `DATABASE_URL`; one persistent bootstrap `local` User. Use `PERSISTENCE_MODE=bridge` on API and Worker for relational authority. |
-| JSON / authenticated | Unsupported | Fails closed; never switches persistence or invents an owner. |
+| Persistence / identity     | Normal startup  | Operator contract                                                                                                                                                                                                                                                                                                                   |
+| -------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| JSON / local               | Default         | `RELATIONAL_STORAGE=false`, `IDENTITY_MODE=local`, `PERSISTENCE_MODE=direct_json`; no login, DB or User creation.                                                                                                                                                                                                                   |
+| PostgreSQL / local         | Opt-in          | `RELATIONAL_STORAGE=true`, `IDENTITY_MODE=local`, explicit migrations and `DATABASE_URL`; one persistent bootstrap `local` User. Use `PERSISTENCE_MODE=bridge` on API and Worker for relational authority.                                                                                                                          |
+| JSON / authenticated       | Unsupported     | Fails closed; never switches persistence or invents an owner.                                                                                                                                                                                                                                                                       |
 | PostgreSQL / authenticated | Explicit opt-in | Set `IDENTITY_MODE=authenticated`, `RELATIONAL_STORAGE=true`, valid PostgreSQL `DATABASE_URL` and non-empty exact `AUTH_TRUSTED_ORIGINS`. Startup validates reachability, Wave 05.5 ownership schema/composite constraints and an enabled password-enrolled user before JSON initialization or HTTP listening; any failure exits 1. |
 
 Local remains the default. Apply migrations and provision an enabled password user
@@ -115,8 +125,7 @@ In isolated authenticated testing apps, domain routes require a valid
 The internal Worker token is not a human credential. Unsafe POST/PATCH/DELETE
 requests additionally require a trusted Origin or Referer (403 otherwise).
 Unknown and foreign resources or parent filters return 404. Same-name Creators
-are independent across owners; ambiguous active names within one owner return
-409. Database failures return a bounded `503 Database unavailable`, without SQL
+are independent across owners; ambiguous active names within one owner return 409. Database failures return a bounded `503 Database unavailable`, without SQL
 details or a JSON fallback.
 
 History retains its original owner after configuration archival. Recording
@@ -245,19 +254,19 @@ requires an empty domain database; it is not a merge/upsert tool.
 ### Quiesce And Capture
 
 1. Prevent new launches (disable targets through the current API if necessary),
-	wait for existing captures and terminal persistence to finish, and record any
-	configuration changes. Disabled targets remain disabled after migration.
+   wait for existing captures and terminal persistence to finish, and record any
+   configuration changes. Disabled targets remain disabled after migration.
 2. If an outbox exists, drain pending events and resolve active checkpoints.
-	Never delete pending events to force a gate. Stop API and Worker writers.
+   Never delete pending events to force a gate. Stop API and Worker writers.
 3. Retain original JSON, outbox/checkpoints and media. Back up any existing DB;
-	use a new empty destination rather than dropping existing data for import.
+   use a new empty destination rather than dropping existing data for import.
 4. Run dry-run and resolve every error. Exact repeated Creator names group
-	sibling targets. Different trimmed spellings with the same lowercase key are
-	ambiguous: correct an explicitly reviewed source copy rather than guessing
-	by channel or URL. No automatic mapping override is provided.
+   sibling targets. Different trimmed spellings with the same lowercase key are
+   ambiguous: correct an explicitly reviewed source copy rather than guessing
+   by channel or URL. No automatic mapping override is provided.
 5. Capture a new backup outside the source directory. `--quiesced` attests that
-	writers are stopped and the outbox is drained; it cannot prove remote process
-	state. The CLI rereads all bytes to reject observed movement during capture.
+   writers are stopped and the outbox is drained; it cannot prove remote process
+   state. The CLI rereads all bytes to reject observed movement during capture.
 
 Examples from the repository root (placeholder private synthetic directories):
 
@@ -692,14 +701,14 @@ or declaring persistence successful.
 Startup replays pending events before scanning active checkpoints:
 
 - A verified-dead recorded PID produces `error` with reason
-	`worker_restart_interruption`; its checkpoint is removed only after terminal
-	acknowledgement. Windows uses read-only process queries, never `os.kill`.
+  `worker_restart_interruption`; its checkpoint is removed only after terminal
+  acknowledgement. Windows uses read-only process queries, never `os.kill`.
 - Missing/live/uncertain PIDs block only that target and retain its checkpoint.
-	PID reuse also remains blocked; no unknown process is terminated. Other
-	targets can proceed once pending deliveries are drained.
+  PID reuse also remains blocked; no unknown process is terminated. Other
+  targets can proceed once pending deliveries are drained.
 - A saved terminal event replays its original outcome and ID, not a fabricated
-	interruption. A corrupt checkpoint refuses Worker startup; corrupt pending
-	events block launches instead of losing data.
+  interruption. A corrupt checkpoint refuses Worker startup; corrupt pending
+  events block launches instead of losing data.
 
 For ambiguous ownership, stop new work, preserve outbox/media, identify the
 actual capture process and corresponding database Recording, and reconcile the
@@ -716,15 +725,15 @@ after container recreation, and removes only its disposable project/volume.
 Python must be available (`PYTHON` can select its executable). The seven matrix
 rows are covered by internal API and fake-process Worker tests:
 
-| Scenario | Automated evidence |
-| --- | --- |
-| Unavailable before capture | Actual stopped test PostgreSQL returns 503; Worker unit tests prevent launch without start acknowledgement/config refresh. |
-| Unavailable during capture | A fake-process Worker stays managed through actual PostgreSQL shutdown; output remains local. |
-| Terminal write outage | The same Worker retains its checkpoint/event and pending runtime state, then retries after PostgreSQL returns. |
-| Worker restart | A terminated Python process's verified-dead PID is reconciled through the real API/database; unit tests cover ambiguous ownership and immutable saved terminals. |
-| API restart | The API application/pool is recreated and returns the original committed response without duplicate rows. |
-| PostgreSQL restart | Terminal replay succeeds after actual test PostgreSQL restart; the foundation harness also recreates the container and verifies retained data. |
-| Duplicate/out-of-order | Concurrent/exact replay, conflicting payloads, pre-start terminals, cross-target updates and terminal regressions use the real database. |
+| Scenario                   | Automated evidence                                                                                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unavailable before capture | Actual stopped test PostgreSQL returns 503; Worker unit tests prevent launch without start acknowledgement/config refresh.                                       |
+| Unavailable during capture | A fake-process Worker stays managed through actual PostgreSQL shutdown; output remains local.                                                                    |
+| Terminal write outage      | The same Worker retains its checkpoint/event and pending runtime state, then retries after PostgreSQL returns.                                                   |
+| Worker restart             | A terminated Python process's verified-dead PID is reconciled through the real API/database; unit tests cover ambiguous ownership and immutable saved terminals. |
+| API restart                | The API application/pool is recreated and returns the original committed response without duplicate rows.                                                        |
+| PostgreSQL restart         | Terminal replay succeeds after actual test PostgreSQL restart; the foundation harness also recreates the container and verifies retained data.                   |
+| Duplicate/out-of-order     | Concurrent/exact replay, conflicting payloads, pre-start terminals, cross-target updates and terminal regressions use the real database.                         |
 
 Fake subprocesses and fixture bytes do not prove real-platform behavior, MP4
 validity, or playability. This stage does not modify the media pipeline.

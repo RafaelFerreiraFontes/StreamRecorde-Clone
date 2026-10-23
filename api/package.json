@@ -26,7 +26,9 @@
     "lint:fix": "node ../scripts/lint-repository.mjs lint:fix api",
     "format:check": "node ../scripts/lint-repository.mjs format:check api",
     "format:write": "node ../scripts/lint-repository.mjs format:write api",
-    "lint:check": "node ../scripts/lint-repository.mjs lint api"
+    "lint:check": "node ../scripts/lint-repository.mjs lint api",
+    "db:migrate:prod": "node dist/database/migrate.js",
+    "users:prod": "node dist/auth/users-cli.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

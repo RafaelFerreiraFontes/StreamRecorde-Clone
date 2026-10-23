@@ -1,5 +1,15 @@
 # API — StreamRecorder Clone
 
+## Post-Wave 05.5 Operations Checkpoint
+
+See the [root mode/environment contract](../README.md#5-deployment-modes) and [human stability runbook](../docs/DOCKER-STABILITY-TESTING.md). A is JSON/local; B adds relational/local PostgreSQL 17; C additionally enables authenticated identity. B/C require `POSTGRES_PASSWORD` and a shared API/Worker `INTERNAL_API_TOKEN`; C requires exact browser `AUTH_TRUSTED_ORIGINS` and an enabled password-enrolled user. Local mode is not authenticated hosting.
+
+Production API commands after building: `node dist/database/migrate.js` and `node dist/auth/users-cli.js <command>`. Approved wrappers `db:migrate:prod` and `users:prod` are available; existing `db:migrate` / `users` scripts use source TypeScript. Do not assume development tooling exists in the production image. Migrate and provision using a one-off API container before authenticated startup; migrations are not automatic.
+
+User CLI accepts `create <username> [--email <email>]`, `set-password <username>`, `disable <username>`, `enable <username>`, and `list`. Password input is a no-echo prompt or controlled stdin, never a command argument. Disabling/resetting an account and logout require explicit session-invalidation tests; UI navigation alone proves nothing.
+
+Target API image is `streamrecorder-api:wave-05.5`, loopback host `API_HOST_PORT=3000`. Select overlays explicitly as described in the root guide. Existing bilingual structure below is retained as reference, not evidence that the checkpoint passed.
+
 ## Wave 05.5 Identity, Accounts And Recovery
 
 Normal modes are JSON/local (default, no login or User creation) and opt-in
@@ -801,6 +811,7 @@ Essa integração entre API e Worker é uma arquitetura transitória do MVP base
 ## Resumo executivo
 
 A API atual é uma camada de observação, domínio e compatibilidade em torno do MVP de monitoramento e gravação. Ela expõe o modelo atual de Creator/WatchTarget/Stream/Recording, preserva compatibility com o conjunto legacy e serve como integração entre o código de domínio e a gestão de arquivos JSON do Worker.
+
 # Wave 04.5 usability
 
 `PATCH /watch-targets/:id` accepts strict boolean `enabled` and/or `recording_subdir`; omitted fields stay unchanged. Legacy entries without `enabled` default to `true`, and explicit `false` survives reload. The existing Worker behavior is unchanged: disabled targets skip new probes while active captures continue.
