@@ -58,6 +58,7 @@ const password = "synthetic-password-123";
 const originalEnvironment = { ...process.env };
 
 describeDatabase("domain ownership HTTP authorization", () => {
+  jest.setTimeout(30000);
   let app: INestApplication<Server>;
   let database: DatabaseService;
   let pool: Pool;
@@ -489,6 +490,59 @@ describeDatabase("domain ownership HTTP authorization", () => {
         )
       ).rows[0].count,
     ).toBe(1);
+  });
+
+  it("preserves other-owner history and Worker visibility during explicit relational/local rollback", async () => {
+    process.env.INTERNAL_API_TOKEN = "test-only-rollback-worker";
+    const first = await target();
+    const second = await target(bob.cookie);
+    await history(first.id);
+    await history(second.id);
+    const before = await snapshot();
+    await post("/auth/logout", {}).expect(200);
+    await get("/recordings").expect(401);
+
+    await app.close();
+    environment.IDENTITY_MODE = "local";
+    await startApi();
+    const localOwner = await database.resolveBootstrapLocalUser();
+    expect(await database.resolveBootstrapLocalUser()).toBe(localOwner);
+    for (const path of [
+      "creators",
+      "watch-targets",
+      "streams",
+      "recordings",
+      "streamer",
+      "session",
+    ])
+      expect((await http().get(`/${path}`).expect(200)).body as unknown).toEqual([]);
+    await http().get(`/watch-targets/${first.id}`).expect(404);
+    await http().get(`/watch-targets/${second.id}`).expect(404);
+    const configs = async () =>
+      (
+        await http()
+          .get("/internal/v1/watch-targets/execution-configs")
+          .set("X-Internal-Token", process.env.INTERNAL_API_TOKEN!)
+          .expect(200)
+      ).body as { id: string }[];
+    expect((await configs()).map((entry) => entry.id).sort()).toEqual([first.id, second.id].sort());
+    await runUsersCLI(["disable", "bobby"], database, { write: () => undefined });
+    expect((await configs()).map((entry) => entry.id)).toEqual([first.id]);
+    expect(await snapshot()).toEqual(before);
+    expect(
+      (
+        await pool.query<{ revoked: boolean }>(
+          "SELECT revoked_at IS NOT NULL AS revoked FROM sessions WHERE user_id = ANY($1::uuid[])",
+          [[alice.id, bob.id]],
+        )
+      ).rows.every((row) => row.revoked),
+    ).toBe(true);
+
+    await app.close();
+    environment.IDENTITY_MODE = "authenticated";
+    await startApi();
+    await get("/watch-targets").expect(401);
+    await get("/watch-targets", bob.cookie).expect(401);
   });
 
   it("returns only owned file metadata even when two owners share a directory", async () => {

@@ -1,5 +1,43 @@
 # StreamRecorder Clone — Project Status
 
+## Wave 05.5 — User, Authentication and Ownership (Completed & Human-Approved)
+
+Wave 05.5 implementation, integration QA (Phases A, B, C) and operational
+documentation are complete and formally human-approved.
+- Authenticated startup implementation: completed.
+- Authenticated startup QA: passed across unit, isolated PostgreSQL integration, and Docker smoke suites.
+- Authenticated startup capability: explicit opt-in with fail-closed prerequisite validation (`RELATIONAL_STORAGE=true`, valid PostgreSQL `DATABASE_URL`, non-empty `AUTH_TRUSTED_ORIGINS`, reachable database, Wave 05.5 ownership schema/composite constraints, and an enabled password-enrolled user).
+- Authenticated startup on personal installation: not activated.
+- Hosted deployment: not authorized.
+- Merge into master: not performed.
+
+Supported normal operation remains JSON/local by default, or explicitly migrated
+PostgreSQL/local with stable bootstrap `local`. JSON/authenticated is unsupported;
+PostgreSQL/authenticated requires explicit opt-in and validated prerequisites. There is no public
+signup/default credential, public media, per-user physical folders, hosted
+service, Redis, Tags, SSE or cloud export. See
+[operations](api/README.database.md#wave-055-operations-supported-modes-and-activation-gate)
+for account CLI, security configuration, migration/cutover and relational/local
+rollback. Other owners remain stored and invisible to local domain routes, but
+Worker monitoring and shared-root browsing have explicit operator caveats.
+Required blocked/skipped checks must not be reported as passing; synthetic media
+does not prove playable MP4.
+
+Terra and Coordinator validation (2026-10-23, verified with Node 25.9.0, pnpm 11.20.0,
+Python 3.12.4 and `.venv` Python 3.13.9 / Ruff 0.15.6):
+- `pnpm lint` (`node scripts/lint-repository.mjs lint`): PASS (exit 0, 0 ESLint/Ruff diagnostics across `scripts`, `api`, `frontend`, `worker`; SHA-256 tracked-file inventory identical before and after).
+- `pnpm format:check` (`node scripts/lint-repository.mjs format:check`): PASS (exit 0, Prettier and Ruff format checks clean; SHA-256 tracked-file inventory identical before and after).
+- `git diff --check`: PASS (exit 0).
+- `pnpm --dir api exec tsc --noEmit`, `pnpm --dir api test` (12 suites passed, 3 DB-gated skipped; 200 passed, 80 DB-gated skipped), `pnpm --dir api run build`: PASS (exit 0).
+- `node scripts/test-db-foundation.mjs` (`streamrecorder-test-db` on `127.0.0.1:55432`): PASS (exit 0; 6 suites / 88 passed, including relational/local rollback case, authenticated startup prerequisite cases, and DB restart persistence probe).
+- `node scripts/test-wave05-rehearsal.mjs` (`streamrecorder-rehearsal-41a446b09db9`): PASS (exit 0; all 7 phases including clean migrations, dry-run, backup/manifest, transactional import, verify, idempotence, forward repair and rollback invariants), plus disposable PostgreSQL `pg_dump`/restore snapshot verification.
+- `pnpm --dir frontend run typecheck`, `pnpm --dir frontend run test` (38 passed, 0 failed), `pnpm --dir frontend run build`, and `pnpm --dir frontend run test:integration` (isolated localhost stack): PASS (exit 0).
+- `C:\Python312\python.exe -m unittest discover -s worker -p "test_*.py"` (198 passed) and `C:\Python312\python.exe -m pytest worker/test_worker.py` (198 passed): PASS (exit 0).
+- `docker compose -f compose.yml config --quiet` and `pnpm test:smoke` (18 JSON gates + relational bridge E2E proxy, Worker outbox recovery, zero duplicates, and DB/API restart durability): PASS (exit 0).
+- Test containers/volumes and private temporary fixtures were removed (`docker ps -a` and `docker volume ls` empty); pre-existing application image tags were restored. No normal storage, engines, dependencies or global runtimes were changed.
+- `docker compose -f compose.yml config --quiet` and `pnpm test:smoke` (`node scripts/docker-integration-smoke.mjs && node scripts/docker-bridge-smoke.mjs` in isolated projects `streamrecorder-smoke-*` and `streamrecorder-wave05-relational-qa-c3746edf607e`): PASS (exit 0; 18 JSON gates + relational bridge E2E proxy/internal boundary, Worker restart outbox replay, zero duplicates and DB/API restart durability).
+- Test containers/volumes and private temporary fixtures were removed (`docker ps -a` and `docker volume ls` empty); pre-existing application image tags were restored. No normal storage, engines, dependencies or global runtimes were changed.
+
 ## Current Milestone
 
 Wave 05 (PostgreSQL Domain Persistence, Option A Worker Bridge, Migration CLI, and Live Docker Integration) is complete and integrated into `master` via PR #2, with Compose volume driver hardening incorporated. All automated suites and live Docker smoke scenarios have been verified. Existing installations remain JSON-authoritative by default until explicit operator cutover; no automatic user data migration has occurred.
@@ -53,7 +91,7 @@ explicit standalone finalization step is invoked.
 ### Testing
 
 Repository contains deterministic Worker unittest/pytest coverage, API Jest tests, frontend component/proxy tests, isolated fake-Streamlink Docker smoke (Scenario A: 18 gates, Scenario B: relational bridge), and isolated migration/rehearsal harness (7 phases).
-Task 07 verification: API 157 passed / 37 DB-gated skipped (all 43 database tests passed in isolated PostgreSQL test harness); frontend 25 passed; Worker unittest 198 passed; Worker pytest 198 passed; API/frontend typechecks and production builds passed; Docker smoke Scenarios A and B passed in isolated containers. Fake media verifies process mechanics and does not prove playable MP4 or live platform recovery.
+Historical Wave 05 Task 07 verification: API 157 passed / 37 DB-gated skipped (all 43 database tests passed in isolated PostgreSQL test harness); frontend 25 passed; Worker unittest 198 passed; Worker pytest 198 passed; API/frontend typechecks and production builds passed; Docker smoke Scenarios A and B passed in isolated containers. Fake media verifies process mechanics and does not prove playable MP4 or live platform recovery.
 
 ## Transitional Architecture / Technical Debt
 
@@ -76,25 +114,25 @@ name-derived. Relational archival/deletion preserves history.
 
 ## Not Implemented Yet
 
-Persisted User/local profile; authentication; ownership; Redis/BullMQ; queue-backed Recording Jobs; Tags; SSE; Worker heartbeat; Tauri; Google Drive/Dropbox/OneDrive integrations; cloud OAuth; CloudStorageConnection; optional CloudExport; automatic retention/storage limits; hosted deployment; invite-only.
+Redis/BullMQ; queue-backed Recording Jobs; Tags; SSE; Worker heartbeat; Tauri; Google Drive/Dropbox/OneDrive integrations; cloud OAuth; CloudStorageConnection; optional CloudExport; automatic retention/storage limits; hosted deployment; invite-only.
 
 ## Roadmap
 
 ### Completed Waves
 
-The inspected Wave 04, 04.5, 04.75, and 05 task frontmatter is done:
+The inspected Wave 04, 04.5, 04.75, 05, and 05.5 task frontmatter is done:
 - Wave 04/04.5/04.75: Worker reliability/probe corrections; enabled and recording-folder/browser controls; quality/URL editing and adaptive quality integration.
 - Wave 05 ([PostgreSQL + Definitive Domain Persistence](.github/tasks/wave-05/README.md)): Architecture decisions (T01), PostgreSQL 17 + Drizzle foundation (T02), Creator & WatchTarget relational persistence (T03), Stream & Recording persistence with composite foreign key (T04), Option A Worker bridge with durable outbox and fail-closed checkpoints (T05), Legacy JSON migration CLI with transactional import and SHA-256 manifests (T06), and Docker live integration QA (Scenarios A and B) and documentation (T07).
+- Wave 05.5 ([User, Authentication and Ownership](.github/tasks/wave-05.5/README.md)): Identity & ownership decisions (T01), User schema & local account migration (T02), Authentication & session lifecycle (T03), Domain ownership & legacy authorization (T04), Worker ownership & filesystem isolation (T05), Repository linting & code readability (T05.5), Frontend authentication & proxy isolation (T06), and Wave integration QA, Phase B startup prerequisite validation & operational documentation (T07). All tasks completed and human-approved on branch `wave-05.5-user-authentication-ownership`.
 
 ### Next Wave
 
-Wave 05.5 — User + authentication + ownership: planned. Local profile/account, password hashing (Argon2/bcrypt), token/session handling, and user isolation.
+Wave 06 — Redis/BullMQ + Recording Jobs: planned. Background queue orchestration decoupled from HTTP requests.
 
 ### Planned Waves
 
 | Wave | Direction |
 | --- | --- |
-| 05.5 | User + authentication + ownership |
 | 06 | Redis/BullMQ + Recording Jobs |
 | 06.5 | Tags + advanced filters |
 | 07 | Local Recording Storage + file lifecycle |
@@ -120,7 +158,7 @@ Possible later desktop subtasks: Desktop Shell, Native Recording Folder Integrat
 - Successful recording state is finished, based on exit code and existing non-empty output. The .mp4 suffix is not proof of a valid MP4; explicit FFmpeg finalization is absent.
 - Worker timestamps omit timezone offsets; migration must not silently reinterpret historical times.
 - Malformed/zero-byte JSON remains an error rather than an empty collection.
-- Current console has no authentication and is intended for a trusted local environment.
+- Normal local console remains unauthenticated and intended for a trusted single operator; authenticated session UI and authorization are implemented/tested but authenticated startup is explicitly opt-in and fail-closed.
 - Recorded Wave 04 documentation leaves real-platform recovery/playability unverified by deterministic tests.
 
 ## Definition of Local-First MVP
@@ -132,5 +170,7 @@ A local user/profile configures Creator and independent WatchTargets, detects a 
 Optional hosted operation with ownership, authentication, invite limits, deployment security, and production hardening. It must not replace Local Mode or make remote infrastructure essential to local recording.
 
 ## Last Updated
+
+2026-10-23: Wave 05.5 completed and human-approved on branch wave-05.5-user-authentication-ownership. All tasks (01–07, including 05.5) are done. Authenticated startup capability is available via explicit opt-in with fail-closed prerequisite validation. Merge into master, deployment, and personal installation activation remain unperformed. See the summary above.
 
 2026-10-21: Wave 05 completed and merged into master via PR #2 with Compose volume driver hardening incorporated. All automated suites (API, Worker unittest/pytest, Frontend, PostgreSQL foundation) and live Docker integration smoke tests (Scenarios A and B) passed. Relational persistence remains opt-in and JSON mode remains default.

@@ -25,7 +25,7 @@ writeFileSync(
   `
 services:
   postgres-test:
-    ports:
+    ports: !override
       - "127.0.0.1::5432"
 `,
 );
@@ -238,13 +238,16 @@ try {
     async function setup() {
       const db = new DatabaseService();
       try {
+        const ownerId = await db.resolveBootstrapLocalUser();
         await db.connection.insert(streams).values({
+          ownerId,
           id: "${postCutoverStreamId}",
           watchTargetId: "${syntheticTargetId}",
           state: "recording",
           startedAt: new Date("2026-10-19T14:00:00Z")
         });
         await db.connection.insert(recordings).values({
+          ownerId,
           id: "${postCutoverRecordingId}",
           watchTargetId: "${syntheticTargetId}",
           streamId: "${postCutoverStreamId}",

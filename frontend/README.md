@@ -1,5 +1,30 @@
 # StreamRecorder integration frontend
 
+## Wave 05.5 Operational Boundary
+
+The default JSON/local dashboard needs no account or database. Opt-in
+PostgreSQL/local uses bootstrap `local`; PostgreSQL/authenticated is explicitly
+opt-in. API startup validates relational storage, a valid PostgreSQL URL, exact
+non-empty trusted origins, database reachability, ownership schema/composite
+constraints and an enabled password-enrolled user before listening. JSON/authenticated is unsupported. There is no signup,
+default credential, public media or hosted deployment.
+
+Account administration, exact `AUTH_TRUSTED_ORIGINS`, host-only session cookies,
+Origin/Referer CSRF policy and rollback checkpoints live in
+[API operations](../api/README.database.md). Session expiry/revocation or account
+disablement clears protected state on 401; a domain 404 does not log out the user.
+A backend outage remains an error, never a switch to local mode. Logout/account
+changes discard old asynchronous snapshots and callbacks; do not remove these
+generation/cancellation guards. Authenticated folders use manual relative entry,
+not shared-root listing. Local browsing assumes a trusted single operator.
+
+Run typecheck, unit/component/proxy tests and build before the HTTP integration
+script. The latter intentionally requires `TEST_FRONTEND_URL` pointing to a
+separately started disposable stack and `TEST_ALLOW_MUTATIONS=true`. Never point
+it at the ordinary installation. A missing fixture is blocked evidence, not a
+passing HTTP test. Keep `API_BASE_URL` server-side and never expose
+`INTERNAL_API_TOKEN` or `DATABASE_URL` to the browser.
+
 This is a technical API + Worker testing console, not the final product UI. It provides a foundation for inspecting the current domain and debugging local integration without adding future infrastructure.
 
 ## Architecture

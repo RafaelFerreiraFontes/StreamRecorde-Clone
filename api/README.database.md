@@ -1,5 +1,99 @@
 # Wave 05 PostgreSQL Persistence And Operations
 
+## Wave 05.5 Operations: Supported Modes And Activation Gate
+
+| Persistence / identity | Normal startup | Operator contract |
+| --- | --- | --- |
+| JSON / local | Default | `RELATIONAL_STORAGE=false`, `IDENTITY_MODE=local`, `PERSISTENCE_MODE=direct_json`; no login, DB or User creation. |
+| PostgreSQL / local | Opt-in | `RELATIONAL_STORAGE=true`, `IDENTITY_MODE=local`, explicit migrations and `DATABASE_URL`; one persistent bootstrap `local` User. Use `PERSISTENCE_MODE=bridge` on API and Worker for relational authority. |
+| JSON / authenticated | Unsupported | Fails closed; never switches persistence or invents an owner. |
+| PostgreSQL / authenticated | Explicit opt-in | Set `IDENTITY_MODE=authenticated`, `RELATIONAL_STORAGE=true`, valid PostgreSQL `DATABASE_URL` and non-empty exact `AUTH_TRUSTED_ORIGINS`. Startup validates reachability, Wave 05.5 ownership schema/composite constraints and an enabled password-enrolled user before JSON initialization or HTTP listening; any failure exits 1. |
+
+Local remains the default. Apply migrations and provision an enabled password user
+before explicitly opting into authenticated startup. Validation does not migrate
+or enroll users automatically; account provisioning alone does not activate login. Keep `DATABASE_URL` and `INTERNAL_API_TOKEN` server-side; never
+commit them or put them in browser configuration/logs. `AUTH_TRUSTED_ORIGINS`
+configures exact browser origins, not internal Worker identity. See account,
+cookie and Origin policy below. There is no public signup or default credential.
+
+### Clean Installation, Upgrade And Recovery Checkpoints
+
+- Clean relational installation: set an explicitly selected database connection,
+  run `pnpm --dir api db:migrate` (checked-in migrations 0000–0004), then start
+  relational/local API and bridge Worker. Migrations are not startup side effects.
+- Existing relational installation: quiesce writers and retain a tested,
+  known-good database backup before applying the ownership migration. Existing
+  domain rows belong to bootstrap `local`; IDs, history, raw timestamps,
+  unknown `stream_id` links and media metadata must survive. Do not import a
+  legacy snapshot into a populated destination.
+- Legacy JSON: follow dry-run -> quiesced backup -> SHA-256 manifest verification
+  -> explicit schema migration -> transactional import -> verify -> cutover-check
+  below. Drain Worker `pending/` and reconcile `active/` checkpoints explicitly;
+  `--quiesced` is an operator assertion, not a remote writer detector.
+- Before writes switch authority, retain source snapshots, DB backup, outbox and
+  private media. After relational writes, prefer forward repair. Never silently
+  switch to JSON, downgrade migrations or discard events to make a gate pass.
+
+### Approved Relational/Local Rollback (Decision Section 12)
+
+This is a rehearsal/runbook, not authorization for normal-installation changes.
+If authenticated operation is separately activated later:
+
+1. Stop new launches and quiesce API/Worker writers. Finish accepted captures,
+   drain pending events and reconcile active checkpoints. Preserve media/outbox.
+2. Take and verify a known-good relational backup with the deployment's PostgreSQL
+   backup tooling. Test restoration only into a separate disposable database;
+   a backup command returning zero does not establish restore correctness.
+3. Revoke sessions before reopening access. Against the explicitly selected,
+   quiesced relational database, an approved operator can execute
+   `UPDATE sessions SET revoked_at = NOW() WHERE revoked_at IS NULL;` and verify
+   no unrevoked sessions remain. This is not a public API or automatic startup
+   action. CLI disablement also transactionally revokes that account's sessions.
+   Disable other accounts via `pnpm --dir api users disable <username>` when
+   their monitoring must stop; re-enabling does not restore revoked sessions.
+   Preserve the bootstrap account and verify its identity rather than
+   deleting/recreating it.
+4. Explicitly select `IDENTITY_MODE=local`, retain `RELATIONAL_STORAGE=true`,
+   `PERSISTENCE_MODE=bridge` and the verified relational database. Restart services
+   only after writer/outbox reconciliation. Do not select direct JSON authority.
+5. Verify bootstrap `local` domain visibility. Other-owner rows remain stored,
+   unchanged and invisible to local-principal domain routes. The Worker still
+   receives enabled targets of all non-disabled owners: local human identity
+   is not a Worker ownership filter.
+
+**Privacy warning:** local filesystem browsing is a trusted single-operator view
+of the shared recording root and can reveal other users' filenames. Returning
+to local mode is not a private multi-user deployment. No rollback reassigns or
+deletes owners, moves media, drops volumes or automatically restores a backup.
+Any restore that loses committed metadata requires an explicit reconciliation
+and human decision before writers resume.
+
+### Troubleshooting And Evidence Limits
+
+- 401: expired/revoked session or disabled account; sign in again only after the
+  cause is resolved. Domain 404 includes foreign/missing IDs and does not mean
+  logout. Invalid unsafe Origin/Referer is 403; rate limiting can return 429.
+- 503 in relational mode: restore PostgreSQL connectivity/schema availability;
+  never select JSON or bootstrap fallback to hide an outage. Frontend proxy
+  transport errors/timeouts are not successful local-session discovery.
+- API/DB restart: valid sessions and committed domain ownership are durable.
+  Worker restart: retain its single-owner `OUTBOX_DIR`; replay pending events
+  and recover active checkpoints before new work. Acknowledgement follows commit.
+- Human logout/expiry does not cancel an accepted capture. Account disablement
+  blocks new launches but permits already accepted work to finish durably.
+- Startup failure: check the selected mode, explicit migrations, connection and
+  internal-token prerequisites without printing secrets. Authenticated startup's
+  fixed guard is expected in Phase A/C, not an installation defect to bypass.
+
+Regression gates: root `pnpm lint`, `pnpm format:check`, `git diff --check`;
+API typecheck/test/build; frontend typecheck/test/build and guarded HTTP
+integration; Worker unittest/pytest; `node scripts/test-db-foundation.mjs`,
+`node scripts/test-wave05-rehearsal.mjs`, Compose config and `pnpm test:smoke`.
+Use only disposable resources. Required skipped/blocked checks are not PASS.
+Synthetic Streamlink output does not establish playable MP4 or live-platform
+recovery. No public media, per-user physical folders, hosted deployment, Redis,
+Tags, SSE or cloud export is introduced.
+
 ## Wave 05.5 Task 04: Domain Authorization
 
 Task 04 propagates the verified human principal through modern domain and
@@ -32,17 +126,17 @@ the target, including archived owned targets; foreign or unknown filters
 return 404 rather than an empty list. Existing IDs, raw timestamps and
 `finished` success states are unchanged.
 
-Until Task 05 establishes owner-safe file metadata, both
-`GET /recordings/filesystem` and `GET /recordings/:id/location` return 401
-without a valid authenticated session and 404 with one, before filesystem
-access. Local mode retains the existing trusted single-operator browser;
-relational/local location lookup authorizes the bootstrap owner's recording.
+Authenticated filesystem listing is unavailable: `GET /recordings/filesystem`
+returns 404 after authentication. `GET /recordings/:id/location` checks ownership
+first (foreign/missing IDs return 404) and returns only owner-safe metadata,
+without sibling filenames or absolute server paths. Local mode retains the
+existing trusted single-operator browser; relational/local location lookup
+authorizes the bootstrap owner's recording.
 No media is moved, exposed or deleted. Privileged internal Worker operations
 retain their existing token-based contracts and are not human-owner-scoped.
 
-Production startup still rejects `IDENTITY_MODE=authenticated` with
-`authenticated mode not yet available`; Task 04 does not activate it. Only
-Task 07 may remove the guard after the remaining gates and human approval.
+Phase B now permits `IDENTITY_MODE=authenticated` only after the fail-closed
+startup prerequisites above pass. JSON/authenticated remains unsupported.
 The two-user HTTP authorization suite uses real login sessions, an isolated
 PostgreSQL database and temporary filesystem fixtures. It is registered in
 `test:db:integration` and the disposable foundation harness below.
@@ -50,11 +144,9 @@ PostgreSQL database and temporary filesystem fixtures. It is registered in
 ## Wave 05.5 Task 03: Accounts And Sessions
 
 Task 03 adds CLI-only account provisioning and `/auth/session`, `/auth/login`,
-and `/auth/logout`. It does not activate authenticated operation. Production
-startup still rejects `IDENTITY_MODE=authenticated` with
-`authenticated mode not yet available`. Only T07 may remove that guard after
-the ownership, filesystem, frontend and integrated validation gates and human
-approval. Tests exercise authenticated paths using isolated Nest testing apps.
+and `/auth/logout`. Phase B enables explicitly configured authenticated startup
+with the fail-closed prerequisites above. Tests exercise authenticated paths using
+isolated Nest testing apps.
 There is no registration endpoint, default password or automatic data cutover.
 
 Apply the explicit migrations first and configure `DATABASE_URL` for the

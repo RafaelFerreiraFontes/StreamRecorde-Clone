@@ -120,13 +120,13 @@ test("backend outage never selects local mode and session retry recovers", async
   };
   mount();
   await screen.findByRole("button", { name: "Retry" });
-  assert.equal(dashboard.authState, "backend_unavailable");
+  await waitFor(() => assert.equal(dashboard.authState, "backend_unavailable"));
   assert.deepEqual(domainCalls, []);
   assert.equal(screen.queryByTestId("domain"), null);
   unavailable = false;
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await screen.findByTestId("domain");
-  assert.equal(dashboard.authState, "local");
+  await waitFor(() => assert.equal(dashboard.authState, "local"));
 });
 
 test("logout and a second login discard old refresh, location, mutation, error and diagnostic completions", async () => {

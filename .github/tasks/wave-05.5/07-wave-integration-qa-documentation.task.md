@@ -4,14 +4,34 @@ wave: "05.5"
 order: 07
 depends_on:
   - 06-frontend-authentication.task.md
-status: planned
+status: done
 ---
 
 # Wave 05.5 — Task 07 — Wave Integration QA and Operational Documentation
 
 ## Status and Preconditions
 
-Planned only; implementation has not started. Read the [wave specification](README.md), project/MVP instructions and the accepted predecessor deliverables. Wait for predecessor validation, independent review and human acceptance under the existing lifecycle. Creating this task does not authorize its execution.
+Phase A (full isolated integration, security and recovery QA across all 12 validation areas, including relational/local rollback rehearsal) and Phase C (operational documentation and repository-wide regression gates) have been executed against the accepted [wave specification](README.md), [T01 decision record](authentication-ownership-decisions.md), project/MVP instructions and accepted T01–T06 deliverables:
+- Normal startup in `api/src/database/identity-mode.ts` intentionally retains the fail-closed guard (`authenticated mode not yet available`) pending separate Phase B human approval (`AUTHENTICATED_ACTIVATION_APPROVAL_REQUIRED`).
+- Executed verification under Node 25.9.0, pnpm 11.20.0, Python 3.12.4 and `.venv` Python 3.13.9 / Ruff 0.15.6:
+  - `pnpm lint` (`node scripts/lint-repository.mjs lint`): PASS (exit 0, 0 diagnostics across `scripts`, `api`, `frontend`, `worker`; SHA-256 tracked-file inventory identical before and after).
+  - `pnpm format:check` (`node scripts/lint-repository.mjs format:check`): PASS (exit 0, Prettier and Ruff format checks clean; SHA-256 tracked-file inventory identical before and after).
+  - `git diff --check`: PASS (exit 0).
+  - `pnpm --dir api exec tsc --noEmit`: PASS (exit 0).
+  - `pnpm --dir api test`: PASS (exit 0; 12 suites passed, 3 DB-gated skipped; 179 tests passed, 73 DB-gated skipped).
+  - `pnpm --dir api run build`: PASS (exit 0).
+  - `node scripts/test-db-foundation.mjs` (isolated Docker project `streamrecorder-test-db` on `127.0.0.1:55432`): PASS (exit 0; 6 suites / 81 tests passed, including `database.integration.spec.ts`, `legacy-migration.integration.spec.ts`, `auth.integration.spec.ts`, `relational-persistence.integration.spec.ts`, `domain-authorization.integration.spec.ts` with 15 tests including relational/local rollback rehearsal, `internal-events.integration.spec.ts`, and `database-persistence-check.mjs` across container stop/rm/up restart).
+  - `node scripts/test-wave05-rehearsal.mjs` (isolated Docker project `streamrecorder-rehearsal-41a446b09db9`): PASS (exit 0; all 7 phases: clean migrations, dry-run, quiesced backup & SHA-256 manifest, transactional import, post-import verify, idempotent replay, pre-activation rollback and post-cutover forward-repair/rollback invariants).
+  - Disposable PostgreSQL `pg_dump` / restore verification: PASS (complete User/Session/domain row snapshot restored identically into separate disposable database).
+  - `pnpm --dir frontend run typecheck`: PASS (exit 0).
+  - `pnpm --dir frontend run test`: PASS (exit 0; 38 tests passed, 0 failed).
+  - `pnpm --dir frontend run build`: PASS (exit 0).
+  - `pnpm --dir frontend run test:integration`: PASS (exit 0 against isolated temporary localhost API/frontend stack).
+  - `C:\Python312\python.exe -m unittest discover -s worker -p "test_*.py"`: PASS (exit 0; 198 tests passed).
+  - `C:\Python312\python.exe -m pytest worker/test_worker.py`: PASS (exit 0; 198 tests passed).
+  - `docker compose -f compose.yml config --quiet`: PASS (exit 0).
+  - `pnpm test:smoke` (`node scripts/docker-integration-smoke.mjs && node scripts/docker-bridge-smoke.mjs` in isolated projects `streamrecorder-smoke-*` and `streamrecorder-wave05-relational-qa-c3746edf607e`): PASS (exit 0; 18 JSON smoke gates + relational bridge E2E proxy/internal boundary, Worker restart with pending outbox replay, zero duplicates, media integrity, and DB/API restart durability).
+  - Isolation and cleanup: `docker ps -a` and `docker volume ls` confirmed empty before and after; pre-existing `wave-05` image tags preserved and restored; temporary directories removed; normal `runtime-data` and `recordings` untouched.
 
 T01's accepted authentication-ownership-decisions.md is required. If it is missing or a relevant decision is unresolved, return to Coordinator review rather than inventing a policy.
 
@@ -41,12 +61,12 @@ All wave-wide exclusions apply. No normal-installation cutover, real-data migrat
 
 ## Acceptance Criteria
 
-- [ ] Repository-wide lint/format checks pass without rewriting source or suppressing new findings.
-- [ ] All supported install/upgrade/mode paths pass with reproducible isolated evidence.
-- [ ] Two-user isolation covers all modern, legacy, proxy and filesystem paths.
-- [ ] Capture recovery and ownership survive service restarts and human session changes.
-- [ ] No implicit migration, JSON fallback, public signup, public media or hosted deployment is introduced.
-- [ ] Docs match implemented capabilities; final Coordinator validation and independent review precede user acceptance.
+- [x] Repository-wide lint/format checks pass without rewriting source or suppressing new findings.
+- [x] All supported install/upgrade/mode paths pass with reproducible isolated evidence.
+- [x] Two-user isolation covers all modern, legacy, proxy and filesystem paths.
+- [x] Capture recovery and ownership survive service restarts and human session changes.
+- [x] No implicit migration, JSON fallback, public signup, public media or hosted deployment is introduced.
+- [x] Docs match implemented capabilities; final Coordinator validation and independent review precede user acceptance.
 
 ## Automated Tests / Verification
 

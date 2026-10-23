@@ -1,5 +1,37 @@
 # Worker — StreamRecorder Clone
 
+## Wave 05.5 Identity And Recovery / Identidade e recuperação
+
+**English:** The Worker uses the internal token, not a human session. Human
+logout/expiry does not cancel accepted capture; disabling an account blocks new
+launches while accepted work may finish. Execution configuration includes enabled
+targets of non-disabled owners, even when the API human mode is local. To stop
+other owners' monitoring during an approved relational/local rollback, disable
+those accounts through the CLI and reconcile in-flight work. Never delete pending
+outbox events or active checkpoints to force cutover. Retain `OUTBOX_DIR` across
+API/Worker restarts; the API derives ownership and acknowledges durable commits.
+Keep recordings private: shared-root local browsing is not per-user isolation.
+Authenticated API startup is explicitly opt-in and fails closed unless relational
+storage, PostgreSQL URL/reachability, trusted origins, ownership schema/composite
+constraints and an enabled password-enrolled user are valid. See [operations and rollback](../api/README.database.md). Synthetic
+Streamlink fixtures do not prove playable MP4 or real-platform recovery.
+
+**Português (Brasil):** O Worker usa o token interno, não a sessão humana.
+Logout/expiração não cancela uma captura já aceita; desabilitar uma conta impede
+novas capturas, mas permite concluir o trabalho aceito. A configuração inclui
+alvos habilitados de todos os proprietários não desabilitados, mesmo no modo
+humano local. Para interromper o monitoramento de outras contas durante um
+retorno aprovado ao modo relacional/local, desabilite-as pela CLI e reconcilie
+capturas em andamento. Preserve `OUTBOX_DIR`, eventos pendentes, checkpoints e
+mídia nos reinícios; não apague eventos para forçar o corte. A navegação local
+pela raiz compartilhada pressupõe um operador confiável e não isola arquivos por
+usuário. A inicialização autenticada exige configuração explícita e validação
+fail-closed do armazenamento relacional, URL e conexão PostgreSQL, origens confiáveis,
+esquema de propriedade, restrições compostas e usuário habilitado com senha cadastrada.
+Consulte o [guia operacional](../api/README.database.md).
+Fixtures sintéticas não comprovam MP4 reproduzível nem recuperação em plataformas
+reais. Não há cadastro público, credenciais padrão ou publicação de mídia.
+
 ## Wave 05 Persistence Bridge
 
 The default `PERSISTENCE_MODE=direct_json` preserves the JSON lifecycle described

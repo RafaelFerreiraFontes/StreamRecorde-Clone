@@ -1,5 +1,32 @@
 # API — StreamRecorder Clone
 
+## Wave 05.5 Identity, Accounts And Recovery
+
+Normal modes are JSON/local (default, no login or User creation) and opt-in
+PostgreSQL/local (persistent bootstrap `local` owner). JSON/authenticated is
+unsupported. PostgreSQL/authenticated startup is available by explicit opt-in
+with `IDENTITY_MODE=authenticated`, `RELATIONAL_STORAGE=true`, a valid PostgreSQL
+`DATABASE_URL` and exact non-empty `AUTH_TRUSTED_ORIGINS`. Before any legacy JSON
+initialization or HTTP listener, startup validates database reachability, Wave 05.5
+ownership schema/composite constraints and an enabled password-enrolled user.
+Failure exits 1 without exposing database credentials. Provision accounts and apply
+migrations explicitly before activating; local remains the default.
+
+Account provisioning is CLI-only: `pnpm --dir api users create <username>`,
+`users set-password <username>`, `users enable <username>` and
+`users disable <username>`. Passwords use a no-echo prompt or stdin, never argv.
+There is no public signup or default password. Disablement revokes sessions and
+blocks new launches, not already accepted capture completion. Keep internal
+Worker tokens distinct from human cookies; the browser cannot call `/internal/*`.
+
+See [database operations](README.database.md) for the supported-mode matrix,
+`IDENTITY_MODE`, `RELATIONAL_STORAGE`, `PERSISTENCE_MODE`, `DATABASE_URL`,
+`AUTH_TRUSTED_ORIGINS`, `INTERNAL_API_TOKEN`, session/Origin policy and explicit
+backup/migration/cutover/rollback checkpoints. Relational outages return 503,
+never JSON fallback. Recordings remain private; authenticated metadata is
+owner-checked and never lists sibling files or absolute server paths. Local
+shared-root browsing is for a trusted single operator, not multi-user privacy.
+
 ## Wave 05 Mode Selection
 
 The API supports JSON compatibility mode (default) and opt-in PostgreSQL mode.
@@ -398,7 +425,7 @@ Known limitations verified in the current code:
 - JSON-mode `Creator.id` is name-derived; relational mode has stable persisted identity and CRUD;
 - `Recording.stream_id` is not persisted in the legacy `sessions.json`;
 - `WatchTarget.enabled` is enforced by the Worker; PATCH supports enabled, quality, URL and recording_subdir;
-- there is no authentication;
+- normal local operation has no login requirement; authenticated account/session and authorization support requires explicit opt-in and startup prerequisite validation;
 - PostgreSQL activation requires explicit migration and coordinated mode selection;
 - there is no external Redis queue;
 - there are no cloud storage providers implemented;
@@ -727,7 +754,7 @@ Limitações conhecidas e verificadas no código atual:
 - `Creator.id` é derivado de `display_name` e ainda não é uma identidade persistente independente;
 - `Recording.stream_id` não é persistido no legacy `sessions.json`;
 - `WatchTarget.enabled` é aplicado pelo Worker; a API expõe o valor persistido, mas não possui rota geral de atualização além de `recording_subdir`;
-- não há autenticação;
+- o modo local normal não exige login; contas, sessões e autorização autenticada permanecem atrás do bloqueio de inicialização em produção;
 - não há PostgreSQL;
 - não há Redis/queue externa;
 - não há cloud storage providers implementados;

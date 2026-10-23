@@ -1,5 +1,37 @@
 # StreamRecorder Clone
 
+## Wave 05.5 Identity And Operational Safety
+
+JSON/local remains the default: `RELATIONAL_STORAGE=false`,
+`PERSISTENCE_MODE=direct_json`, `IDENTITY_MODE=local`; no database or login is
+required and no User is created. PostgreSQL/local is explicitly opt-in with
+`RELATIONAL_STORAGE=true`, `DATABASE_URL`, checked-in migrations and bridge
+persistence; it uses one persistent bootstrap `local` User. PostgreSQL failures
+return 503 rather than falling back to JSON.
+
+JSON/authenticated is unsupported. PostgreSQL/authenticated startup is available
+by explicit opt-in: `IDENTITY_MODE=authenticated`, `RELATIONAL_STORAGE=true`,
+a valid PostgreSQL `DATABASE_URL` and non-empty exact `AUTH_TRUSTED_ORIGINS`.
+Startup fails closed unless PostgreSQL is reachable, Wave 05.5 ownership schema
+and composite constraints are installed, and an enabled password-enrolled user exists. Do not expose this local-first
+application as a hosted multi-user service.
+
+Accounts are CLI-only, without public registration or default credentials.
+Use `pnpm --dir api users create <username>` and its no-echo password prompt
+(or private stdin), never a password argument. Enable/disable and password
+administration, trusted origins, session cookies, backup/import/cutover and
+safe relational/local rollback are documented in
+[API database operations](api/README.database.md#wave-055-operations-supported-modes-and-activation-gate).
+Keep internal tokens and database credentials server-side and recordings private.
+Quiesce writers, drain the Worker outbox and retain verified backups before
+migration; never auto-reassign ownership or switch back to JSON after relational
+writes. Local shared-root browsing is a trusted single-operator privacy limitation.
+
+The scope remains local-first: no public media, per-user physical folders,
+public signup, hosted deployment, Redis, Tags, SSE or cloud export. Fake capture
+fixtures do not prove playable MP4. Integration QA and documentation do not
+constitute final Coordinator validation, independent review or human acceptance.
+
 Automated live stream monitoring and local recording capture for Twitch, YouTube, and Kick. Built as a local-first application with a modular NestJS API, Python Worker, Next.js dashboard, and dual persistence options (transitional shared JSON and robust PostgreSQL with Drizzle ORM).
 
 ---
@@ -362,14 +394,14 @@ git diff --check
 
 - **Private Local Files**: All video captures are stored strictly on the local filesystem within `OUTPUT_DIR`.
 - **No Public Media Exposure**: StreamRecorder Clone contains no public video distribution, indexing, or streaming feature.
-- **Trusted Environment**: The application is intended for single-user local development without built-in user authentication.
+- **Trusted Environment**: Normal local operation remains a trusted single-operator console; authenticated startup requires explicit opt-in and fail-closed prerequisite validation.
 - **Network Containment**: Do not expose host ports directly to untrusted public networks. Keep bindings on `127.0.0.1`.
 
 ---
 
 ## Current Limitations
 
-- **No Multi-User Authentication**: Persisted user accounts, login, and authorization belong to **Wave 05.5**.
+- **Guarded Multi-User Activation**: Wave 05.5 CLI accounts, sessions, login UI and owner authorization are implemented/tested; authenticated startup is available with explicit opt-in and validated prerequisites.
 - **No Distributed Queue**: Long-running captures are orchestrated directly by Worker polling; BullMQ/Redis jobs belong to **Wave 06**.
 - **No Cloud Export**: Cloud upload to Google Drive, Dropbox, or OneDrive belongs to **Waves 09–10**. Local recording success is completely independent of cloud status.
 - **No SSE / Heartbeat**: Status uses UI polling; server-sent events and Worker heartbeats belong to **Wave 08**.
@@ -384,7 +416,7 @@ git diff --check
 - **Wave 03**: Containerization and Docker Compose (`done`)
 - **Wave 04 / 04.5 / 04.75**: Worker reliability, recording folder browser, and adaptive quality (`done`)
 - **Wave 05**: PostgreSQL Domain Persistence, Drizzle ORM, Worker Bridge, Migration CLI, and Docker QA (`completed`)
-- **Wave 05.5**: User Accounts, Authentication, and Resource Ownership (*planned next*)
+- **Wave 05.5**: User Accounts, Authentication, and Resource Ownership (*integration QA/documentation in progress; authenticated startup opt-in and fail-closed*)
 
 For full roadmap tracking, see [PROJECT-STATUS.md](PROJECT-STATUS.md).
 
@@ -478,7 +510,7 @@ Consulte o [Runbook de Banco de Dados](api/README.database.md) para procedimento
 
 ## Limitações Atuais e Próximos Passos
 
-- O sistema opera em ambiente local confiável e não possui tela de login ou autenticação de usuários (previsto para a **Wave 05.5**).
+- O modo local continua destinado a um operador confiável. Contas via CLI, sessões, tela de login e isolamento por proprietário da **Wave 05.5** estão implementados/testados, e a inicialização autenticada exige configuração explícita com validação fail-closed dos pré-requisitos na inicialização.
 - As capturas são orquestradas diretamente pelo Worker via polling; filas de segundo plano com Redis/BullMQ pertencem à **Wave 06**.
 - A exportação para Google Drive, Dropbox ou OneDrive é secundária e opcional, pertencente às **Waves 09 e 10**.
 

@@ -10,7 +10,7 @@ import {
 } from "./streams/json-compatibility.adapters";
 
 async function bootstrap() {
-  validateStartupIdentityMode(process.env);
+  await validateStartupIdentityMode(process.env);
 
   // Resolve all four config paths using the established precedence
   const configPaths = resolveAllConfigPaths(process.env);

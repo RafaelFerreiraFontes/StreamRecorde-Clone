@@ -11,6 +11,16 @@ import type { AuthOptions } from "../auth.service";
 import { AUTH_OPTIONS } from "../auth.service";
 import { ABSOLUTE_MS, IDLE_MS, SLIDING_MS, tokenHash } from "../auth.repository";
 import { runUsersCLI } from "../users-cli";
+import { validateStartupIdentityMode } from "../../database/identity-mode";
+import { StreamController } from "../../streams/streams.controller";
+import { StreamsRepository } from "../../streams/streams.repository";
+import { RelationalStreamsRepository } from "../../streams/relational-streams.repository";
+import {
+  RecordingService,
+  SessionService,
+  StreamerService,
+  StreamService,
+} from "../../streams/streams.service";
 
 const databaseUrl = process.env.RELATIONAL_TEST_DATABASE_URL;
 if (
@@ -33,7 +43,17 @@ describeDatabase("authentication and session lifecycle", () => {
   let environment: NodeJS.ProcessEnv;
 
   async function startApi(overrideDatabase = database) {
-    const module = await Test.createTestingModule({ imports: [AuthModule] })
+    const module = await Test.createTestingModule({
+      imports: [AuthModule],
+      controllers: [StreamController],
+      providers: [
+        StreamerService,
+        SessionService,
+        StreamService,
+        RecordingService,
+        { provide: StreamsRepository, useValue: new RelationalStreamsRepository(overrideDatabase) },
+      ],
+    })
       .overrideProvider(DatabaseService)
       .useValue({
         transaction: overrideDatabase.transaction.bind(
@@ -91,6 +111,51 @@ describeDatabase("authentication and session lifecycle", () => {
     await database.resolveBootstrapLocalUser();
     await pool.end();
     await database.onModuleDestroy();
+  });
+
+  const validateStartup = (overrides: NodeJS.ProcessEnv = {}) =>
+    validateStartupIdentityMode({ ...environment, DATABASE_URL: databaseUrl, ...overrides });
+
+  it("rejects startup without an enrolled password, including bootstrap local", async () => {
+    await pool.query("UPDATE users SET password_hash = NULL");
+    await database.resolveBootstrapLocalUser();
+    await expect(validateStartup()).rejects.toThrow("at least one enabled user");
+  });
+
+  it("rejects startup with only disabled password users", async () => {
+    await pool.query("UPDATE users SET disabled_at = now()");
+    await expect(validateStartup()).rejects.toThrow("at least one enabled user");
+  });
+
+  it.each([undefined, "", "*", "https://example.test/path"])(
+    "rejects startup with invalid trusted origins %p",
+    async (origins) => {
+      await expect(validateStartup({ AUTH_TRUSTED_ORIGINS: origins })).rejects.toThrow(
+        /AUTH_TRUSTED_ORIGINS/,
+      );
+    },
+  );
+
+  it("validates real startup then logs in and resolves an authenticated session", async () => {
+    await expect(validateStartup()).resolves.toBe("authenticated");
+    const response = await login();
+    expect(response.status).toBe(200);
+    const sessionCookie = cookie(response);
+    expect((await session(sessionCookie)).status).toBe(200);
+    const created = await request(app.getHttpServer())
+      .post("/creators")
+      .set("Origin", origin)
+      .set("Cookie", sessionCookie)
+      .send({ display_name: "Startup fixture" });
+    expect(created.status).toBe(201);
+    const creators = await request(app.getHttpServer())
+      .get("/creators")
+      .set("Cookie", sessionCookie);
+    expect(creators.status).toBe(200);
+    expect(creators.body as unknown).toEqual([
+      expect.objectContaining({ display_name: "Startup fixture" }),
+    ]);
+    expect((await request(app.getHttpServer()).get("/creators")).status).toBe(401);
   });
 
   it("provisions, lists and enables accounts while preserving bootstrap UUID and domain rows", async () => {
