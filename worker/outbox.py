@@ -281,6 +281,11 @@ class Outbox:
                 raise RuntimeError("Start acknowledgement pending; launch blocked")
             return self._read(self.active / (session_id + ".json"))
 
+    def launch_intent(self, checkpoint):
+        with self.mutex:
+            checkpoint.update(launch_intent=True)
+            self.checkpoint(checkpoint)
+
     def launched(self, checkpoint, process):
         with self.mutex:
             checkpoint.update(pid=process.pid, create_time=time.time(), phase="capturing")
@@ -320,12 +325,27 @@ class Outbox:
                 if path.stem != str(uuid.UUID(checkpoint["session_id"])):
                     raise ValueError("Invalid active checkpoint filename")
                 self.blocked_targets.add(target_id)
-                if checkpoint.get("terminal_event") or pid_is_dead(checkpoint.get("pid")):
+                if checkpoint.get("phase") == "start_pending":
+                    continue
+                before_launch = (
+                    checkpoint.get("phase") == "start_committed"
+                    and not checkpoint.get("launch_intent")
+                    and checkpoint.get("pid") is None
+                )
+                if (
+                    checkpoint.get("terminal_event")
+                    or before_launch
+                    or pid_is_dead(checkpoint.get("pid"))
+                ):
                     self.terminal(
                         checkpoint,
                         "error",
                         checkpoint.get("output_file"),
-                        reason="worker_restart_interruption",
+                        reason=(
+                            "worker_restart_before_launch"
+                            if before_launch
+                            else "worker_restart_interruption"
+                        ),
                     )
                 else:
                     log.warning(

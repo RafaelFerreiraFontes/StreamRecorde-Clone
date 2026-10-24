@@ -51,6 +51,60 @@ describeDatabase("database foundation", () => {
     );
   }
 
+  it("backfills legacy provenance on upgrade and enforces native-only activity", async () => {
+    await seedTargets();
+    const migration = await readFile(
+      join(process.cwd(), "drizzle/migrations/0005_legacy_reconciliation_origin.sql"),
+      "utf8",
+    );
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("alter table streams drop column origin cascade");
+      await client.query("alter table recordings drop column origin cascade");
+      await client.query(
+        "create unique index uq_streams_active_per_target on streams(watch_target_id) where finished_at is null and legacy_finished_at_raw is null",
+      );
+      await client.query(
+        "insert into streams(id, owner_id, watch_target_id, state, legacy_started_at_raw) values ($1,$2,$3,'recording','2025-01-02T03:04:05')",
+        [streamOneId, ownerId, targetOneId],
+      );
+      await client.query(
+        "insert into recordings(id, owner_id, watch_target_id, state, legacy_started_at_raw) values (gen_random_uuid(),$1,$2,'recording','2025-01-02T03:04:05')",
+        [ownerId, targetOneId],
+      );
+      await client.query(migration);
+      expect(
+        (
+          await client.query<{ origin: string }>(
+            "select origin from streams union all select origin from recordings",
+          )
+        ).rows,
+      ).toEqual([{ origin: "legacy_json" }, { origin: "legacy_json" }]);
+      await client.query(
+        "insert into streams(id, owner_id, watch_target_id, state, started_at) values ($1,$2,$3,'recording',now())",
+        [streamTwoId, ownerId, targetOneId],
+      );
+      expect(
+        (
+          await client.query<{ origin: string }>("select origin from streams where id=$1", [
+            streamTwoId,
+          ])
+        ).rows[0].origin,
+      ).toBe("native");
+      for (const table of ["streams", "recordings"]) {
+        await client.query("savepoint invalid_origin");
+        await expect(client.query(`update ${table} set origin='unknown'`)).rejects.toMatchObject({
+          code: "23514",
+        });
+        await client.query("rollback to savepoint invalid_origin");
+      }
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
+  });
+
   it("repairs bootstrap concurrently and retains the same passwordless identity across repeated migrations", async () => {
     await pool.query<{ [key: string]: unknown }>("delete from users where bootstrap_key = 'local'");
     const identities = await Promise.all(

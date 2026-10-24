@@ -305,6 +305,13 @@ describeDatabase("relational configuration persistence", () => {
       sessionId: randomUUID(),
       streamId: stream.id,
     });
+    await expect(
+      repository.createRecording({
+        ...input,
+        sessionId: randomUUID(),
+        streamId: stream.id,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
     await repository.finalizeRecording(attempt.session_id, {
       state: "error",
       finishedAt: "2026-01-01T11:00:00Z",

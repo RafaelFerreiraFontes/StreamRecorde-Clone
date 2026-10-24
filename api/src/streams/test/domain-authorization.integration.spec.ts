@@ -132,6 +132,7 @@ describeDatabase("domain ownership HTTP authorization", () => {
       watchTargetId,
       streamId: stream.id,
       startedAt: "2026-01-01T00:00:00Z",
+      finishedAt: "2026-01-01T01:00:00Z",
       outputFile: "fixture.mp4",
     });
     return { stream, recording };

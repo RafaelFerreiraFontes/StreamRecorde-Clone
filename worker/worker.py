@@ -960,6 +960,8 @@ def start_recording(entry: dict, stream_id: str | None = None, quality: str = "b
         if current_stream:
             current_stream["id"] = stream_id
 
+    if checkpoint:
+        get_bridge().launch_intent(checkpoint)
     try:
         process = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True

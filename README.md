@@ -184,7 +184,7 @@ Container paths are Linux paths even on Windows. API `RECORDINGS_ROOT` and Worke
 
 ## 10. Database Migrations and Cutover
 
-Startup does not apply migrations or import JSON. In a built production API image use `node dist/database/migrate.js`; the approved wrapper is `db:migrate:prod`. Source checkout command: `pnpm --dir api db:migrate`. Migration execution was verified against an isolated disposable PostgreSQL 17 container. For existing JSON follow the quiesced dry-run → backup → import → verify → cutover-check procedure in [database runbook](api/README.database.md). Retain backups; never switch back to stale JSON after relational writes.
+Startup does not apply migrations or import JSON. In a built production API image use `node dist/database/migrate.js`; the approved wrapper is `db:migrate:prod`. Source checkout command: `pnpm --dir api db:migrate`. Migration execution was verified against an isolated disposable PostgreSQL 17 container. Migration 0005 reconciles imported legacy history by introducing an explicit `origin` column and scoping the active-stream unique index; deploying it requires rebuilding the API/Worker images and keeping the Worker stopped during migration execution (see [database runbook](api/README.database.md)). For existing JSON follow the quiesced dry-run → backup → import → verify → cutover-check procedure in [database runbook](api/README.database.md). Retain backups; never switch back to stale JSON after relational writes.
 
 ## 11. Account Administration CLI
 
@@ -361,7 +361,7 @@ Caminhos em containers são caminhos Linux, mesmo no Windows. Na API, `RECORDING
 
 ## 10. Migrações de Banco de Dados e Corte de Autoridade
 
-A inicialização não executa migrações automáticas nem importa dados JSON. Na imagem de produção da API, execute `node dist/database/migrate.js` (atalho aprovado: `db:migrate:prod`). Em ambiente de desenvolvimento: `pnpm --dir api db:migrate`. A execução de migrações foi verificada em um container isolado descartável com PostgreSQL 17. Para migrar dados legados de JSON, siga o procedimento quiescido: dry-run → backup → import → verify → cutover-check detalhado no [runbook de banco de dados](api/README.database.md). Mantenha backups verificados; nunca reverta para arquivos JSON obsoletos após escritas relacionais.
+A inicialização não executa migrações automáticas nem importa dados JSON. Na imagem de produção da API, execute `node dist/database/migrate.js` (atalho aprovado: `db:migrate:prod`). Em ambiente de desenvolvimento: `pnpm --dir api db:migrate`. A execução de migrações foi verificada em um container isolado descartável com PostgreSQL 17. A migration 0005 reconcilia o histórico importado ao introduzir a coluna explícita `origin` e delimitar o índice único de streams ativos; sua aplicação exige reconstruir as imagens da API/Worker e manter o Worker desligado durante a execução da migration (consulte o [runbook de banco de dados](api/README.database.md)). Para migrar dados legados de JSON, siga o procedimento quiescido: dry-run → backup → import → verify → cutover-check detalhado no [runbook de banco de dados](api/README.database.md). Mantenha backups verificados; nunca reverta para arquivos JSON obsoletos após escritas relacionais.
 
 ## 11. CLI de Administração de Contas
 

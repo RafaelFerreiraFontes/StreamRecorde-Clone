@@ -164,6 +164,7 @@ function entities(snapshot: Snapshot, ownerId: string) {
       : null,
   }));
   const streamRows = snapshot.rows["streams.json"].map((row) => ({
+    origin: "legacy_json",
     id: String(row.id).toLowerCase(),
     ownerId,
     watchTargetId: String(row.watch_target_id).toLowerCase(),
@@ -174,6 +175,7 @@ function entities(snapshot: Snapshot, ownerId: string) {
     legacyFinishedAtRaw: row.finished_at == null ? null : String(row.finished_at as string),
   }));
   const recordingRows = snapshot.rows["sessions.json"].map((row) => ({
+    origin: "legacy_json",
     id: String(row.session_id).toLowerCase(),
     ownerId,
     watchTargetId: String(row.channel_id).toLowerCase(),

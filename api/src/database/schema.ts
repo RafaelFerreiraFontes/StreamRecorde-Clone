@@ -148,6 +148,7 @@ export const streams = pgTable(
       .notNull()
       .references(() => watchTargets.id, { onDelete: "restrict" }),
     state: text("state").notNull(),
+    origin: text("origin").notNull().default("native"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     legacyStartedAtRaw: text("legacy_started_at_raw"),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -156,6 +157,7 @@ export const streams = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    check("streams_origin_check", sql`${table.origin} in ('legacy_json', 'native')`),
     check(
       "streams_state_check",
       sql`${table.state} in ('idle', 'offline', 'recording', 'finished', 'error')`,
@@ -178,7 +180,9 @@ export const streams = pgTable(
     index("idx_streams_watch_target_started_at").on(table.watchTargetId, table.startedAt.desc()),
     uniqueIndex("uq_streams_active_per_target")
       .on(table.watchTargetId)
-      .where(sql`${table.finishedAt} is null and ${table.legacyFinishedAtRaw} is null`),
+      .where(
+        sql`${table.origin} = 'native' and ${table.finishedAt} is null and ${table.legacyFinishedAtRaw} is null`,
+      ),
   ],
 );
 
@@ -192,6 +196,7 @@ export const recordings = pgTable(
       .references(() => watchTargets.id, { onDelete: "restrict" }),
     streamId: uuid("stream_id"),
     state: text("state").notNull(),
+    origin: text("origin").notNull().default("native"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     legacyStartedAtRaw: text("legacy_started_at_raw"),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -204,6 +209,7 @@ export const recordings = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    check("recordings_origin_check", sql`${table.origin} in ('legacy_json', 'native')`),
     check(
       "recordings_state_check",
       sql`${table.state} in ('idle', 'offline', 'recording', 'finished', 'error')`,

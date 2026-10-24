@@ -117,6 +117,7 @@ describeDatabase("legacy migration isolated PostgreSQL", () => {
       }>("select * from recordings where id = $1", [recordingId])
     ).rows[0];
     expect(record).toMatchObject({
+      origin: "legacy_json",
       id: recordingId,
       watch_target_id: targetIds[0],
       stream_id: null,

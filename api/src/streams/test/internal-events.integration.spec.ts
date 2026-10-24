@@ -174,6 +174,61 @@ describeDatabase("internal Worker events", () => {
     });
   }
 
+  it("keeps open legacy history independent of native starts, replay and offline", async () => {
+    const legacyStream = randomUUID();
+    const legacyRecording = randomUUID();
+    await pool.query(
+      `insert into streams (id, owner_id, watch_target_id, state, origin, legacy_started_at_raw)
+       select $1, owner_id, id, 'recording', 'legacy_json', '2025-01-02T03:04:05' from watch_targets where id=$2`,
+      [legacyStream, targetId],
+    );
+    await pool.query(
+      `insert into recordings (id, owner_id, watch_target_id, state, origin, legacy_started_at_raw)
+       select $1, owner_id, id, 'recording', 'legacy_json', '2025-01-02T03:04:05' from watch_targets where id=$2`,
+      [legacyRecording, targetId],
+    );
+    const start = event("recording.start", {
+      session_id: randomUUID(),
+      stream_id: randomUUID(),
+      quality: "best",
+      output_file: "private.mp4",
+    });
+    const first = await post(start).expect(201);
+    expect((await post(start).expect(201)).body).toEqual(first.body);
+    await post(
+      event("recording.start", { ...start, event_id: randomUUID(), session_id: randomUUID() }),
+    ).expect(409);
+    await expect(
+      pool.query(
+        `insert into streams (id, owner_id, watch_target_id, state, started_at)
+         select $1, owner_id, id, 'recording', now() from watch_targets where id=$2`,
+        [randomUUID(), targetId],
+      ),
+    ).rejects.toMatchObject({ code: "23505" });
+    await post(
+      event("recording.terminal", {
+        session_id: legacyRecording,
+        state: "error",
+      }),
+    ).expect(409);
+    await post(
+      event("recording.terminal", {
+        session_id: start.session_id,
+        stream_id: start.stream_id,
+        state: "error",
+      }),
+    ).expect(201);
+    await post(event("stream.offline")).expect(201);
+    const legacy = await pool.query<{ origin: string; finished_at: Date | null }>(
+      "select origin, finished_at from streams where id=$1 union all select origin, finished_at from recordings where id=$2",
+      [legacyStream, legacyRecording],
+    );
+    expect(legacy.rows).toEqual([
+      { origin: "legacy_json", finished_at: null },
+      { origin: "legacy_json", finished_at: null },
+    ]);
+  });
+
   it("protects both routes and validates conditional fields and explicit timezone", async () => {
     await request(app.getHttpServer())
       .get("/internal/v1/watch-targets/execution-configs")

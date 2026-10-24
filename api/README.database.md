@@ -29,7 +29,7 @@ cookie and Origin policy below. There is no public signup or default credential.
 ### Clean Installation, Upgrade And Recovery Checkpoints
 
 - Clean relational installation: set an explicitly selected database connection,
-  run `pnpm --dir api db:migrate` (checked-in migrations 0000–0004), then start
+  run `pnpm --dir api db:migrate` (checked-in migrations 0000–0005), then start
   relational/local API and bridge Worker. Migrations are not startup side effects.
 - Existing relational installation: quiesce writers and retain a tested,
   known-good database backup before applying the ownership migration. Existing
@@ -43,6 +43,50 @@ cookie and Origin policy below. There is no public signup or default credential.
 - Before writes switch authority, retain source snapshots, DB backup, outbox and
   private media. After relational writes, prefer forward repair. Never silently
   switch to JSON, downgrade migrations or discard events to make a gate pass.
+
+### Migration 0005: Legacy History Reconciliation And Worker Outbox Recovery
+
+Migration 0005 introduces the `origin` column (`legacy_json` vs. `native`) on `streams` and `recordings`, recreates the partial unique index `uq_streams_active_per_target` to scope active status strictly to native streams, and refines Worker outbox recovery.
+
+For an existing Docker installation (Mode B or Mode C):
+
+1. **Rebuild Application Images:**
+   Rebuild the API and Worker images so the production image includes migration 0005 and updated outbox recovery code:
+
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml build api worker
+   ```
+
+   _(For Mode C, append `-f compose.authenticated.yml` to all compose commands)._
+
+2. **Quiesce the Worker:**
+   Stop the Worker container to prevent concurrent recording events during migration:
+
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml stop worker
+   ```
+
+3. **Execute Migration 0005:**
+   Run the migration using a one-off API container preserving the operator's active Compose overlays:
+
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml run --rm --no-deps api node dist/database/migrate.js
+   ```
+
+4. **Audit and Verify Historical Data:**
+   Query the database to confirm imported legacy rows are classified as `legacy_json` without synthetic end timestamps:
+
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml exec postgres psql -U streamrecorder -d streamrecorder -c "SELECT id, watch_target_id, state, origin, legacy_started_at_raw, finished_at FROM recordings WHERE origin = 'legacy_json' AND finished_at IS NULL LIMIT 10;"
+   ```
+
+5. **Re-activate the Stack and Observe Outbox Recovery:**
+   Start all services and monitor Worker logs for outbox drainage:
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml up -d
+   docker compose -f compose.yml -f compose.relational.yml logs -f --tail 50 worker
+   ```
+   _Any unlaunched `start_committed` session will be cleanly compensated with a terminal error event (`worker_restart_before_launch`), releasing the WatchTarget for active monitoring._
 
 ### Approved Relational/Local Rollback (Decision Section 12)
 

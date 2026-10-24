@@ -34,21 +34,37 @@ import {
 } from "./json-compatibility.adapters";
 
 type Transaction = Parameters<Parameters<DatabaseService["connection"]["transaction"]>[0]>[0];
+const activeStream = and(
+  eq(streams.origin, "native"),
+  isNull(streams.finishedAt),
+  isNull(streams.legacyFinishedAtRaw),
+);
+const activeRecording = and(
+  eq(recordings.origin, "native"),
+  isNull(recordings.finishedAt),
+  isNull(recordings.legacyFinishedAtRaw),
+);
 type StartInput = { startedAt?: Date | string; legacyStartedAtRaw?: string };
 type FinishInput = {
   state?: RecordingState;
   finishedAt?: Date | string;
   legacyFinishedAtRaw?: string;
 };
-type StreamInput = StartInput & { id?: string; watchTargetId: string; state?: RecordingState };
-type RecordingInput = StreamInput & {
-  sessionId?: string;
-  streamId?: string | null;
-  outputFile?: string | null;
-  channelName?: string;
-  platform?: string;
-  quality?: string;
+type StreamInput = StartInput & {
+  id?: string;
+  watchTargetId: string;
+  state?: RecordingState;
+  origin?: "legacy_json" | "native";
 };
+type RecordingInput = StreamInput &
+  Partial<FinishInput> & {
+    sessionId?: string;
+    streamId?: string | null;
+    outputFile?: string | null;
+    channelName?: string;
+    platform?: string;
+    quality?: string;
+  };
 
 function HumanDatabaseOperation() {
   return (_target: object, _name: string, descriptor: PropertyDescriptor) => {
@@ -164,13 +180,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
         const [active] = await transaction
           .select()
           .from(recordings)
-          .where(
-            and(
-              eq(recordings.watchTargetId, dto.watch_target_id),
-              isNull(recordings.finishedAt),
-              isNull(recordings.legacyFinishedAtRaw),
-            ),
-          );
+          .where(and(eq(recordings.watchTargetId, dto.watch_target_id), activeRecording));
         if (active) throw new ConflictException("Watch target already has an active Recording");
         const stream = await this.insertStream(transaction, {
           id: dto.stream_id,
@@ -195,6 +205,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
         if (!recording)
           throw new ConflictException("Recording start must be acknowledged before terminal event");
         if (
+          recording.origin !== "native" ||
           recording.ownerId !== target.ownerId ||
           recording.watchTargetId !== dto.watch_target_id ||
           (dto.stream_id && dto.stream_id !== recording.streamId)
@@ -226,23 +237,11 @@ export class RelationalStreamsRepository extends StreamsRepository {
         const [active] = await transaction
           .select()
           .from(recordings)
-          .where(
-            and(
-              eq(recordings.watchTargetId, dto.watch_target_id),
-              isNull(recordings.finishedAt),
-              isNull(recordings.legacyFinishedAtRaw),
-            ),
-          );
+          .where(and(eq(recordings.watchTargetId, dto.watch_target_id), activeRecording));
         const [stream] = await transaction
           .select()
           .from(streams)
-          .where(
-            and(
-              eq(streams.watchTargetId, dto.watch_target_id),
-              isNull(streams.finishedAt),
-              isNull(streams.legacyFinishedAtRaw),
-            ),
-          );
+          .where(and(eq(streams.watchTargetId, dto.watch_target_id), activeStream));
         if (
           (active && active.ownerId !== target.ownerId) ||
           (stream && stream.ownerId !== target.ownerId)
@@ -363,12 +362,7 @@ export class RelationalStreamsRepository extends StreamsRepository {
       .select()
       .from(streams)
       .where(
-        and(
-          eq(streams.watchTargetId, watchTargetId),
-          eq(streams.ownerId, owner),
-          isNull(streams.finishedAt),
-          isNull(streams.legacyFinishedAtRaw),
-        ),
+        and(eq(streams.watchTargetId, watchTargetId), eq(streams.ownerId, owner), activeStream),
       );
     return row ? this.streamView(row) : null;
   }
@@ -527,18 +521,13 @@ export class RelationalStreamsRepository extends StreamsRepository {
     const [active] = await transaction
       .select()
       .from(streams)
-      .where(
-        and(
-          eq(streams.watchTargetId, data.watchTargetId),
-          isNull(streams.finishedAt),
-          isNull(streams.legacyFinishedAtRaw),
-        ),
-      );
+      .where(and(eq(streams.watchTargetId, data.watchTargetId), activeStream));
     if (active) return this.streamView(active);
     const [row] = await transaction
       .insert(streams)
       .values({
         id: data.id ?? randomUUID(),
+        origin: "native",
         watchTargetId: data.watchTargetId,
         ownerId: target.ownerId,
         state: data.state ?? "recording",
@@ -546,20 +535,14 @@ export class RelationalStreamsRepository extends StreamsRepository {
       })
       .onConflictDoNothing({
         target: streams.watchTargetId,
-        where: sql`${streams.finishedAt} is null and ${streams.legacyFinishedAtRaw} is null`,
+        where: sql`${streams.origin} = 'native' and ${streams.finishedAt} is null and ${streams.legacyFinishedAtRaw} is null`,
       })
       .returning();
     if (row) return this.streamView(row);
     const [existing] = await transaction
       .select()
       .from(streams)
-      .where(
-        and(
-          eq(streams.watchTargetId, data.watchTargetId),
-          isNull(streams.finishedAt),
-          isNull(streams.legacyFinishedAtRaw),
-        ),
-      );
+      .where(and(eq(streams.watchTargetId, data.watchTargetId), activeStream));
     if (!existing) throw new ConflictException("Active Stream changed; retry creation");
     return this.streamView(existing);
   }
@@ -571,6 +554,17 @@ export class RelationalStreamsRepository extends StreamsRepository {
   async insertRecording(transaction: Transaction, data: RecordingInput): Promise<Recording> {
     const start = this.startValues(data);
     const target = await this.lockTarget(transaction, data.watchTargetId);
+    const finish =
+      data.finishedAt !== undefined || data.legacyFinishedAtRaw !== undefined
+        ? this.finishValues(data)
+        : null;
+    if (!finish) {
+      const [active] = await transaction
+        .select()
+        .from(recordings)
+        .where(and(eq(recordings.watchTargetId, data.watchTargetId), activeRecording));
+      if (active) throw new ConflictException("Watch target already has an active Recording");
+    }
     if (data.streamId != null) {
       if (!isUUID(data.streamId)) throw new BadRequestException("Invalid Stream ID");
       const [stream] = await transaction
@@ -591,11 +585,18 @@ export class RelationalStreamsRepository extends StreamsRepository {
       .insert(recordings)
       .values({
         id: data.id ?? data.sessionId ?? randomUUID(),
+        origin: "native",
         ownerId: target.ownerId,
         watchTargetId: data.watchTargetId,
         streamId: data.streamId ?? null,
-        state: data.state ?? "recording",
+        state: finish?.state ?? data.state ?? "recording",
         ...start,
+        ...(finish
+          ? {
+              finishedAt: finish.finishedAt,
+              legacyFinishedAtRaw: finish.legacyFinishedAtRaw,
+            }
+          : {}),
         outputFile: data.outputFile,
         channelName: data.channelName ?? target.channelName,
         platform: data.platform ?? target.platform,

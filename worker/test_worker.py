@@ -189,7 +189,7 @@ class OutboxTests(unittest.TestCase):
         self.assertFalse(self.box.ready(self.target))
         self.assertTrue(self.box.ready(str(uuid.uuid4())))
 
-    def test_lost_start_ack_replays_same_identity_and_blocks_unlaunched_attempt(self):
+    def test_lost_start_ack_replays_same_identity_and_finalizes_unlaunched_attempt(self):
         with (
             patch.object(self.box, "transport", side_effect=OSError("lost acknowledgement")),
             self.assertRaises(RuntimeError),
@@ -200,9 +200,51 @@ class OutboxTests(unittest.TestCase):
             self.directory.name, "http://example.test", "test-token", transport=self.transport
         )
         restarted.recover()
-        self.assertEqual(self.delivered[-1]["event_id"], event_id)
-        self.assertIn(self.target, restarted.blocked_targets)
-        self.assertTrue((restarted.active / (self.session + ".json")).exists())
+        self.assertEqual(self.delivered[0]["event_id"], event_id)
+        self.assertEqual(self.delivered[-1]["event_type"], "recording.terminal")
+        self.assertEqual(self.delivered[-1]["reason"], "worker_restart_before_launch")
+        self.assertNotIn(self.target, restarted.blocked_targets)
+        self.assertFalse((restarted.active / (self.session + ".json")).exists())
+
+    def test_conflicting_start_stays_pending_without_terminal(self):
+        from urllib.error import HTTPError
+
+        with (
+            patch.object(
+                self.box,
+                "transport",
+                side_effect=HTTPError("http://example.test", 409, "Conflict", {}, None),
+            ) as transport,
+            self.assertRaises(RuntimeError),
+        ):
+            self.box.start(self.target, self.session, self.stream, "private.mp4", "best")
+        pending = self.box._read(self.box.files()[0])
+        self.now += 3
+        with patch.object(self.box, "transport", side_effect=transport.side_effect):
+            self.box.recover()
+        self.assertEqual(self.box._read(self.box.files()[0]), pending)
+        checkpoint = self.box._read(self.box.active / (self.session + ".json"))
+        self.assertEqual(checkpoint["phase"], "start_pending")
+        self.assertNotIn("terminal_event", checkpoint)
+        self.assertFalse(self.box.ready(self.target))
+
+    def test_committed_start_without_launch_intent_is_finalized(self):
+        self.box.start(self.target, self.session, self.stream, "private.mp4", "best")
+        self.box.recover()
+        self.assertEqual(self.delivered[-1]["reason"], "worker_restart_before_launch")
+        self.assertEqual(self.delivered[-1]["state"], "error")
+        self.assertTrue(self.box.ready(self.target))
+
+    def test_launch_intent_without_pid_remains_ambiguous(self):
+        checkpoint = self.box.start(self.target, self.session, self.stream, "private.mp4", "best")
+        self.box.launch_intent(checkpoint)
+        self.delivered.clear()
+        self.box.recover()
+        self.assertFalse(self.delivered)
+        self.assertFalse(self.box.ready(self.target))
+        stored = self.box._read(self.box.active / (self.session + ".json"))
+        self.assertTrue(stored["launch_intent"])
+        self.assertIsNone(stored["pid"])
 
     def test_config_outage_backs_off_without_json_fallback(self):
         with patch.object(self.box, "transport", side_effect=OSError("unavailable")) as transport:
