@@ -4,6 +4,7 @@ import { ServiceUnavailableException } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { execFile, spawn, spawnSync } from "child_process";
 import { randomUUID } from "crypto";
+import { validate } from "class-validator";
 import { mkdtemp, readFile, readdir, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -12,7 +13,7 @@ import { createInterface } from "readline";
 import request from "supertest";
 import { promisify } from "util";
 import { DatabaseService } from "../../database/database.service";
-import type { InternalEventDto } from "../dto/internal-event.dto";
+import { InternalEventDto } from "../dto/internal-event.dto";
 import { InternalEventsService } from "../internal-events.service";
 import { InternalStreamsController } from "../internal-streams.controller";
 import { RelationalStreamsRepository } from "../relational-streams.repository";
@@ -26,6 +27,43 @@ const execute = promisify(execFile);
 const token = "test-only-worker-token";
 
 describe("internal Worker boundary", () => {
+  it.each([
+    "worker_restart_before_launch",
+    "worker_restart_interruption",
+    "launch_failure",
+    "checkpoint_failure",
+  ])("accepts terminal recovery reason %s", async (reason) => {
+    const payload = Object.assign(new InternalEventDto(), {
+      event_id: randomUUID(),
+      event_type: "recording.terminal",
+      occurred_at: "2026-10-26T12:00:00.000Z",
+      watch_target_id: randomUUID(),
+      session_id: randomUUID(),
+      state: "error",
+      reason,
+    });
+    expect(await validate(payload)).toEqual([]);
+  });
+
+  it.each(["unknown", "arbitrary_reason", "", "worker_restart_before_launch "])(
+    "rejects unknown terminal recovery reason %p",
+    async (reason) => {
+      const payload = Object.assign(new InternalEventDto(), {
+        event_id: randomUUID(),
+        event_type: "recording.terminal",
+        occurred_at: "2026-10-26T12:00:00.000Z",
+        watch_target_id: randomUUID(),
+        session_id: randomUUID(),
+        state: "error",
+        reason,
+      });
+      const errors = await validate(payload);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].property).toBe("reason");
+      expect(errors[0].constraints?.isIn).toEqual(expect.any(String));
+    },
+  );
+
   it.each([undefined, "", "   "])(
     "rejects internal requests when the token is %p",
     async (value) => {
@@ -295,6 +333,64 @@ describeDatabase("internal Worker events", () => {
     expect(
       (await pool.query<{ [key: string]: unknown }>("select * from worker_events")).rowCount,
     ).toBe(1);
+  });
+
+  it("durably acknowledges before-launch recovery and replays without mutation", async () => {
+    const start = event("recording.start", {
+      session_id: randomUUID(),
+      stream_id: randomUUID(),
+      quality: "1080p",
+      occurred_at: "2026-10-26T11:00:00.000Z",
+    });
+    await post(start).expect(201);
+    const before = await pool.query<{
+      owner_id: string;
+      watch_target_id: string;
+      stream_id: string;
+    }>("select owner_id, watch_target_id, stream_id from recordings where id=$1", [
+      start.session_id,
+    ]);
+    const terminal = event("recording.terminal", {
+      session_id: start.session_id,
+      stream_id: start.stream_id,
+      state: "error",
+      reason: "worker_restart_before_launch",
+      occurred_at: "2026-10-26T12:00:00.000Z",
+    });
+    const acknowledgement = await post(terminal).expect(201);
+    expect(acknowledgement.body as unknown).toEqual({
+      acknowledged: true,
+      session_id: start.session_id,
+      state: "error",
+    });
+    const recovered = await pool.query<{
+      owner_id: string;
+      watch_target_id: string;
+      stream_id: string;
+      state: string;
+      finished_at: Date;
+    }>("select * from recordings where id=$1", [start.session_id]);
+    expect(recovered.rows).toEqual([
+      expect.objectContaining({
+        ...before.rows[0],
+        state: "error",
+        finished_at: new Date(terminal.occurred_at),
+      }),
+    ]);
+    await app.close();
+    await startApi();
+    expect((await post(terminal).expect(201)).body as unknown).toEqual(
+      acknowledgement.body as unknown,
+    );
+    expect(
+      (await pool.query("select * from recordings where id=$1", [start.session_id])).rows,
+    ).toEqual(recovered.rows);
+    expect(
+      (await pool.query("select * from worker_events where event_id=$1", [terminal.event_id]))
+        .rowCount,
+    ).toBe(1);
+    expect((await pool.query("select * from recordings")).rowCount).toBe(1);
+    expect((await pool.query("select * from streams")).rowCount).toBe(1);
   });
 
   async function concurrentOwner() {

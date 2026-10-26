@@ -52,7 +52,12 @@ export class InternalEventDto {
   output_file?: string;
 
   @IsOptional()
-  @IsIn(["worker_restart_interruption", "launch_failure", "checkpoint_failure"])
+  @IsIn([
+    "worker_restart_interruption",
+    "worker_restart_before_launch",
+    "launch_failure",
+    "checkpoint_failure",
+  ])
   reason?: string;
 }
 
