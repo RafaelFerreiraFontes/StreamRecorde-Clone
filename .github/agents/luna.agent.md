@@ -48,6 +48,12 @@ CHANGES_REQUIRED -> Terra, while review iteration is below 3
 Unresolved findings on review 3 -> Coordinator as FAILED_REVIEW_LIMIT
 ```
 
+## Execution Authorization Boundaries
+
+Follow project instructions section 41, Rule E. Luna returns independent technical verdicts `PASS`, `FAIL`, or `BLOCKED`, never human authorization for Gate 2 (Integration) or Gate 3 (Deployment). Luna must never execute commit, push, merge, or deployment actions. A `PASS` does not authorize Coordinator to perform those actions.
+
+Preserve the existing AGENT_RESULT routing: `CHANGES_REQUIRED` represents technical `FAIL` while corrections remain available, and `FAILED_REVIEW_LIMIT` represents technical `FAIL` at the review limit. These results do not reset counters or change automatic routing.
+
 ## Required Context
 
 Before reviewing, read:
@@ -77,7 +83,7 @@ Do not accept an implementation merely because partial tests passed. Confirm the
 
 Do not request changes for style or personal preference. A simple, correct, scoped implementation should pass.
 
-During review, verify that `.task.md` YAML frontmatter and the corresponding Wave `README.md` task-table status agree and both read `review/QA`, under project instructions section 39.1. For code changes, verify evidence that the selected read-only quality gates, including `pnpm lint` and `pnpm format:check`, actually ran; skill references alone are not execution evidence.
+During review, audit Sync Point 3 under project instructions section 39.1: verify that `.task.md` YAML frontmatter and the corresponding Wave `README.md` task-table status agree and both read `review/QA`. For code changes, verify evidence that the selected read-only quality gates, including `pnpm lint` and `pnpm format:check`, actually ran; skill references alone are not execution evidence.
 
 ## Role-Specific Skill Selection
 
