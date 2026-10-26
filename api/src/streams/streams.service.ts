@@ -30,7 +30,10 @@ import { Creator, Recording, Stream, WatchTarget } from "./domain.model";
  * - Check for Windows drive letters after normalization
  * - Max 255 chars
  */
-function validateRecordingSubdirInput(value: unknown, fieldName = "recording_subdir"): string | undefined {
+function validateRecordingSubdirInput(
+  value: unknown,
+  fieldName = "recording_subdir",
+): string | undefined {
   if (value === undefined || value === null) return undefined;
 
   // Reject non-string values explicitly - do not coerce
@@ -41,6 +44,8 @@ function validateRecordingSubdirInput(value: unknown, fieldName = "recording_sub
   const str = value;
 
   // Check for null/control characters before any processing
+  // Reject ASCII control characters in untrusted input; these ranges are intentional.
+  // eslint-disable-next-line no-control-regex
   if (/\x00|[\x01-\x1f]/.test(str)) {
     throw new BadRequestException(`${fieldName} contains invalid characters`);
   }
@@ -62,7 +67,7 @@ function validateRecordingSubdirInput(value: unknown, fieldName = "recording_sub
   }
 
   // Split on both separators to check segments for traversal BEFORE normalization
-  const rawSegments = trimmed.split(/[\/\\]/);
+  const rawSegments = trimmed.split(/[/\\]/);
   for (const seg of rawSegments) {
     if (seg === ".." || seg === ".") {
       throw new BadRequestException(`${fieldName} must not contain traversal patterns`);
@@ -70,10 +75,7 @@ function validateRecordingSubdirInput(value: unknown, fieldName = "recording_sub
   }
 
   // Normalize: separators to forward slash, collapse, trim trailing
-  let normalized = trimmed
-    .replace(/\\/g, "/")
-    .replace(/\/+/g, "/")
-    .replace(/\/$/g, "");
+  const normalized = trimmed.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/g, "");
 
   // Reject empty after normalization
   if (normalized === "") return undefined;
@@ -104,101 +106,131 @@ function validateRecordingSubdirInput(value: unknown, fieldName = "recording_sub
 export class StreamerService {
   constructor(private readonly repository: StreamsRepository) {}
 
-  createCreator(dto: CreateCreatorDto): Promise<Creator> {
-    return this.repository.createCreator(dto);
+  private rejectOwnerInput(dto: object): void {
+    if (dto && ("owner_id" in dto || "ownerId" in dto)) {
+      throw new BadRequestException("Owner cannot be specified by client");
+    }
   }
 
-  updateCreator(id: string, dto: PatchCreatorDto): Promise<Creator> {
-    return this.repository.updateCreator(id, dto);
+  createCreator(dto: CreateCreatorDto, ownerId?: string): Promise<Creator> {
+    this.rejectOwnerInput(dto);
+    return this.repository.createCreator(dto, ownerId);
   }
 
-  removeCreator(id: string): Promise<void> {
-    return this.repository.removeCreator(id);
+  updateCreator(id: string, dto: PatchCreatorDto, ownerId?: string): Promise<Creator> {
+    this.rejectOwnerInput(dto);
+    return this.repository.updateCreator(id, dto, ownerId);
   }
 
-  async findAllCreators(): Promise<Creator[]> {
-    return await this.repository.findAllCreators();
+  removeCreator(id: string, ownerId?: string): Promise<void> {
+    return this.repository.removeCreator(id, ownerId);
   }
 
-  async findOneCreator(creatorId: string): Promise<Creator> {
-    return await this.repository.findOneCreator(creatorId);
+  async findAllCreators(ownerId?: string): Promise<Creator[]> {
+    return await this.repository.findAllCreators(ownerId);
   }
 
-  async findWatchTargetsByCreator(creatorId: string): Promise<WatchTarget[]> {
-    return await this.repository.findWatchTargetsByCreator(creatorId);
+  async findOneCreator(creatorId: string, ownerId?: string): Promise<Creator> {
+    return await this.repository.findOneCreator(creatorId, ownerId);
   }
 
-  async findAllWatchTargets(): Promise<WatchTarget[]> {
-    return await this.repository.findAllWatchTargets();
+  async findWatchTargetsByCreator(creatorId: string, ownerId?: string): Promise<WatchTarget[]> {
+    return await this.repository.findWatchTargetsByCreator(creatorId, ownerId);
   }
 
-  async findOneWatchTarget(id: string): Promise<WatchTarget> {
-    return await this.repository.findOneWatchTarget(id);
+  async findAllWatchTargets(ownerId?: string): Promise<WatchTarget[]> {
+    return await this.repository.findAllWatchTargets(ownerId);
   }
 
-  async createWatchTarget(dto: CreateWatchTargetDto): Promise<WatchTarget> {
+  async findOneWatchTarget(id: string, ownerId?: string): Promise<WatchTarget> {
+    return await this.repository.findOneWatchTarget(id, ownerId);
+  }
+
+  async createWatchTarget(dto: CreateWatchTargetDto, ownerId?: string): Promise<WatchTarget> {
+    this.rejectOwnerInput(dto);
     // Validate and normalize recording_subdir if provided
     const normalizedSubdir = validateRecordingSubdirInput(dto.recording_subdir, "recording_subdir");
     const entity = { ...dto, recording_subdir: normalizedSubdir };
-    return await this.repository.createWatchTarget(entity);
+    return await this.repository.createWatchTarget(entity, ownerId);
   }
 
-  async removeWatchTarget(id: string): Promise<void> {
-    return await this.repository.removeWatchTarget(id);
+  async removeWatchTarget(id: string, ownerId?: string): Promise<void> {
+    return await this.repository.removeWatchTarget(id, ownerId);
   }
 
-  async updateWatchTarget(id: string, dto: PatchWatchTargetDto): Promise<WatchTarget> {
-    if (!dto || typeof dto !== "object" || Array.isArray(dto) ||
-        Object.keys(dto).some(key => !["enabled", "recording_subdir", "quality", "url"].includes(key))) {
+  async updateWatchTarget(
+    id: string,
+    dto: PatchWatchTargetDto,
+    ownerId?: string,
+  ): Promise<WatchTarget> {
+    this.rejectOwnerInput(dto);
+    if (
+      !dto ||
+      typeof dto !== "object" ||
+      Array.isArray(dto) ||
+      Object.keys(dto).some(
+        (key) => !["enabled", "recording_subdir", "quality", "url"].includes(key),
+      )
+    ) {
       throw new BadRequestException("Unsupported WatchTarget configuration");
     }
-    if ("enabled" in dto && typeof dto.enabled !== "boolean") {
+    if (dto.enabled !== undefined && typeof dto.enabled !== "boolean") {
       throw new BadRequestException("enabled must be a boolean");
     }
     let subdir: string | undefined;
-    if ("recording_subdir" in dto) {
+    if (dto.recording_subdir !== undefined) {
       if (typeof dto.recording_subdir !== "string") {
         throw new BadRequestException("recording_subdir must be a string");
       }
       subdir = validateRecordingSubdirInput(dto.recording_subdir) ?? "";
     }
     if ("quality" in dto && dto.quality !== undefined) {
-      if (typeof dto.quality !== "string" || !WATCH_TARGET_QUALITIES.includes(dto.quality as any)) {
+      if (
+        typeof dto.quality !== "string" ||
+        !WATCH_TARGET_QUALITIES.some((quality) => quality === dto.quality)
+      ) {
         throw new BadRequestException("quality must be a supported Streamlink quality value");
       }
     }
     let url: string | undefined;
-    if ("url" in dto) {
+    if (dto.url !== undefined) {
       if (typeof dto.url !== "string") {
         throw new BadRequestException("url must be a string");
       }
       if (!isURL(dto.url, WATCH_TARGET_URL_OPTIONS)) {
-        throw new BadRequestException("url must be an absolute HTTP or HTTPS URL without credentials");
+        throw new BadRequestException(
+          "url must be an absolute HTTP or HTTPS URL without credentials",
+        );
       }
       url = dto.url;
     }
-    return this.repository.updateWatchTarget(id, {
-      recordingSubdir: subdir,
-      enabled: dto.enabled,
-      quality: dto.quality,
-      url: url,
-    });
+    return this.repository.updateWatchTarget(
+      id,
+      {
+        recordingSubdir: subdir,
+        enabled: dto.enabled,
+        quality: dto.quality,
+        url: url,
+      },
+      ownerId,
+    );
   }
 
-  async findAllStreamer(): Promise<StreamerDto[]> {
-    return await this.repository.findAllStreamer();
+  async findAllStreamer(ownerId?: string): Promise<StreamerDto[]> {
+    return await this.repository.findAllStreamer(ownerId);
   }
 
-  async findOneStreamer(id: string): Promise<StreamerDto> {
-    return await this.repository.findOneStreamer(id);
+  async findOneStreamer(id: string, ownerId?: string): Promise<StreamerDto> {
+    return await this.repository.findOneStreamer(id, ownerId);
   }
 
-  async createStreamer(dto: CreateStreamerDto): Promise<StreamerDto> {
-    return await this.repository.createStreamer(dto);
+  async createStreamer(dto: CreateStreamerDto, ownerId?: string): Promise<StreamerDto> {
+    this.rejectOwnerInput(dto);
+    return await this.repository.createStreamer(dto, ownerId);
   }
 
-  async removeStreamer(id: string) {
-    return await this.repository.removeStreamer(id);
+  async removeStreamer(id: string, ownerId?: string) {
+    return await this.repository.removeStreamer(id, ownerId);
   }
 }
 
@@ -206,16 +238,16 @@ export class StreamerService {
 export class SessionService {
   constructor(private readonly repository: StreamsRepository) {}
 
-  async findAllSessions(): Promise<SessionDto[]> {
-    return await this.repository.findAllSessions();
+  async findAllSessions(ownerId?: string): Promise<SessionDto[]> {
+    return await this.repository.findAllSessions(ownerId);
   }
 
-  async findOneSession(id: string): Promise<SessionDto> {
-    return await this.repository.findOneSession(id);
+  async findOneSession(id: string, ownerId?: string): Promise<SessionDto> {
+    return await this.repository.findOneSession(id, ownerId);
   }
 
-  async findSessionsByChannel(channel_id: string): Promise<SessionDto[]> {
-    return await this.repository.findSessionsByChannel(channel_id);
+  async findSessionsByChannel(channel_id: string, ownerId?: string): Promise<SessionDto[]> {
+    return await this.repository.findSessionsByChannel(channel_id, ownerId);
   }
 }
 
@@ -223,25 +255,27 @@ export class SessionService {
 export class StreamService {
   constructor(private readonly repository: StreamsRepository) {}
 
-  async findAllStreams(): Promise<Stream[]> {
-    return await this.repository.findAllStreams();
+  async findAllStreams(ownerId?: string): Promise<Stream[]> {
+    return await this.repository.findAllStreams(ownerId);
   }
 
-  async findOneStream(id: string): Promise<Stream> {
-    return await this.repository.findOneStream(id);
+  async findOneStream(id: string, ownerId?: string): Promise<Stream> {
+    return await this.repository.findOneStream(id, ownerId);
   }
 
   async findActiveStreamByWatchTarget(
     watchTargetId: string,
+    ownerId?: string,
   ): Promise<Stream | null> {
-    return await this.repository.findActiveStreamByWatchTarget(watchTargetId);
+    return await this.repository.findActiveStreamByWatchTarget(watchTargetId, ownerId);
   }
 
   async findStreamsByWatchTarget(
     watchTargetId: string,
     since?: string,
+    ownerId?: string,
   ): Promise<Stream[]> {
-    return await this.repository.findStreamsByWatchTarget(watchTargetId, since);
+    return await this.repository.findStreamsByWatchTarget(watchTargetId, since, ownerId);
   }
 }
 
@@ -249,14 +283,14 @@ export class StreamService {
 export class RecordingService {
   constructor(private readonly repository: StreamsRepository) {}
 
-  async findAllRecordings(watchTargetId?: string): Promise<Recording[]> {
+  async findAllRecordings(watchTargetId?: string, ownerId?: string): Promise<Recording[]> {
     if (watchTargetId) {
-      return await this.repository.findRecordingsByWatchTarget(watchTargetId);
+      return await this.repository.findRecordingsByWatchTarget(watchTargetId, ownerId);
     }
-    return await this.repository.findAllRecordings();
+    return await this.repository.findAllRecordings(ownerId);
   }
 
-  async findOneRecording(id: string): Promise<Recording> {
-    return await this.repository.findOneRecording(id);
+  async findOneRecording(id: string, ownerId?: string): Promise<Recording> {
+    return await this.repository.findOneRecording(id, ownerId);
   }
 }

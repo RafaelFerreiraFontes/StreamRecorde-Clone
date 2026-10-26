@@ -1,5 +1,12 @@
-coverage
-public
-dist
+coverage/
+public/
+dist/
+**/.next/
+api/dist/
+.venv/
+runtime-data/
+recordings/
+*.lock
 pnpm-lock.yaml
 pnpm-workspace.yaml
+api/drizzle/migrations/

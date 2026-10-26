@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format": "node ../scripts/lint-repository.mjs format:write api",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
@@ -15,13 +15,20 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node -r ts-node/register src/database/migrate.ts",
     "migrate:legacy": "node -r ts-node/register src/migrator/cli.ts",
+    "users": "node -r ts-node/register src/auth/users-cli.ts",
     "test:db:integration": "node scripts/test-db-integration.mjs",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "lint": "node ../scripts/lint-repository.mjs lint api",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "lint:fix": "node ../scripts/lint-repository.mjs lint:fix api",
+    "format:check": "node ../scripts/lint-repository.mjs format:check api",
+    "format:write": "node ../scripts/lint-repository.mjs format:write api",
+    "lint:check": "node ../scripts/lint-repository.mjs lint api",
+    "db:migrate:prod": "node dist/database/migrate.js",
+    "users:prod": "node dist/auth/users-cli.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -38,8 +45,7 @@
     "uuid": "^14.0.1"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.2.0",
-    "@eslint/js": "^9.18.0",
+    "@eslint/js": "9.39.5",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
@@ -51,12 +57,11 @@
     "@types/supertest": "^7.0.0",
     "@types/uuid": "^11.0.0",
     "drizzle-kit": "^0.31.4",
-    "eslint": "^9.18.0",
-    "eslint-config-prettier": "^10.0.1",
-    "eslint-plugin-prettier": "^5.2.2",
-    "globals": "^17.0.0",
+    "eslint": "9.39.5",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.9.0",
     "jest": "^29.7.0",
-    "prettier": "^3.4.2",
+    "prettier": "3.8.1",
     "sanitize-html": "^2.17.6",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
@@ -65,7 +70,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.20.0"
+    "typescript-eslint": "8.65.0"
   },
   "jest": {
     "moduleFileExtensions": [

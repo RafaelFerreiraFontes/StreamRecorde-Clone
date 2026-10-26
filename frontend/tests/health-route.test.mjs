@@ -15,10 +15,7 @@ test("health route exports GET function and returns expected structure", () => {
   const source = readFileSync(routePath, "utf-8");
 
   // Verify GET function exists
-  assert.ok(
-    /export\s+function\s+GET\s*\(/.test(source),
-    "Health route must export GET function",
-  );
+  assert.ok(/export\s+function\s+GET\s*\(/.test(source), "Health route must export GET function");
 
   // Verify force-dynamic to skip caching
   assert.ok(
@@ -50,12 +47,6 @@ test("health route has no domain dependencies", () => {
     /from\s+["']@[^"/]+db/,
     /from\s+["']@[^"/]+auth/,
   ];
-  const foundDomainImports = domainImports.filter((pattern) =>
-    pattern.test(source),
-  );
-  assert.strictEqual(
-    foundDomainImports.length,
-    0,
-    "Health route must not import domain modules",
-  );
+  const foundDomainImports = domainImports.filter((pattern) => pattern.test(source));
+  assert.strictEqual(foundDomainImports.length, 0, "Health route must not import domain modules");
 });

@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 const origin = process.env.TEST_FRONTEND_URL;
 if (!origin || process.env.TEST_ALLOW_MUTATIONS !== "true")
-  throw new Error(
-    "Set TEST_FRONTEND_URL and TEST_ALLOW_MUTATIONS=true for an isolated test API.",
-  );
+  throw new Error("Set TEST_FRONTEND_URL and TEST_ALLOW_MUTATIONS=true for an isolated test API.");
 const created = [];
 async function request(path, method = "GET", body) {
   const response = await fetch(`${origin}/api/backend${path}`, {
@@ -18,12 +16,11 @@ async function request(path, method = "GET", body) {
   return { status: response.status, data: text ? JSON.parse(text) : undefined };
 }
 try {
-  for (const path of [
-    "/creators",
-    "/watch-targets",
-    "/streams",
-    "/recordings",
-  ]) {
+  const session = await request("/auth/session");
+  assert.equal(session.status, 200);
+  assert.equal(session.data.identityMode, "local");
+  assert.ok(["json", "relational"].includes(session.data.persistence));
+  for (const path of ["/creators", "/watch-targets", "/streams", "/recordings"]) {
     const response = await request(path);
     assert.equal(response.status, 200);
     assert.ok(Array.isArray(response.data));
@@ -88,19 +85,12 @@ try {
   assert.equal(absolutePatch.status, 400);
 
   assert.equal(
-    (await request(`/creators/${encodeURIComponent(creator)}/watch-targets`))
-      .data.length,
+    (await request(`/creators/${encodeURIComponent(creator)}/watch-targets`)).data.length,
     2,
   );
   assert.ok((await request("/creators")).data.some((c) => c.id === creator));
-  assert.equal(
-    (await request(`/recordings?watchTargetId=${created[0]}`)).data.length,
-    0,
-  );
-  assert.equal(
-    (await request(`/watch-targets/${created[0]}`, "DELETE")).status,
-    200,
-  );
+  assert.equal((await request(`/recordings?watchTargetId=${created[0]}`)).data.length, 0);
+  assert.equal((await request(`/watch-targets/${created[0]}`, "DELETE")).status, 200);
   assert.equal((await request(`/watch-targets/${created[0]}`)).status, 404);
   assert.equal((await request(`/watch-targets/${created[1]}`)).status, 200);
   assert.equal((await request("/streamer", "POST", {})).status, 404);
@@ -115,14 +105,10 @@ try {
   });
   assert.equal(crossOrigin.status, 403);
   for (const id of created) await request(`/watch-targets/${id}`, "DELETE");
-  assert.deepEqual(
-    (await request("/watch-targets")).data.map((t) => t.id).sort(),
-    before,
-  );
+  assert.deepEqual((await request("/watch-targets")).data.map((t) => t.id).sort(), before);
   console.log(
     "PASS: collections, create, recording_subdir, PATCH, clear, invalid rejection, Creator grouping, initial state, filtering, isolated deletion, errors, proxy method/origin restrictions, cleanup.",
   );
 } finally {
-  for (const id of created)
-    await request(`/watch-targets/${id}`, "DELETE").catch(() => {});
+  for (const id of created) await request(`/watch-targets/${id}`, "DELETE").catch(() => {});
 }

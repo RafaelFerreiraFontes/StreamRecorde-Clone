@@ -4,15 +4,12 @@ import json
 import os
 import tempfile
 import time
-from typing import Any, TypeVar
-
-
-JsonValue = TypeVar("JsonValue")
-
+from typing import Any
 
 _READ_ATTEMPTS = 3
 
 # ─── Internal helpers ───────────────────────────────────────────────────────────
+
 
 def _replace_with_retry(src: str, dst: str, attempts: int = 3) -> None:
     """Replace src with dst, retrying on transient PermissionError."""
@@ -28,15 +25,15 @@ def _replace_with_retry(src: str, dst: str, attempts: int = 3) -> None:
         raise last_error
 
 
-def _read_json(
+def _read_json[JsonValue](
     path: str, empty_value: JsonValue, expected_type: type[JsonValue]
 ) -> JsonValue:
     for attempt in range(_READ_ATTEMPTS):
         try:
-            with open(path, "r", encoding="utf-8") as file_handle:
+            with open(path, encoding="utf-8") as file_handle:
                 value = json.load(file_handle)
             if not isinstance(value, expected_type):
-                raise ValueError("JSON file has an invalid shape: {}".format(path))
+                raise ValueError(f"JSON file has an invalid shape: {path}")
             return value
         except FileNotFoundError:
             return empty_value
@@ -53,7 +50,7 @@ def write_json_atomically(path, value):
     temporary_path = None
     try:
         file_descriptor, temporary_path = tempfile.mkstemp(
-            prefix=".{}.".format(os.path.basename(path)), suffix=".tmp", dir=directory
+            prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory
         )
         with os.fdopen(file_descriptor, "w", encoding="utf-8") as file_handle:
             file_descriptor = None

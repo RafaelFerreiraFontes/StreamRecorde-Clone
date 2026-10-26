@@ -1,0 +1,43 @@
+# Mode B: explicitly layer over compose.yml; credentials are operator supplied.
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-streamrecorder}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set a private PostgreSQL password}"
+      POSTGRES_DB: "${POSTGRES_DB:-streamrecorder}"
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    environment:
+      RELATIONAL_STORAGE: "true"
+      IDENTITY_MODE: local
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-streamrecorder}:${POSTGRES_PASSWORD:?Set a private PostgreSQL password}@postgres:5432/${POSTGRES_DB:-streamrecorder}"
+      PERSISTENCE_MODE: bridge
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:?Set a private shared bridge token}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    environment:
+      PERSISTENCE_MODE: bridge
+      PERSISTENCE_BRIDGE_URL: http://api:3000
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:?Set a private shared bridge token}"
+      OUTBOX_DIR: /outbox
+    volumes:
+      - worker-outbox:/outbox
+
+volumes:
+  postgres_data:
+  worker-outbox:

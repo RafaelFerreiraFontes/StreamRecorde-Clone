@@ -52,6 +52,14 @@ Follow project instructions section 40.6 to discover and consult available archi
 - acceptance-criteria refinement;
 - test identification.
 
+## Role-Specific Skill Selection
+
+Normally relevant skills: `streamrecorder-domain-contracts`, `streamrecorder-postgres-persistence`, `streamrecorder-worker-lifecycle`, and `streamrecorder-api-frontend`.
+
+Contextually relevant skills: `streamrecorder-security-compliance`, `streamrecorder-docker-validation`, `streamrecorder-code-quality`, and `streamrecorder-task-preflight`. Load only skills warranted by the task's affected boundaries; never eagerly load all nine skills.
+
+For code-changing tasks, consult `streamrecorder-code-quality` during planning to identify required non-mutating gates and runtime-sensitive transformations, including NestJS decorator value imports, React Hooks, and Python 3.12/subprocess safety. Sol does not implement changes or replace Coordinator validation.
+
 ## Investigation Process
 
 1. Inspect the current architecture and implementation.

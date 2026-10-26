@@ -1,5 +1,47 @@
 # Worker — StreamRecorder Clone
 
+## Post-Wave 05.5 Operational Checkpoint
+
+The existing English/Portuguese sections remain below. See [root mode contracts](../README.md#5-deployment-modes) and [human stability tests](../docs/DOCKER-STABILITY-TESTING.md).
+
+Approved A uses `PERSISTENCE_MODE=direct_json`; B/C use `bridge` with shared API/Worker `INTERNAL_API_TOKEN`, PostgreSQL 17 and durable `OUTBOX_DIR=/outbox` on named volume `worker-outbox`. B/C additionally require `POSTGRES_PASSWORD` in database configuration. Host mounts use `RUNTIME_DATA_DIR=./runtime-data` and `RECORDINGS_DIR=./recordings`; container `CONFIG_DIR=/data`, `OUTPUT_DIR=/recordings`. These are deployment defaults: select the relational/authenticated overlays explicitly.
+
+During API/database outage preserve pending events and active checkpoints. Restore connectivity, observe retries and durable acknowledgment, then reconcile Streams/Recordings; restarting a container alone is not recovery evidence. Never clear the outbox manually or change to stale JSON. Disabling a WatchTarget prevents new probes/captures but does not cancel an already active capture or terminal persistence. Human logout/account disable is a separate authorization concern, not an instruction to erase Worker recovery data.
+
+Use fake Streamlink and isolated storage for deterministic outage/restart/shutdown tests. Successful capture remains `finished`; nonempty output is not proof of playable MP4, and no explicit separate FFmpeg finalization is invoked. No new live-platform or human stability result is claimed.
+
+## Wave 05.5 Identity And Recovery / Identidade e recuperação
+
+**English:** The Worker uses the internal token, not a human session. Human
+logout/expiry does not cancel accepted capture; disabling an account blocks new
+launches while accepted work may finish. Execution configuration includes enabled
+targets of non-disabled owners, even when the API human mode is local. To stop
+other owners' monitoring during an approved relational/local rollback, disable
+those accounts through the CLI and reconcile in-flight work. Never delete pending
+outbox events or active checkpoints to force cutover. Retain `OUTBOX_DIR` across
+API/Worker restarts; the API derives ownership and acknowledges durable commits.
+Keep recordings private: shared-root local browsing is not per-user isolation.
+Authenticated API startup is explicitly opt-in and fails closed unless relational
+storage, PostgreSQL URL/reachability, trusted origins, ownership schema/composite
+constraints and an enabled password-enrolled user are valid. See [operations and rollback](../api/README.database.md). Synthetic
+Streamlink fixtures do not prove playable MP4 or real-platform recovery.
+
+**Português (Brasil):** O Worker usa o token interno, não a sessão humana.
+Logout/expiração não cancela uma captura já aceita; desabilitar uma conta impede
+novas capturas, mas permite concluir o trabalho aceito. A configuração inclui
+alvos habilitados de todos os proprietários não desabilitados, mesmo no modo
+humano local. Para interromper o monitoramento de outras contas durante um
+retorno aprovado ao modo relacional/local, desabilite-as pela CLI e reconcilie
+capturas em andamento. Preserve `OUTBOX_DIR`, eventos pendentes, checkpoints e
+mídia nos reinícios; não apague eventos para forçar o corte. A navegação local
+pela raiz compartilhada pressupõe um operador confiável e não isola arquivos por
+usuário. A inicialização autenticada exige configuração explícita e validação
+fail-closed do armazenamento relacional, URL e conexão PostgreSQL, origens confiáveis,
+esquema de propriedade, restrições compostas e usuário habilitado com senha cadastrada.
+Consulte o [guia operacional](../api/README.database.md).
+Fixtures sintéticas não comprovam MP4 reproduzível nem recuperação em plataformas
+reais. Não há cadastro público, credenciais padrão ou publicação de mídia.
+
 ## Wave 05 Persistence Bridge
 
 The default `PERSISTENCE_MODE=direct_json` preserves the JSON lifecycle described
@@ -821,3 +863,7 @@ A integração atual é uma arquitetura de MVP baseada em arquivos JSON comparti
 ## Resumo executivo
 
 O Worker Python atual é a camada operacional do MVP. Ele observa WatchTargets habilitados, classifica probes com segurança, cria/reutiliza `Stream`, cria `Recording`, executa shutdown cooperativo e coleta processos filhos de mídia, persiste estados e mantém compatibilidade com formatos JSON legados. O modelo é funcional e local, mas ainda sujeito às limitações do MVP: persistência JSON, sem fila, sem banco e sem cloud final.
+
+## Linting and Formatting
+
+See [repository linting and formatting](../README-LINTING.md) for setup, read-only checks, explicit fixes and coverage.

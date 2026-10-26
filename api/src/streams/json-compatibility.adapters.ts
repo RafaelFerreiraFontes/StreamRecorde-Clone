@@ -1,7 +1,13 @@
 import { open, readFile, readdir, rename, unlink, mkdir, chmod } from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "crypto";
-import { Recording, RecordingState, Stream, StreamPlatform, WatchTarget } from "./domain.model";
+import type {
+  Recording,
+  RecordingState,
+  Stream,
+  StreamPlatform,
+  WatchTarget,
+} from "./domain.model";
 
 interface WatchlistEntry {
   id: string;
@@ -54,9 +60,7 @@ function isNonEmpty(v: string | undefined): v is string {
  *
  * @param env - Explicit environment variable mapping (e.g., process.env or test mapping)
  */
-export function resolveAllConfigPaths(
-  env: Record<string, string | undefined>,
-): {
+export function resolveAllConfigPaths(env: Record<string, string | undefined>): {
   watchlist: string;
   channels_status: string;
   sessions: string;
@@ -70,19 +74,14 @@ export function resolveAllConfigPaths(
   const configDirOverride = env.CONFIG_DIR;
 
   // Level 2: non-empty CONFIG_DIR
-  const configDir = isNonEmpty(configDirOverride)
-    ? configDirOverride.trim()
-    : undefined;
+  const configDir = isNonEmpty(configDirOverride) ? configDirOverride.trim() : undefined;
 
   // Local default: worker/config relative to cwd (established local behavior)
   const localDefault = path.join(process.cwd(), "..", "worker", "config");
 
   // Resolve each path with precedence
   // Use simple string concatenation for absolute paths to preserve forward slashes
-  const resolveSingle = (
-    key: ConfigFileKey,
-    override: string | undefined,
-  ): string => {
+  const resolveSingle = (key: ConfigFileKey, override: string | undefined): string => {
     // Level 1: non-empty individual override wins
     if (isNonEmpty(override)) {
       return override.trim();
@@ -113,10 +112,6 @@ export function resolveConfigPath(
   fileKey: ConfigFileKey,
   env: Record<string, string | undefined>,
 ): string {
-  const envKey =
-    fileKey === "channels_status"
-      ? env.CHANNELS_STATUS_PATH
-      : env[`${fileKey.toUpperCase()}_PATH`];
   const paths = resolveAllConfigPaths(env);
   return paths[fileKey];
 }
@@ -136,9 +131,7 @@ export interface ResolvedConfigPaths {
  * @param paths - Pre-resolved config file paths
  * @throws Error if a file cannot be created (parent dir creation failure, etc.)
  */
-export async function initializeRuntimeFiles(
-  paths: ResolvedConfigPaths,
-): Promise<void> {
+export async function initializeRuntimeFiles(paths: ResolvedConfigPaths): Promise<void> {
   // Canonical shapes for each file
   const canonicalShapes: Record<ConfigFileKey, unknown> = {
     watchlist: [],
@@ -159,10 +152,7 @@ export async function initializeRuntimeFiles(
     try {
       const handle = await open(filePath, "wx");
       try {
-        await handle.writeFile(
-          JSON.stringify(canonicalShapes[fileKey], null, 2),
-          "utf-8",
-        );
+        await handle.writeFile(JSON.stringify(canonicalShapes[fileKey], null, 2), "utf-8");
       } finally {
         await handle.close();
       }
@@ -180,7 +170,11 @@ const readAttempts = 3;
 
 const delay = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 1));
 
-async function readJson<T>(filePath: string, emptyValue: T, expected: "array" | "object"): Promise<T> {
+async function readJson<T>(
+  filePath: string,
+  emptyValue: T,
+  expected: "array" | "object",
+): Promise<T> {
   for (let attempt = 1; attempt <= readAttempts; attempt += 1) {
     try {
       const raw = await readFile(filePath, "utf-8");
@@ -209,7 +203,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export async function writeJsonAtomically(filePath: string, value: unknown): Promise<void> {
-  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${randomUUID()}.tmp`,
+  );
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(tempPath, "w");
@@ -376,4 +373,3 @@ export async function probeAtomicReplace(
     }
   }
 }
-

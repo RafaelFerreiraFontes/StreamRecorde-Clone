@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { StreamsRepository } from "./streams.repository";
 import { RelationalStreamsRepository } from "./relational-streams.repository";
 import { DatabaseModule } from "../database/database.module";
+import { AuthModule } from "../auth/auth.module";
 import { DatabaseService } from "../database/database.service";
 import {
   RecordingService,
@@ -17,7 +18,7 @@ import { InternalStreamsController, InternalTokenGuard } from "./internal-stream
 import { InternalEventsService } from "./internal-events.service";
 
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, AuthModule],
   controllers: [RecordingsFilesystemController, StreamController, InternalStreamsController],
   providers: [
     InternalEventsService,
@@ -26,9 +27,10 @@ import { InternalEventsService } from "./internal-events.service";
     {
       provide: StreamsRepository,
       inject: [DatabaseService],
-      useFactory: (database: DatabaseService) => process.env.RELATIONAL_STORAGE === "true"
-        ? new RelationalStreamsRepository(database)
-        : new StreamsRepository(),
+      useFactory: (database: DatabaseService) =>
+        process.env.RELATIONAL_STORAGE === "true"
+          ? new RelationalStreamsRepository(database)
+          : new StreamsRepository(),
     },
     StreamerService,
     SessionService,

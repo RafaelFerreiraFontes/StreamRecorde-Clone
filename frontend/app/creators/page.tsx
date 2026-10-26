@@ -1,7 +1,6 @@
 ﻿"use client";
 import { useEffect, useState } from "react";
 import { useDashboard } from "@/components/provider";
-import { api } from "@/lib/api";
 import { Badge, Empty, Json, ResourceStatus, Table } from "@/components/ui";
 import type { Creator, WatchTarget } from "@/lib/types";
 function CreatorRow({ creator }: { creator: Creator }) {
@@ -9,50 +8,45 @@ function CreatorRow({ creator }: { creator: Creator }) {
   const [targets, setTargets] = useState<WatchTarget[]>();
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
-  const { snapshot } = useDashboard();
+  const { snapshot, request: api, generation, isCurrentGeneration } = useDashboard();
+  const targetsUpdated = snapshot["watch-targets"].updated;
   useEffect(() => {
     if (!open) return;
     let active = true;
-    api<WatchTarget[]>(
-      `/creators/${encodeURIComponent(creator.id)}/watch-targets`,
-    )
+    api<WatchTarget[]>(`/creators/${encodeURIComponent(creator.id)}/watch-targets`)
       .then((data) => {
-        if (active) {
+        if (active && isCurrentGeneration(generation)) {
           setTargets(data);
           setError("");
         }
       })
       .catch((e) => {
-        if (active) setError(String(e));
+        if (active && isCurrentGeneration(generation)) setError(String(e));
       });
     return () => {
       active = false;
     };
-  }, [open, creator.id, snapshot["watch-targets"].updated, retry]);
+  }, [open, creator.id, targetsUpdated, retry, api, generation, isCurrentGeneration]);
   return (
     <section className="panel creator">
-      <button
-        className="creator-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
+      <button className="creator-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span>
           <strong>{creator.display_name}</strong>
           <code className="subtext">{creator.id}</code>
         </span>
         <span>{open ? "− Collapse" : "+ Watch targets"}</span>
       </button>
-      {open && (
+      {open ? (
         <div className="creator-children">
-          {error && (
+          {error ? (
             <div className="error" role="alert">
               <pre>{error}</pre>
               <button onClick={() => setRetry((n) => n + 1)}>Retry</button>
             </div>
-          )}
+          ) : null}
           {!targets && !error && <Empty>Loading Creator watch targets…</Empty>}
-          {targets &&
-            (targets.length ? (
+          {targets ? (
+            targets.length ? (
               <Table headings={["WatchTarget", "Platform", "State", "Quality"]}>
                 {targets.map((t) => (
                   <tr key={t.id}>
@@ -70,9 +64,10 @@ function CreatorRow({ creator }: { creator: Creator }) {
               </Table>
             ) : (
               <Empty>No associated watch targets.</Empty>
-            ))}
+            )
+          ) : null}
         </div>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -85,10 +80,7 @@ export default function Creators() {
         <div>
           <div className="eyebrow">Domain / Grouped identities</div>
           <h1>Creators</h1>
-          <p>
-            One Creator can have multiple WatchTargets across Twitch, YouTube
-            and Kick.
-          </p>
+          <p>One Creator can have multiple WatchTargets across Twitch, YouTube and Kick.</p>
         </div>
       </div>
       <ResourceStatus resource="creators" />
@@ -96,15 +88,13 @@ export default function Creators() {
         <CreatorRow key={c.id} creator={c} />
       ))}
       {data?.length === 0 && (
-        <Empty>
-          No Creators yet. Create a WatchTarget to establish a Creator.
-        </Empty>
+        <Empty>No Creators yet. Create a WatchTarget to establish a Creator.</Empty>
       )}
       <p className="note">
-        Creator IDs are currently derived from display names. Expand a Creator
-        to query its WatchTargets.
+        Creator IDs are currently derived from display names. Expand a Creator to query its
+        WatchTargets.
       </p>
-      {data && <Json data={data} />}
+      {data ? <Json data={data} /> : null}
     </>
   );
 }

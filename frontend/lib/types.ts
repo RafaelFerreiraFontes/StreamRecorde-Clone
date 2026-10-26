@@ -1,5 +1,28 @@
-export type RecordingState =
-  "idle" | "offline" | "recording" | "finished" | "error";
+export type RecordingState = "idle" | "offline" | "recording" | "finished" | "error";
+export interface AuthSession {
+  identityMode: "authenticated" | "local";
+  persistence: "relational" | "json";
+  user: { id: string; username: string; email: string | null } | null;
+}
+export type AuthState =
+  | "initializing"
+  | "local"
+  | "authenticated"
+  | "unauthenticated"
+  | "authentication_error"
+  | "backend_unavailable";
+export interface RecordingDirectory {
+  path: string;
+  truncated?: boolean;
+  entries: { name: string; path: string; kind: "directory" | "file" }[];
+}
+export interface RecordingLocation {
+  status: "available" | "file_not_found" | "directory_unavailable";
+  directory?: RecordingDirectory;
+  file?: string;
+  subdir?: string;
+  size?: number;
+}
 export interface Creator {
   id: string;
   display_name: string;
@@ -36,13 +59,7 @@ export type CreateWatchTarget = Pick<
   WatchTarget,
   "creator_id" | "channel_name" | "platform" | "url" | "quality"
 >;
-export const states: RecordingState[] = [
-  "idle",
-  "offline",
-  "recording",
-  "finished",
-  "error",
-];
+export const states: RecordingState[] = ["idle", "offline", "recording", "finished", "error"];
 export const qualities = [
   "best",
   "worst",

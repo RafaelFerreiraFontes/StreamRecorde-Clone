@@ -13,7 +13,7 @@ services:
       timeout: 2s
       retries: 30
   api:
-    image: streamrecorder-api:wave-05
+    image: streamrecorder-api:wave-05.5
     build: ../../api
     environment:
       PORT: "3000"
@@ -31,14 +31,14 @@ services:
       postgres:
         condition: service_healthy
   frontend:
-    image: streamrecorder-frontend:wave-05
+    image: streamrecorder-frontend:wave-05.5
     build: ../../frontend
     environment:
       PORT: "3001"
       API_BASE_URL: http://api:3000
     ports: ["127.0.0.1::3001"]
   worker:
-    image: streamrecorder-worker:wave-05
+    image: streamrecorder-worker:wave-05.5
     build: ../../worker
     init: true
     entrypoint: [/bin/sh, /smoke-fixture/worker-entrypoint.sh]

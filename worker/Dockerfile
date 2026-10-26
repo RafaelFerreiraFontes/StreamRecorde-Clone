@@ -19,10 +19,10 @@ COPY json_adapters.py .
 COPY outbox.py .
 
 # Create runtime directories
-RUN mkdir -p /recordings /data && \
+RUN mkdir -p /recordings /data /outbox && \
     groupadd -g 1000 workergrp && \
     useradd -u 1000 -g workergrp workeruser && \
-    chown -R 1000:1000 /recordings /data && \
+    chown -R 1000:1000 /recordings /data /outbox && \
     chmod 2775 /data
 
 # Set environment variables

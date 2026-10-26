@@ -2,11 +2,7 @@
 import { RecordingBrowser } from "@/components/recording-browser";
 import { useState } from "react";
 import { useDashboard } from "@/components/provider";
-import { api } from "@/lib/api";
-import {
-  qualities,
-  type WatchTarget,
-} from "@/lib/types";
+import { qualities, type WatchTarget } from "@/lib/types";
 import { Badge, Empty, Json, ResourceStatus, Table } from "@/components/ui";
 
 type EditingTarget = { id: string; recording_subdir?: string } | null;
@@ -32,6 +28,7 @@ export function WatchTargetEnabledSwitch({
   afterMutation: () => Promise<void>;
   onError: (error: string) => void;
 }) {
+  const { request: api, generation, isCurrentGeneration } = useDashboard();
   const [saving, setSaving] = useState<boolean>();
   const enabled = saving ?? target.enabled;
 
@@ -44,11 +41,12 @@ export function WatchTargetEnabledSwitch({
         method: "PATCH",
         body: JSON.stringify({ enabled: nextEnabled }),
       });
+      if (!isCurrentGeneration(generation)) return;
       await afterMutation();
     } catch (error) {
-      onError(String(error));
+      if (isCurrentGeneration(generation)) onError(String(error));
     } finally {
-      setSaving(undefined);
+      if (isCurrentGeneration(generation)) setSaving(undefined);
     }
   }
 
@@ -79,6 +77,7 @@ export function WatchTargetQualitySelect({
   afterMutation: () => Promise<void>;
   onError: (error: string) => void;
 }) {
+  const { request: api, generation, isCurrentGeneration } = useDashboard();
   const [savingQuality, setSavingQuality] = useState<string | undefined>();
   const currentQuality = savingQuality ?? target.quality;
 
@@ -90,15 +89,16 @@ export function WatchTargetQualitySelect({
         method: "PATCH",
         body: JSON.stringify({ quality: nextQuality }),
       });
+      if (!isCurrentGeneration(generation)) return;
       await afterMutation();
     } catch (error) {
-      onError(String(error));
+      if (isCurrentGeneration(generation)) onError(String(error));
     } finally {
-      setSavingQuality(undefined);
+      if (isCurrentGeneration(generation)) setSavingQuality(undefined);
     }
   }
 
-  const qualityOptions = qualities.includes(currentQuality as any)
+  const qualityOptions = qualities.some((quality) => quality === currentQuality)
     ? qualities
     : [currentQuality, ...qualities];
 
@@ -130,6 +130,7 @@ export function WatchTargetUrlEditor({
   afterMutation: () => Promise<void>;
   onError: (error: string) => void;
 }) {
+  const { request: api, generation, isCurrentGeneration } = useDashboard();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
@@ -156,13 +157,15 @@ export function WatchTargetUrlEditor({
         method: "PATCH",
         body: JSON.stringify({ url: editValue }),
       });
+      if (!isCurrentGeneration(generation)) return;
       await afterMutation();
+      if (!isCurrentGeneration(generation)) return;
       setEditing(false);
       setEditValue("");
     } catch (error) {
-      onError(String(error));
+      if (isCurrentGeneration(generation)) onError(String(error));
     } finally {
-      setSaving(false);
+      if (isCurrentGeneration(generation)) setSaving(false);
     }
   }
 
@@ -186,11 +189,7 @@ export function WatchTargetUrlEditor({
         >
           Save
         </button>
-        <button
-          className="secondary small"
-          onClick={cancelEdit}
-          disabled={saving}
-        >
+        <button className="secondary small" onClick={cancelEdit} disabled={saving}>
           Cancel
         </button>
       </div>
@@ -199,7 +198,10 @@ export function WatchTargetUrlEditor({
 
   return (
     <div className="url-cell">
-      <span className={isSafeHttpUrl(target.url) ? "path url-truncate" : "muted"} title={target.url}>
+      <span
+        className={isSafeHttpUrl(target.url) ? "path url-truncate" : "muted"}
+        title={target.url}
+      >
         {isSafeHttpUrl(target.url) ? target.url : "—"}
       </span>
       <button
@@ -216,7 +218,14 @@ export function WatchTargetUrlEditor({
 }
 
 export default function WatchTargets() {
-  const { snapshot, afterMutation } = useDashboard();
+  const {
+    snapshot,
+    afterMutation,
+    request: api,
+    generation,
+    isCurrentGeneration,
+    authState,
+  } = useDashboard();
   const [picker, setPicker] = useState<"create" | "edit" | null>(null);
   const [createFolder, setCreateFolder] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -259,15 +268,16 @@ export default function WatchTargets() {
         method: "POST",
         body: JSON.stringify(payload),
       });
+      if (!isCurrentGeneration(generation)) return;
       setMessage("Watch target created.");
       form.reset();
       setCreateFolder("");
       setShowForm(false);
       await afterMutation();
     } catch (e) {
-      setError(String(e));
+      if (isCurrentGeneration(generation)) setError(String(e));
     } finally {
-      setPending(false);
+      if (isCurrentGeneration(generation)) setPending(false);
     }
   }
 
@@ -285,12 +295,13 @@ export default function WatchTargets() {
       await api(`/watch-targets/${encodeURIComponent(target.id)}`, {
         method: "DELETE",
       });
+      if (!isCurrentGeneration(generation)) return;
       setMessage(`Deleted ${target.channel_name}.`);
       await afterMutation();
     } catch (e) {
-      setError(String(e));
+      if (isCurrentGeneration(generation)) setError(String(e));
     } finally {
-      setPending(false);
+      if (isCurrentGeneration(generation)) setPending(false);
     }
   }
 
@@ -315,14 +326,15 @@ export default function WatchTargets() {
         method: "PATCH",
         body: JSON.stringify({ recording_subdir: editValue }),
       });
+      if (!isCurrentGeneration(generation)) return;
       setMessage("Recording folder updated.");
       setEditingTarget(null);
       setEditValue("");
       await afterMutation();
     } catch (e) {
-      setError(String(e));
+      if (isCurrentGeneration(generation)) setError(String(e));
     } finally {
-      setPending(false);
+      if (isCurrentGeneration(generation)) setPending(false);
     }
   }
 
@@ -332,32 +344,28 @@ export default function WatchTargets() {
         <div>
           <div className="eyebrow">Operations / Configuration</div>
           <h1>Watch Targets</h1>
-          <p>
-            Persistent monitoring configuration. Each target belongs to one
-            Creator.
-          </p>
+          <p>Persistent monitoring configuration. Each target belongs to one Creator.</p>
         </div>
         <button className="primary" onClick={() => setShowForm(!showForm)}>
           {showForm ? "Close form" : "+ Create WatchTarget"}
         </button>
       </div>
-      {message && (
+      {message ? (
         <div className="success" role="status">
           {message}
         </div>
-      )}
-      {error && (
+      ) : null}
+      {error ? (
         <div className="error" role="alert">
           <pre>{error}</pre>
         </div>
-      )}
-      {showForm && (
+      ) : null}
+      {showForm ? (
         <section className="panel form-panel">
           <h2>Create WatchTarget</h2>
           <p>
-            Choose an existing Creator or type a new display name. The current
-            API uses this value as <code>creator_id</code>; there is no separate
-            Creator creation endpoint.
+            Choose an existing Creator or type a new display name. The current API uses this value
+            as <code>creator_id</code>; there is no separate Creator creation endpoint.
           </p>
           <form onSubmit={create}>
             <div className="form-grid">
@@ -380,12 +388,7 @@ export default function WatchTargets() {
               </label>
               <label>
                 Channel Name
-                <input
-                  name="channel_name"
-                  required
-                  maxLength={200}
-                  placeholder="Channel name"
-                />
+                <input name="channel_name" required maxLength={200} placeholder="Channel name" />
               </label>
               <label>
                 Platform
@@ -415,17 +418,34 @@ export default function WatchTargets() {
               </label>
               <label className="full">
                 Recording Folder
-                <div className="folder-input"><input
-                  value={createFolder}
-                  onChange={event => setCreateFolder(event.target.value)}
-                  name="recording_subdir"
-                  placeholder="Relative path (e.g. twitch/favorites)"
-                  maxLength={255}
-                />
-                <button type="button" className="secondary" aria-label="Browse recording folders" onClick={() => setPicker("create")} disabled={pending}>Browse</button></div>
+                <div className="folder-input">
+                  <input
+                    value={createFolder}
+                    onChange={(event) => setCreateFolder(event.target.value)}
+                    name="recording_subdir"
+                    placeholder="Relative path (e.g. twitch/favorites)"
+                    maxLength={255}
+                  />
+                  <button
+                    type="button"
+                    className="secondary"
+                    aria-label="Browse recording folders"
+                    onClick={() => setPicker("create")}
+                    disabled={pending || authState === "authenticated"}
+                    title={
+                      authState === "authenticated"
+                        ? "Enter relative recording paths manually in authenticated mode."
+                        : undefined
+                    }
+                  >
+                    Browse
+                  </button>
+                </div>
                 <span className="hint">
-                  Optional. Path relative to the server's recordings root. Leave
-                  empty to use the default (channel name).
+                  Optional. Path relative to the server&apos;s recordings root. Leave empty to use
+                  the default (channel name).
+                  {authState === "authenticated" &&
+                    " Enter relative recording paths manually in authenticated mode."}
                 </span>
               </label>
             </div>
@@ -434,7 +454,7 @@ export default function WatchTargets() {
             </button>
           </form>
         </section>
-      )}
+      ) : null}
       <ResourceStatus resource="watch-targets" />
       <ResourceStatus resource="creators" />
       <section className="panel">
@@ -474,8 +494,8 @@ export default function WatchTargets() {
                   )}
                 </td>
                 <td>
-                  {snapshot.creators.data?.find((c) => c.id === t.creator_id)
-                    ?.display_name || t.creator_id}
+                  {snapshot.creators.data?.find((c) => c.id === t.creator_id)?.display_name ||
+                    t.creator_id}
                 </td>
                 <td>{t.platform}</td>
                 <td>
@@ -497,28 +517,40 @@ export default function WatchTargets() {
                 <td>
                   {editingTarget?.id === t.id ? (
                     <div className="edit-subdir">
-                      <div className="folder-input"><input
-                        aria-label="Recording folder"
-                        type="text"
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        placeholder="Relative path"
-                        maxLength={255}
-                        disabled={pending}
-                      />
-                      <button type="button" className="secondary small" aria-label="Browse recording folders" onClick={() => setPicker("edit")} disabled={pending}>Browse</button></div>
-                      <button
-                        className="primary small"
-                        onClick={saveEdit}
-                        disabled={pending}
-                      >
+                      <div className="folder-input">
+                        <input
+                          aria-label="Recording folder"
+                          type="text"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          placeholder="Relative path"
+                          maxLength={255}
+                          disabled={pending}
+                        />
+                        <button
+                          type="button"
+                          className="secondary small"
+                          aria-label="Browse recording folders"
+                          onClick={() => setPicker("edit")}
+                          disabled={pending || authState === "authenticated"}
+                          title={
+                            authState === "authenticated"
+                              ? "Enter relative recording paths manually in authenticated mode."
+                              : undefined
+                          }
+                        >
+                          Browse
+                        </button>
+                      </div>
+                      {authState === "authenticated" && (
+                        <span className="hint">
+                          Enter relative recording paths manually in authenticated mode.
+                        </span>
+                      )}
+                      <button className="primary small" onClick={saveEdit} disabled={pending}>
                         Save
                       </button>
-                      <button
-                        className="secondary small"
-                        onClick={cancelEdit}
-                        disabled={pending}
-                      >
+                      <button className="secondary small" onClick={cancelEdit} disabled={pending}>
                         Cancel
                       </button>
                     </div>
@@ -551,11 +583,7 @@ export default function WatchTargets() {
                   <Badge state={t.state} />
                 </td>
                 <td>
-                  <button
-                    className="danger"
-                    disabled={pending}
-                    onClick={() => void remove(t)}
-                  >
+                  <button className="danger" disabled={pending} onClick={() => void remove(t)}>
                     Delete
                   </button>
                 </td>
@@ -563,22 +591,22 @@ export default function WatchTargets() {
             ))}
           </Table>
         ) : targets ? (
-          <Empty>
-            No watch targets. Create your first monitoring configuration above.
-          </Empty>
+          <Empty>No watch targets. Create your first monitoring configuration above.</Empty>
         ) : null}
       </section>
       <p className="note">
-        Enabled is saved per target. The existing Worker skips new probes for disabled
-        targets; active recordings continue. Changes take effect when configuration
-        is re-read. This wave does not change Worker execution behavior.
+        Enabled is saved per target. The existing Worker skips new probes for disabled targets;
+        active recordings continue. Changes take effect when configuration is re-read. This wave
+        does not change Worker execution behavior.
       </p>
-      {picker && <RecordingBrowser
-        initialPath={picker === "edit" ? editValue : undefined}
-        onClose={() => setPicker(null)}
-        onSelect={picker === "create" ? setCreateFolder : setEditValue}
-      />}
-      {targets && <Json data={targets} />}
+      {picker && authState === "local" ? (
+        <RecordingBrowser
+          initialPath={picker === "edit" ? editValue : undefined}
+          onClose={() => setPicker(null)}
+          onSelect={picker === "create" ? setCreateFolder : setEditValue}
+        />
+      ) : null}
+      {targets ? <Json data={targets} /> : null}
     </>
   );
 }

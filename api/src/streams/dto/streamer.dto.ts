@@ -15,9 +15,7 @@ export class StreamerDto {
 
   @IsIn(["youtube", "twitch", "kick"])
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "youtube",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "youtube")
   platform: string;
 
   @IsString()
@@ -28,9 +26,7 @@ export class StreamerDto {
 
   @IsIn(["idle", "offline", "recording", "finished", "error"])
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "idle",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "idle")
   state: string;
 }
 
@@ -44,9 +40,7 @@ export class CreateStreamerDto {
 
   @IsIn(["youtube", "twitch", "kick"])
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "twitch",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "twitch")
   platform: string;
 
   @IsUrl()
@@ -66,8 +60,6 @@ export class CreateStreamerDto {
     "360p",
   ])
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "best",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "best")
   quality: string;
 }

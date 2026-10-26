@@ -1,4 +1,37 @@
-﻿# StreamRecorder integration frontend
+# StreamRecorder integration frontend
+
+## Post-Wave 05.5 Browser Operations
+
+See [deployment modes](../README.md#5-deployment-modes) and [human stability matrix](../docs/DOCKER-STABILITY-TESTING.md). Approved Compose frontend host port is `FRONTEND_HOST_PORT=3001` on loopback; current checkout still uses `FRONTEND_HOST_PORT=3001`, so verify effective configuration before opening the browser. Source `pnpm --dir frontend dev` still uses port 3001. Compose overlays are explicitly selected, never implicitly loaded.
+
+For C, configure the exact browser origin (for example `http://127.0.0.1:3001`) in API `AUTH_TRUSTED_ORIGINS`; `http://127.0.0.1:3001` is a different origin. `API_BASE_URL` is server-side and points to the API container, not the browser URL. Do not put internal tokens or database credentials in browser/public environment variables.
+
+Test login, refresh, protected deep links, logout and a replay of the old session after logout/account disable; never save raw session cookies as evidence. Confirm ownership using two separate accounts/browser sessions and isolated fixture data. A/B local identity is not a human login boundary. API availability, dashboard polling and retained recording state do not establish Worker liveness. Human results remain unfilled until executed.
+
+## Wave 05.5 Operational Boundary
+
+The default JSON/local dashboard needs no account or database. Opt-in
+PostgreSQL/local uses bootstrap `local`; PostgreSQL/authenticated is explicitly
+opt-in. API startup validates relational storage, a valid PostgreSQL URL, exact
+non-empty trusted origins, database reachability, ownership schema/composite
+constraints and an enabled password-enrolled user before listening. JSON/authenticated is unsupported. There is no signup,
+default credential, public media or hosted deployment.
+
+Account administration, exact `AUTH_TRUSTED_ORIGINS`, host-only session cookies,
+Origin/Referer CSRF policy and rollback checkpoints live in
+[API operations](../api/README.database.md). Session expiry/revocation or account
+disablement clears protected state on 401; a domain 404 does not log out the user.
+A backend outage remains an error, never a switch to local mode. Logout/account
+changes discard old asynchronous snapshots and callbacks; do not remove these
+generation/cancellation guards. Authenticated folders use manual relative entry,
+not shared-root listing. Local browsing assumes a trusted single operator.
+
+Run typecheck, unit/component/proxy tests and build before the HTTP integration
+script. The latter intentionally requires `TEST_FRONTEND_URL` pointing to a
+separately started disposable stack and `TEST_ALLOW_MUTATIONS=true`. Never point
+it at the ordinary installation. A missing fixture is blocked evidence, not a
+passing HTTP test. Keep `API_BASE_URL` server-side and never expose
+`INTERNAL_API_TOKEN` or `DATABASE_URL` to the browser.
 
 This is a technical API + Worker testing console, not the final product UI. It provides a foundation for inspecting the current domain and debugging local integration without adding future infrastructure.
 
@@ -21,7 +54,7 @@ Next.js App Router, TypeScript, React, Tailwind CSS and native fetch. A shared p
 
 ## Requirements and setup
 
-Use the repository's Node.js requirement (>=25.9.0) and pnpm. No UI framework, authentication, database, queue, or realtime transport is required. For the supported Docker Compose workflow, service lifecycle commands, shared-state behavior, and Windows notes, see the [root development guide](../README.md).
+Use the repository's Node.js requirement (>=25.9.0) and pnpm. Local JSON mode requires no interactive login, database, queue, or realtime transport. For the supported Docker Compose workflow, service lifecycle commands, shared-state behavior, and Windows notes, see the [root development guide](../README.md).
 
 ```sh
 # API terminal (from repository root)
@@ -36,13 +69,23 @@ pnpm install
 pnpm dev
 ```
 
-Open http://localhost:3001. NestJS defaults to port 3000. The Worker is optional for configuration CRUD and empty-history inspection.
+Open http://127.0.0.1:3001. NestJS defaults to port 3000. The Worker is optional for configuration CRUD and empty-history inspection.
 
 ```env
 API_BASE_URL=http://localhost:3000
 ```
 
-`API_BASE_URL` is server-only. The proxy reads it at request time; restart development after environment-file changes. Never prefix it with `NEXT_PUBLIC_`. The proxy allowlists current routes and GET/POST/DELETE/PATCH operations, forwards JSON bodies and the Recording filter, preserves upstream HTTP errors, disables caching and times out upstream calls after 10 seconds. It rejects cross-origin mutations and does not proxy cookies, credentials, filesystem resources, or arbitrary destinations. No backend CORS changes are needed. This unauthenticated console is intended for a trusted local development environment.
+`API_BASE_URL` is server-only. The proxy reads it at request time; restart development after environment-file changes. Never prefix it with `NEXT_PUBLIC_`. The proxy allowlists domain routes plus `GET /auth/session`, `POST /auth/login`, and `POST /auth/logout`. It forwards JSON bodies, `watchTargetId` filters and relative filesystem `path` queries, preserves upstream HTTP errors, disables caching and times out upstream calls after 10 seconds. Unreachable upstreams produce a controlled 502 without exception details.
+
+## Identity and session flow
+
+The frontend verifies `/auth/session` before mounting domain pages or fetching collections. Local JSON and local relational sessions open the dashboard directly, without a login prompt or sign-out control. Authenticated mode requires a non-null user and displays their username and Sign out. Missing or expired identity shows a username/password form; backend unavailability shows a retryable error and never falls back to local mode. This frontend support does not enable authenticated production startup or provision accounts.
+
+Only one valid `sr_session` cookie is forwarded to NestJS. Other cookies, Authorization, identity headers and internal service tokens are not forwarded. Upstream `Set-Cookie` headers are relayed only on login/logout, preserving the backend's host-only HttpOnly, SameSite=Lax, Path=/, conditional Secure and logout-clearing attributes. The proxy rejects cross-origin mutations and forwards incoming Origin/Referer unchanged for backend `AUTH_TRUSTED_ORIGINS` validation; it never invents a trusted origin. Configure the browser origin in the backend policy when using authenticated mode.
+
+Logout immediately removes protected views and clears collections and diagnostics. Login success, identity changes and 401 responses invalidate the request generation and abort older requests; delayed results cannot restore the previous user's data. Failed logout reports that revocation could not be confirmed and offers retry or session verification. A resource 404 does not end the session. Login bodies and responses are excluded from in-memory request diagnostics. Passwords and session tokens are not persisted in browser storage.
+
+Local mode retains read-only recording-directory browsing and the folder picker. Authenticated recording locations show only availability, filename, safe relative subdirectory and size in bytes when provided. Authenticated target folders are entered manually; the UI does not request `/recordings/filesystem`. Neither mode serves recorded media or opens native folders.
 
 ## Pages and API coverage
 
@@ -125,7 +168,6 @@ The integration test creates two disposable targets at example.invalid, checks g
 
 Implementation evidence includes deterministic Worker coverage (180 tests) and the root `pnpm test:smoke` Docker Gates A-D: classification, lifecycle, persistence denial/recovery, API/Worker cross-writer cycles, active-child SIGTERM/reaping, and secret-safe logs. The smoke uses deterministic fake Streamlink; it does not validate a real platform, network, captured media, or playable MP4. Browser automation timed out repeatedly, so visual rendering, responsive layout and browser-driven create/delete/polling interactions still require the manual workflow above.
 
-
 ## Wave 04.5 recording storage controls
 
 Watch Targets has an Enabled switch between Recording Folder and State. Saving
@@ -150,3 +192,7 @@ The browser knows only logical relative paths. RECORDINGS_ROOT belongs to the AP
 Compose maps it to the Worker's recordings volume. Client-side folder/file inputs
 and showDirectoryPicker are deliberately not used. Browsing is bounded to 1,000
 immediate entries, hides dot entries and excludes symlinks.
+
+## Linting and Formatting
+
+See [repository linting and formatting](../README-LINTING.md) for setup, read-only checks, explicit fixes and coverage.

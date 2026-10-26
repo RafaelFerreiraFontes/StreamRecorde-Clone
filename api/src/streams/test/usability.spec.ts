@@ -1,5 +1,6 @@
+import type { Server } from "node:http";
 import { Test } from "@nestjs/testing";
-import { INestApplication } from "@nestjs/common";
+import type { INestApplication } from "@nestjs/common";
 import request from "supertest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -8,7 +9,7 @@ import { StreamsModule } from "../streams.module";
 import { RecordingsFilesystemService } from "../recordings-filesystem.service";
 
 describe("Wave 04.5 HTTP and persistence", () => {
-  let app: INestApplication;
+  let app: INestApplication<Server>;
   let directory: string;
   let root: string;
   let browser: RecordingsFilesystemService;
@@ -28,19 +29,11 @@ describe("Wave 04.5 HTTP and persistence", () => {
     directory = await fs.mkdtemp(path.join(os.tmpdir(), "wave045-"));
     root = path.join(directory, "recordings");
     await fs.mkdir(path.join(root, "twitch", "channel"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "twitch", "channel", "video.mp4"),
-      "fixture",
-    );
+    await fs.writeFile(path.join(root, "twitch", "channel", "video.mp4"), "fixture");
     await fs.writeFile(path.join(root, ".env"), "SECRET");
     process.env.CONFIG_DIR = directory;
     process.env.RECORDINGS_ROOT = root;
-    for (const key of [
-      "WATCHLIST_PATH",
-      "CHANNELS_STATUS_PATH",
-      "SESSIONS_PATH",
-      "STREAMS_PATH",
-    ])
+    for (const key of ["WATCHLIST_PATH", "CHANNELS_STATUS_PATH", "SESSIONS_PATH", "STREAMS_PATH"])
       delete process.env[key];
     await fs.writeFile(
       path.join(directory, "watchlist.json"),
@@ -78,7 +71,7 @@ describe("Wave 04.5 HTTP and persistence", () => {
       imports: [StreamsModule],
     }).compile();
     browser = module.get(RecordingsFilesystemService);
-    app = module.createNestApplication();
+    app = module.createNestApplication<INestApplication<Server>>();
     await app.init();
   });
   afterEach(async () => {
@@ -90,24 +83,28 @@ describe("Wave 04.5 HTTP and persistence", () => {
   it("defaults legacy enabled; toggles both ways and preserves every unrelated field and sibling", async () => {
     const server = app.getHttpServer();
     expect(
-      (await request(server).get("/watch-targets/target").expect(200)).body
-        .enabled,
+      (
+        (await request(server).get("/watch-targets/target").expect(200)).body as {
+          enabled: unknown;
+        }
+      ).enabled,
     ).toBe(true);
     expect(
-      (await request(server).get("/watch-targets/sibling").expect(200)).body
-        .enabled,
+      (
+        (await request(server).get("/watch-targets/sibling").expect(200)).body as {
+          enabled: unknown;
+        }
+      ).enabled,
     ).toBe(false);
     for (const enabled of [false, true]) {
       expect(
         (
-          await request(server)
-            .patch("/watch-targets/target")
-            .send({ enabled })
-            .expect(200)
-        ).body.enabled,
+          (await request(server).patch("/watch-targets/target").send({ enabled }).expect(200))
+            .body as { enabled: unknown }
+        ).enabled,
       ).toBe(enabled);
       expect(
-        (await request(server).get("/watch-targets/target").expect(200)).body,
+        (await request(server).get("/watch-targets/target").expect(200)).body as unknown,
       ).toMatchObject({
         enabled,
         creator_id: "Creator",
@@ -119,7 +116,7 @@ describe("Wave 04.5 HTTP and persistence", () => {
       });
       const stored = JSON.parse(
         await fs.readFile(path.join(directory, "watchlist.json"), "utf8"),
-      );
+      ) as unknown[];
       expect(stored).toEqual([
         { ...target, enabled },
         { ...target, id: "sibling", enabled: false },
@@ -144,8 +141,8 @@ describe("Wave 04.5 HTTP and persistence", () => {
       .send({ quality: "unsupported-quality" })
       .expect(400);
     expect(
-      JSON.parse(
-        await fs.readFile(path.join(directory, "watchlist.json"), "utf8"),
+      (
+        JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8")) as unknown[]
       )[0],
     ).toEqual(target);
     const updated = await request(server)
@@ -157,14 +154,14 @@ describe("Wave 04.5 HTTP and persistence", () => {
         url: "https://www.twitch.tv/updated",
       })
       .expect(200);
-    expect(updated.body).toMatchObject({
+    expect(updated.body as unknown).toMatchObject({
       enabled: false,
       recording_subdir: "new/folder",
       quality: "1080p60",
       url: "https://www.twitch.tv/updated",
     });
     expect(
-      (await request(server).get("/watch-targets/target").expect(200)).body,
+      (await request(server).get("/watch-targets/target").expect(200)).body as unknown,
     ).toMatchObject({
       enabled: false,
       recording_subdir: "new/folder",
@@ -172,14 +169,9 @@ describe("Wave 04.5 HTTP and persistence", () => {
       url: "https://www.twitch.tv/updated",
     });
 
-    await request(server)
-      .patch("/watch-targets/target")
-      .send({ enabled: true })
-      .expect(200);
+    await request(server).patch("/watch-targets/target").send({ enabled: true }).expect(200);
     expect(
-      JSON.parse(
-        await fs.readFile(path.join(directory, "watchlist.json"), "utf8"),
-      ),
+      JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8")) as unknown[],
     ).toEqual([
       {
         ...target,
@@ -198,9 +190,14 @@ describe("Wave 04.5 HTTP and persistence", () => {
       .patch("/watch-targets/target")
       .send({ url: "https://www.twitch.tv/updated" })
       .expect(200);
-    expect(updated.body.url).toBe("https://www.twitch.tv/updated");
-    expect((await request(server).get("/watch-targets/target").expect(200)).body.url).toBe("https://www.twitch.tv/updated");
-    expect(JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8"))).toEqual([
+    expect((updated.body as { url: unknown }).url).toBe("https://www.twitch.tv/updated");
+    expect(
+      ((await request(server).get("/watch-targets/target").expect(200)).body as { url: unknown })
+        .url,
+    ).toBe("https://www.twitch.tv/updated");
+    expect(
+      JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8")) as unknown[],
+    ).toEqual([
       { ...target, url: "https://www.twitch.tv/updated" },
       { ...target, id: "sibling", enabled: false },
     ]);
@@ -215,14 +212,23 @@ describe("Wave 04.5 HTTP and persistence", () => {
 
   it("PATCH url preserves all unrelated fields and custom property", async () => {
     const server = app.getHttpServer();
-    await request(server).patch("/watch-targets/target").send({ url: "https://kick.com/channel" }).expect(200);
-    expect((await request(server).get("/watch-targets/target").expect(200)).body).toMatchObject({
+    await request(server)
+      .patch("/watch-targets/target")
+      .send({ url: "https://kick.com/channel" })
+      .expect(200);
+    expect(
+      (await request(server).get("/watch-targets/target").expect(200)).body as unknown,
+    ).toMatchObject({
       url: "https://kick.com/channel",
       quality: target.quality,
       enabled: true,
       recording_subdir: target.recording_subdir,
     });
-    expect(JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8"))[0]).toEqual({ ...target, url: "https://kick.com/channel" });
+    expect(
+      (
+        JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8")) as unknown[]
+      )[0],
+    ).toEqual({ ...target, url: "https://kick.com/channel" });
   });
 
   it.each([
@@ -240,10 +246,9 @@ describe("Wave 04.5 HTTP and persistence", () => {
       .patch("/watch-targets/target")
       .send({ url, enabled: true })
       .expect(400);
-    expect(JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8"))).toEqual([
-      target,
-      { ...target, id: "sibling", enabled: false },
-    ]);
+    expect(
+      JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8")) as unknown[],
+    ).toEqual([target, { ...target, id: "sibling", enabled: false }]);
   });
 
   it("PATCH url does not alter sibling", async () => {
@@ -251,7 +256,11 @@ describe("Wave 04.5 HTTP and persistence", () => {
       .patch("/watch-targets/target")
       .send({ url: "https://www.twitch.tv/updated" })
       .expect(200);
-    expect(JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8"))[1]).toEqual({
+    expect(
+      (
+        JSON.parse(await fs.readFile(path.join(directory, "watchlist.json"), "utf8")) as unknown[]
+      )[1],
+    ).toEqual({
       ...target,
       id: "sibling",
       enabled: false,
@@ -260,16 +269,14 @@ describe("Wave 04.5 HTTP and persistence", () => {
 
   it("lists only safe metadata; resolves recording IDs and missing files without leaking host paths", async () => {
     const server = app.getHttpServer();
-    const listing = (
-      await request(server).get("/recordings/filesystem").expect(200)
-    ).body;
+    const listing = (await request(server).get("/recordings/filesystem").expect(200))
+      .body as unknown;
     expect(listing).toEqual({
       path: "",
       entries: [{ name: "twitch", path: "twitch", kind: "directory" }],
     });
-    const location = (
-      await request(server).get("/recordings/existing/location").expect(200)
-    ).body;
+    const location = (await request(server).get("/recordings/existing/location").expect(200))
+      .body as unknown;
     expect(location).toMatchObject({
       status: "available",
       file: "video.mp4",
@@ -277,19 +284,52 @@ describe("Wave 04.5 HTTP and persistence", () => {
     });
     expect(JSON.stringify(location)).not.toContain(root);
     expect(
-      (await request(server).get("/recordings/missing/location").expect(200))
-        .body.status,
+      (
+        (await request(server).get("/recordings/missing/location").expect(200)).body as {
+          status: unknown;
+        }
+      ).status,
     ).toBe("file_not_found");
     expect(
-      (await request(server).get("/recordings/outside/location").expect(200))
-        .body,
+      (await request(server).get("/recordings/outside/location").expect(200)).body as unknown,
     ).toEqual({ status: "directory_unavailable" });
     await request(server).get("/recordings/unknown/location").expect(404);
     await fs.rm(path.join(root, "twitch"), { recursive: true });
     expect(
-      (await request(server).get("/recordings/existing/location").expect(200))
-        .body.status,
+      (
+        (await request(server).get("/recordings/existing/location").expect(200)).body as {
+          status: unknown;
+        }
+      ).status,
     ).toBe("directory_unavailable");
+  });
+
+  it("inspects metadata without enumerating siblings and preserves root and missing semantics", async () => {
+    const list = jest.spyOn(browser, "list");
+    const size = (await fs.stat(path.join(root, "twitch/channel/video.mp4"))).size;
+    expect(await browser.metadata("twitch/channel/video.mp4")).toEqual({
+      status: "available",
+      file: "video.mp4",
+      subdir: "twitch/channel",
+      size,
+    });
+    expect(await browser.metadata("twitch/channel/missing.mp4")).toEqual({
+      status: "file_not_found",
+      file: "missing.mp4",
+      subdir: "twitch/channel",
+    });
+    await fs.writeFile(path.join(root, "root.mp4"), "root");
+    expect(await browser.metadata(path.join(root, "root.mp4"))).toEqual({
+      status: "available",
+      file: "root.mp4",
+      subdir: "",
+      size: 4,
+    });
+    for (const output of ["missing/file.mp4", "../secret", "twitch/../secret", "C:\\secret", ""]) {
+      expect(await browser.metadata(output)).toEqual({ status: "directory_unavailable" });
+    }
+    expect(list).not.toHaveBeenCalled();
+    list.mockRestore();
   });
 
   it.each([
@@ -317,7 +357,7 @@ describe("Wave 04.5 HTTP and persistence", () => {
       .get("/recordings/filesystem")
       .query({ path: value })
       .expect(400);
-    expect(JSON.stringify(response.body)).not.toContain(root);
+    expect(JSON.stringify(response.body as unknown)).not.toContain(root);
   });
 
   it("rejects symlink/junction traversal and omits links from listings", async () => {
@@ -329,15 +369,12 @@ describe("Wave 04.5 HTTP and persistence", () => {
       path.join(root, "escape"),
       process.platform === "win32" ? "junction" : "dir",
     );
-    expect(
-      (await browser.list()).entries.some((entry) => entry.name === "escape"),
-    ).toBe(false);
-    await expect(browser.list("escape")).rejects.toThrow(
-      "Recording directory unavailable",
-    );
-    expect(await browser.location(path.join(root, "escape", "secret"))).toEqual(
-      { status: "directory_unavailable" },
-    );
+    expect((await browser.list()).entries.some((entry) => entry.name === "escape")).toBe(false);
+    await expect(browser.list("escape")).rejects.toThrow("Recording directory unavailable");
+    expect(await browser.location(path.join(root, "escape", "secret"))).toEqual({
+      status: "directory_unavailable",
+    });
+    expect(await browser.metadata("escape/secret")).toEqual({ status: "directory_unavailable" });
   });
 
   it("supports root-relative stored metadata and safe unavailable errors", async () => {

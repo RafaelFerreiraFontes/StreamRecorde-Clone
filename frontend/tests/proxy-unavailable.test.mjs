@@ -17,21 +17,15 @@ test("proxy returns 502 controlled error when API is unavailable", () => {
 
   // Verify catch block exists (there are multiple: isSameOrigin validation + proxy)
   assert.ok(
-    /\bcatch\s*\([^)]*\)\s*\{/.test(source),
+    /\bcatch\s*(?:\([^)]*\))?\s*\{/.test(source),
     "Proxy must have a catch block for error handling",
   );
 
   // Verify 502 status is returned somewhere in the file (used by proxy catch)
-  assert.ok(
-    /status\s*:\s*502/.test(source),
-    "Proxy must return status 502 in error responses",
-  );
+  assert.ok(/status\s*:\s*502/.test(source), "Proxy must return status 502 in error responses");
 
   // Verify Response.json is used (not just Response.error or throw)
-  assert.ok(
-    /Response\.json/.test(source),
-    "Proxy must use Response.json for error responses",
-  );
+  assert.ok(/Response\.json/.test(source), "Proxy must use Response.json for error responses");
 });
 
 test("proxy uses fetch with appropriate timeout", () => {
@@ -39,10 +33,7 @@ test("proxy uses fetch with appropriate timeout", () => {
   const source = readFileSync(routePath, "utf-8");
 
   // Verify fetch is used
-  assert.ok(
-    /\bfetch\s*\(/.test(source),
-    "Proxy must use fetch to call API",
-  );
+  assert.ok(/\bfetch\s*\(/.test(source), "Proxy must use fetch to call API");
 
   // Verify timeout/abort signal is configured
   assert.ok(
@@ -55,20 +46,12 @@ test("proxy does not crash on network errors", () => {
   const routePath = resolve("app/api/backend/[...path]/route.ts");
   const source = readFileSync(routePath, "utf-8");
 
-  // Verify Error type check in catch block
-  assert.ok(
-    /error\s+instanceof\s+Error|error\s*\?/.test(source) ||
-      /String\s*\(\s*error\s*\)/.test(source),
-    "Proxy catch block must safely handle error (instanceof Error or String conversion)",
-  );
+  assert.ok(!/detail\s*:/.test(source), "Proxy must not disclose upstream exception details");
 
   // Verify Response.json is used for error response (not throw)
   const catchBlockHasResponse =
-    /catch\s*\([^)]*\)\s*\{[^}]*Response\.(?:json|error)[^}]*\}/s.test(source);
-  assert.ok(
-    catchBlockHasResponse,
-    "Proxy catch block must return Response, not throw",
-  );
+    /catch\s*(?:\([^)]*\))?\s*\{[^}]*Response\.(?:json|error)[^}]*\}/s.test(source);
+  assert.ok(catchBlockHasResponse, "Proxy catch block must return Response, not throw");
 });
 
 test("proxy success path returns API response correctly", () => {
@@ -76,10 +59,7 @@ test("proxy success path returns API response correctly", () => {
   const source = readFileSync(routePath, "utf-8");
 
   // Verify successful fetch returns response
-  assert.ok(
-    /return\s+new\s+Response\s*\(/.test(source),
-    "Proxy must return Response on success",
-  );
+  assert.ok(/return\s+new\s+Response\s*\(/.test(source), "Proxy must return Response on success");
 
   // Verify response status is propagated
   assert.ok(

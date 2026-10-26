@@ -1,16 +1,12 @@
 ﻿"use client";
 import { useState, useSyncExternalStore } from "react";
-import { api, requestLog, type RequestLog } from "@/lib/api";
+import { requestLog, type RequestLog } from "@/lib/api";
 import { useDashboard } from "@/components/provider";
 import { Empty, Json, ResourceStatus, Table } from "@/components/ui";
 const empty: RequestLog[] = [];
 export default function Diagnostics() {
-  const { snapshot } = useDashboard();
-  const logs = useSyncExternalStore(
-    requestLog.subscribe,
-    requestLog.snapshot,
-    () => empty,
-  );
+  const { snapshot, request: api, generation, isCurrentGeneration } = useDashboard();
+  const logs = useSyncExternalStore(requestLog.subscribe, requestLog.snapshot, () => empty);
   const [legacy, setLegacy] = useState<unknown>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -19,11 +15,12 @@ export default function Diagnostics() {
     setError("");
     setLegacy(undefined);
     try {
-      setLegacy(await api(path));
+      const data = await api(path);
+      if (isCurrentGeneration(generation)) setLegacy(data);
     } catch (e) {
-      setError(String(e));
+      if (isCurrentGeneration(generation)) setError(String(e));
     } finally {
-      setBusy(false);
+      if (isCurrentGeneration(generation)) setBusy(false);
     }
   }
   return (
@@ -33,8 +30,7 @@ export default function Diagnostics() {
           <div className="eyebrow">Integration / Request inspection</div>
           <h1>Diagnostics</h1>
           <p>
-            Inspect API responses and recent requests. Logs stay in memory for
-            this browser session.
+            Inspect API responses and recent requests. Logs stay in memory for this browser session.
           </p>
         </div>
       </div>
@@ -45,14 +41,7 @@ export default function Diagnostics() {
         </div>
         {logs.length ? (
           <Table
-            headings={[
-              "Method",
-              "Request path",
-              "HTTP status",
-              "Duration",
-              "Timestamp",
-              "Error",
-            ]}
+            headings={["Method", "Request path", "HTTP status", "Duration", "Timestamp", "Error"]}
           >
             {logs.map((log) => (
               <tr key={log.id}>
@@ -72,12 +61,12 @@ export default function Diagnostics() {
                   <code>{log.timestamp}</code>
                 </td>
                 <td>
-                  {log.error && (
+                  {log.error ? (
                     <details>
                       <summary>Inspect error</summary>
                       <pre>{log.error}</pre>
                     </details>
-                  )}
+                  ) : null}
                 </td>
               </tr>
             ))}
@@ -87,22 +76,17 @@ export default function Diagnostics() {
         )}
       </section>
       <h2 className="section-title">Domain JSON inspector</h2>
-      {(["creators", "watch-targets", "streams", "recordings"] as const).map(
-        (key) => (
-          <div key={key}>
-            <ResourceStatus resource={key} />
-            {snapshot[key].data && (
-              <Json title={`GET /${key}`} data={snapshot[key].data} />
-            )}
-          </div>
-        ),
-      )}
+      {(["creators", "watch-targets", "streams", "recordings"] as const).map((key) => (
+        <div key={key}>
+          <ResourceStatus resource={key} />
+          {snapshot[key].data ? <Json title={`GET /${key}`} data={snapshot[key].data} /> : null}
+        </div>
+      ))}
       <section className="panel legacy">
         <h2>Legacy Compatibility</h2>
         <p>
-          These contracts exist for MVP compatibility and are not the future
-          domain API. Inspection here is read-only and never drives the main
-          dashboard.
+          These contracts exist for MVP compatibility and are not the future domain API. Inspection
+          here is read-only and never drives the main dashboard.
         </p>
         <div className="toolbar">
           <button disabled={busy} onClick={() => void inspect("/streamer")}>
@@ -112,12 +96,12 @@ export default function Diagnostics() {
             Inspect GET /session
           </button>
         </div>
-        {busy && <p role="status">Loading compatibility response…</p>}
-        {error && (
+        {busy ? <p role="status">Loading compatibility response…</p> : null}
+        {error ? (
           <div className="error" role="alert">
             <pre>{error}</pre>
           </div>
-        )}
+        ) : null}
         {legacy !== undefined && <Json data={legacy} title="Legacy response" />}
       </section>
     </>

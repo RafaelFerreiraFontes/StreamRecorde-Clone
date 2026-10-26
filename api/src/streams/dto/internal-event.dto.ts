@@ -1,4 +1,13 @@
-import { IsIn, IsISO8601, IsOptional, IsString, IsUUID, Matches, MaxLength, ValidateIf } from "class-validator";
+import {
+  IsIn,
+  IsISO8601,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  MaxLength,
+  ValidateIf,
+} from "class-validator";
 
 export class InternalEventDto {
   @IsUUID()
@@ -14,7 +23,10 @@ export class InternalEventDto {
   @IsUUID()
   watch_target_id!: string;
 
-  @ValidateIf(value => value.event_type !== "stream.offline" || value.session_id !== undefined)
+  @ValidateIf(
+    (value: InternalEventDto) =>
+      value.event_type !== "stream.offline" || value.session_id !== undefined,
+  )
   @IsUUID()
   session_id?: string;
 
@@ -22,7 +34,10 @@ export class InternalEventDto {
   @IsUUID()
   stream_id?: string;
 
-  @ValidateIf(value => value.event_type === "recording.terminal" || value.state !== undefined)
+  @ValidateIf(
+    (value: InternalEventDto) =>
+      value.event_type === "recording.terminal" || value.state !== undefined,
+  )
   @IsIn(["finished", "error"])
   state?: "finished" | "error";
 
@@ -37,11 +52,21 @@ export class InternalEventDto {
   output_file?: string;
 
   @IsOptional()
-  @IsIn(["worker_restart_interruption", "launch_failure", "checkpoint_failure"])
+  @IsIn([
+    "worker_restart_interruption",
+    "worker_restart_before_launch",
+    "launch_failure",
+    "checkpoint_failure",
+  ])
   reason?: string;
 }
 
 export type ExecutionConfig = {
-  id: string; channel_name: string; platform: string; url: string;
-  quality: string; enabled: boolean; recording_subdir?: string;
+  id: string;
+  channel_name: string;
+  platform: string;
+  url: string;
+  quality: string;
+  enabled: boolean;
+  recording_subdir?: string;
 };

@@ -84,11 +84,19 @@ For worker and media changes, minimize memory and local I/O, handle Streamlink a
 
 Never expose secrets, log OAuth tokens, hardcode credentials, create public recording endpoints, or bypass platform access controls.
 
+## Role-Specific Skill Selection
+
+Normally relevant: `streamrecorder-code-quality` plus the domain-specific skill matching the implementation area.
+
+Select only affected boundaries from `streamrecorder-api-frontend`, `streamrecorder-worker-lifecycle`, `streamrecorder-postgres-persistence`, `streamrecorder-domain-contracts`, `streamrecorder-security-compliance`, `streamrecorder-docker-validation`, and `streamrecorder-task-preflight`; do not eagerly load every skill.
+
+Apply selected skills only to authorized scope and run focused tests during implementation. Use explicit `lint:fix` or `format:write` corrections only when necessary, inspect semantic diffs afterward, and rerun affected tests. Run relevant read-only `pnpm lint` and `pnpm format:check` checks and report actual evidence to Coordinator. Preserve the three-attempt debugging budget. When entering `fixing`, synchronize `.task.md` and Wave `README.md` metadata under project instructions section 39.1.
+
 ## Review Corrections
 
 When Luna returns `CHANGES_REQUIRED`:
 
-- update the task metadata from `review/QA` to `fixing` before applying corrections;
+- synchronize the `.task.md` YAML frontmatter and corresponding Wave `README.md` task-table row from `review/QA` to `fixing` before applying corrections; update the introductory status summary if needed and verify both statuses agree;
 - preserve the original task and review iteration;
 - address only listed in-scope findings;
 - add no features or opportunistic cleanup;

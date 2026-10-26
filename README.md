@@ -1,6 +1,10 @@
 # StreamRecorder Clone
 
-Automated live stream monitoring and local recording capture for Twitch, YouTube, and Kick. Built as a local-first application with a modular NestJS API, Python Worker, Next.js dashboard, and dual persistence options (transitional shared JSON and robust PostgreSQL with Drizzle ORM).
+## Wave 05.5 Identity And Operational Safety / Identidade e Segurança Operacional
+
+**English:** JSON/local remains the default: `RELATIONAL_STORAGE=false`, `PERSISTENCE_MODE=direct_json`, `IDENTITY_MODE=local`; no database or login is required and no User is created. PostgreSQL/local is explicitly opt-in with `RELATIONAL_STORAGE=true`, `DATABASE_URL`, checked-in migrations and bridge persistence; it uses one persistent bootstrap `local` User. PostgreSQL failures return 503 rather than falling back to JSON. PostgreSQL/authenticated startup is available by explicit opt-in: `IDENTITY_MODE=authenticated`, `RELATIONAL_STORAGE=true`, a valid PostgreSQL `DATABASE_URL` and non-empty exact `AUTH_TRUSTED_ORIGINS`. Startup fails closed unless PostgreSQL is reachable, Wave 05.5 ownership schema and composite constraints are installed, and an enabled password-enrolled user exists.
+
+**Português (Brasil):** O modo JSON/local permanece o padrão: `RELATIONAL_STORAGE=false`, `PERSISTENCE_MODE=direct_json`, `IDENTITY_MODE=local`; nenhum banco ou login é exigido e nenhum Usuário é criado. O modo PostgreSQL/local é ativado explicitamente com `RELATIONAL_STORAGE=true`, `DATABASE_URL`, migrações versionadas e persistência via ponte; ele utiliza um Usuário persistente de bootstrap `local`. Falhas no PostgreSQL retornam 503 em vez de fallback para JSON. O modo PostgreSQL/autenticado é ativado explicitamente com: `IDENTITY_MODE=authenticated`, `RELATIONAL_STORAGE=true`, `DATABASE_URL` do PostgreSQL válida e `AUTH_TRUSTED_ORIGINS` exatas e não-vazias. A inicialização falha de forma estrita (fail-closed) a menos que o PostgreSQL esteja acessível, o esquema de propriedade da Wave 05.5 e restrições compostas estejam instalados e exista um usuário habilitado com senha cadastrada.
 
 ---
 
@@ -15,69 +19,44 @@ Automated live stream monitoring and local recording capture for Twitch, YouTube
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [What StreamRecorder Clone Does](#what-streamrecorder-clone-does)
-- [Current Implemented Features](#current-implemented-features)
-- [Architecture Overview](#architecture-overview)
-- [Technology Stack](#technology-stack)
-- [Local Quick Start with Docker Compose](#local-quick-start-with-docker-compose)
-- [JSON vs PostgreSQL Persistence Modes](#json-vs-postgresql-persistence-modes)
-- [Worker Persistence Bridge and Durable Outbox](#worker-persistence-bridge-and-durable-outbox)
-- [Legacy JSON Migration and Authority Cutover](#legacy-json-migration-and-authority-cutover)
-- [Testing and Docker Integration QA](#testing-and-docker-integration-qa)
-- [Configuration and Environment Variables](#configuration-and-environment-variables)
-- [Recording Storage, Security, and Privacy](#recording-storage-security-and-privacy)
-- [Current Limitations](#current-limitations)
-- [Roadmap and Project Status](#roadmap-and-project-status)
-- [Component Documentation Links](#component-documentation-links)
+- [1. Operational Checkpoint Status](#1-operational-checkpoint-status)
+- [2. Overview & Core Purpose](#2-overview--core-purpose)
+- [3. Features](#3-features)
+- [4. Architecture & Technology Stack](#4-architecture--technology-stack)
+- [5. Deployment Modes](#5-deployment-modes)
+- [6. Prerequisites](#6-prerequisites)
+- [7. Quickstart](#7-quickstart)
+- [8. Docker Operations & Lifecycle](#8-docker-operations--lifecycle)
+- [9. Environment Variables & Storage Mounts](#9-environment-variables--storage-mounts)
+- [10. Database Migrations and Cutover](#10-database-migrations-and-cutover)
+- [11. Account Administration CLI](#11-account-administration-cli)
+- [12. Worker Lifecycle, Bridge, and Recovery](#12-worker-lifecycle-bridge-and-recovery)
+- [13. Local Storage, Containment, and Retention](#13-local-storage-containment-and-retention)
+- [14. Security and Privacy Boundaries](#14-security-and-privacy-boundaries)
+- [15. Troubleshooting & Diagnostics](#15-troubleshooting--diagnostics)
+- [16. Testing and Command Inventory](#16-testing-and-command-inventory)
+- [17. Current Limitations](#17-current-limitations)
+- [18. Roadmap and Milestone Status](#18-roadmap-and-milestone-status)
+- [19. Runbooks, Documentation, and Evidence](#19-runbooks-documentation-and-evidence)
 - [License](#license)
 
 ---
 
-## Overview
+## 1. Operational Checkpoint Status
 
-StreamRecorder Clone is an open-source, local-first streaming tool inspired by StreamRecorder. It is engineered to monitor content creators across live-streaming platforms and automatically capture their broadcasts into private, local video files.
+Post-Wave 05.5 operational readiness documentation; human stability testing is **not yet recorded**. No wave acceptance status is changed here. The mode contract below is the approved checkpoint target, not evidence of deployment.
 
-The product prioritizes:
-- **Local-first execution**: Complete core functionality runs on the user's computer without requiring cloud services, external OAuth, or hosted infrastructure.
-- **Architectural separation**: Clear boundaries between Creator identity, WatchTarget monitoring configurations, actual broadcast Streams, and physical Recording capture attempts.
-- **Reliable operation**: Cooperative subprocess control, adaptive quality fallback, durable outbox event recovery, and transactional database integrity.
+## 2. Overview & Core Purpose
 
----
+Local-first monitoring and private local capture for Twitch, YouTube and Kick. Cloud accounts, a VPS and external OAuth are not prerequisites. Platform/network access and permission to record remain necessary.
 
-## What StreamRecorder Clone Does
+## 3. Features
 
-1. **Monitors Creators**: Periodically checks live status on Twitch, YouTube, and Kick based on configured WatchTargets.
-2. **Classifies Live Status**: Distinguishes confirmed `LIVE`, confirmed `OFFLINE`, and platform/network `ERROR` states to prevent premature stream closure or false capture attempts.
-3. **Selects Quality Adaptively**: Attempts to record at the user's preferred quality (e.g. `1080p60`, `best`, `720p`), with graceful runtime fallback to the next best available variant without rewriting the saved configuration.
-4. **Captures Streams**: Launches and supervises Streamlink processes with clean termination and signal propagation (SIGTERM).
-5. **Persists History**: Records broadcast intervals, capture metadata, and local output file locations into durable storage.
-6. **Provides Local Management**: Exposes an operational Next.js web dashboard with real-time polling, safe folder browsing, and configuration CRUD.
+Independent WatchTargets grouped by Creator, configurable quality/URL/folder/enabled, polling, adaptive capture, persisted Stream/Recording history, safe read-only location browsing, relational ownership and opt-in password/session authentication.
 
----
+## 4. Architecture & Technology Stack
 
-## Current Implemented Features
-
-- **Domain Model Separation**:
-  - `Creator`: Stable identity of the content creator.
-  - `WatchTarget`: Independent monitoring configuration (platform, channel, quality, authoritative URL, relative recording subdirectory, enabled state). A single Creator can hold multiple independent WatchTargets.
-  - `Stream`: A specific detected broadcast occurrence.
-  - `Recording`: A concrete capture attempt linked to a known Stream.
-- **Platform Support**: Twitch, YouTube, and Kick live-stream probing and capturing.
-- **Subprocess & Signal Lifecycle**: Non-root containerized Python Worker with cooperative subprocess shutdown, graceful SIGTERM handling, and orphan process reaping.
-- **PostgreSQL 17 & Drizzle ORM**: Complete relational schema with declarative composite foreign keys `(stream_id, watch_target_id)` enforcing target consistency, immutable configuration snapshots (`channel_name`, `platform`, `quality`), and typed `timestamptz` instants.
-- **Dual Persistence Modes**:
-  - *Default Mode*: Shared JSON files (`watchlist.json`, `channels_status.json`, `streams.json`, `sessions.json`).
-  - *Relational Bridge Mode*: PostgreSQL domain authority via an internal REST bridge with durable outbox.
-- **Worker Persistence Bridge**: Option A architecture where the Worker communicates with the NestJS API via HTTP (`/internal/v1/*`) protected by an internal token. The Worker never opens a direct database connection.
-- **Durable Disk Outbox**: FIFO-ordered local outbox (`outbox/pending/` and `outbox/active/`) with fail-closed startup recovery, active session checkpoints, and exponential retry backoff with jitter.
-- **Legacy Migration CLI**: Comprehensive opt-in migration tool with non-destructive `dry-run`, `backup` with SHA-256 manifests, transactional `import`, post-import `verify`, and `cutover-check`.
-- **Private Filesystem Browser**: Read-only in-app folder picker and path validator enforcing root containment and symlink traversal restrictions.
-- **Hardened Local Networking**: Host ports published to loopback `127.0.0.1` by default to safeguard unauthenticated local development.
-
----
-
-## Architecture Overview
+Browser → Next.js proxy → NestJS services/repositories → JSON or PostgreSQL. Independent Python Worker → Streamlink → local recordings. Relational Worker events use the internal API and durable outbox. Creator is who; WatchTarget is configuration; Stream is a broadcast; Recording is an attempt.
 
 ```text
 Default Mode (Legacy JSON):
@@ -85,9 +64,9 @@ Browser -> Next.js Proxy -> NestJS API -> JSON Adapters
 Python Worker -> Direct JSON Files
 Streamlink Subprocess -> Local Recording Storage
 
-Relational Opt-in Mode (PostgreSQL + Bridge):
-Browser -> Next.js Proxy -> NestJS API -> PostgreSQL (Drizzle)
-Python Worker -> Internal REST API (/internal/v1/*) -> PostgreSQL
+Relational Bridge Mode (PostgreSQL + Bridge):
+Browser -> Next.js Proxy -> NestJS API -> PostgreSQL 17 (Drizzle)
+Python Worker -> Internal REST API (/internal/v1/*) -> PostgreSQL 17
 Worker -> Durable Disk Outbox (pending/ & active/) -> Internal Events
 Streamlink Subprocess -> Local Recording Storage
 ```
@@ -135,351 +114,298 @@ flowchart TD
     end
 ```
 
----
+| Layer              | Technologies                                                                                         |
+| ------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Frontend**       | Next.js 16 (App Router), React 19, Tailwind CSS, TypeScript 5.9                                      |
+| **Backend API**    | NestJS 11, Express, Node.js >=25.9.0, TypeScript 5.7+                                                |
+| **Database & ORM** | PostgreSQL 17 (`postgres:17-alpine`), Drizzle ORM 0.44+, Drizzle Kit                                 |
+| **Worker & Media** | Python 3.12, Streamlink 8.6.1, FFmpeg (installed in Worker image; no separate remux command invoked) |
+| **Orchestration**  | Docker & Docker Compose v2, Alpine/Debian slim base images                                           |
 
-## Technology Stack
+## 5. Deployment Modes
 
-| Layer | Technologies |
-|---|---|
-| **Frontend** | Next.js 16 (App Router), React 19, Tailwind CSS, TypeScript 5.9 |
-| **Backend API** | NestJS 11, Express, Node.js 24/25, TypeScript 5.7+ |
-| **Database & ORM** | PostgreSQL 17 (`postgres:17-alpine`), Drizzle ORM 0.44+, Drizzle Kit |
-| **Worker & Media** | Python 3.12, Streamlink 8.6.1, FFmpeg (stream remuxing) |
-| **Orchestration** | Docker & Docker Compose v2, Alpine/Debian slim base images |
+| Mode | Approved Compose files          | Authority / identity                      | Services                             |
+| ---- | ------------------------------- | ----------------------------------------- | ------------------------------------ |
+| A    | `compose.yml`                   | JSON / local                              | API, frontend, Worker; no PostgreSQL |
+| B    | A + `compose.relational.yml`    | PostgreSQL / local; Worker bridge         | A + PostgreSQL 17                    |
+| C    | B + `compose.authenticated.yml` | PostgreSQL / authenticated; Worker bridge | Same as B                            |
 
----
+B/C require shared `INTERNAL_API_TOKEN` on API and Worker, and `POSTGRES_PASSWORD`. C additionally requires exact, non-empty browser `AUTH_TRUSTED_ORIGINS`; authentication is not implied by relational storage alone.
 
-## Local Quick Start with Docker Compose
+## 6. Prerequisites
 
-### Prerequisites
+Docker Desktop with Compose v2 and adequate disk space. Source tooling: Node >=25.9.0, pinned pnpm from `package.json`, Python 3.12 and Worker dependencies. Use isolated writable data directories for tests, never normal runtime data or retained recordings.
 
-- Docker Desktop with Docker Compose v2.
-- Git.
-- For local (non-Docker) development: Node.js `>=25.9.0`, pnpm, Python 3.10+, Streamlink 8.6.1, and FFmpeg.
+## 7. Quickstart
 
-### 1. Start the Stack (Default JSON Mode)
+Validate the selected configuration before starting:
 
-From the repository root, start all containers:
-
-```sh
-docker compose up -d --build
+```powershell
+docker compose -f compose.yml config --quiet
+docker compose -f compose.yml up -d --build
 ```
 
-Access the application:
-- **Dashboard UI**: [http://localhost:3001](http://localhost:3001)
-- **API Health**: [http://localhost:3000/health](http://localhost:3000/health)
-- **Frontend Health**: [http://localhost:3001/health](http://localhost:3001/health)
+For B/C include every applicable `-f` file on **each** command:
 
-Host ports are bound to loopback `127.0.0.1` by default to safeguard unauthenticated local development.
+Mode B:
 
-*Note on PostgreSQL service:* The `postgres` container starts with `docker compose up`, but in default JSON mode it is kept in standby and is not a functional dependency for the API (startup is decoupled).
-
-### 2. Service Management and Logs
-
-Check container states:
-
-```sh
-docker compose ps
+```powershell
+docker compose -f compose.yml -f compose.relational.yml config --quiet
+docker compose -f compose.yml -f compose.relational.yml up -d --build
 ```
 
-`api` and `frontend` report `healthy` after their HTTP healthchecks pass. HTTP `healthy` indicates the service accepts requests; it does not prove active stream detection. `worker` runs as a continuous non-root background process.
+Mode C:
 
-Follow logs for debugging:
-
-```sh
-docker compose logs -f api
-docker compose logs -f worker
-docker compose logs -f frontend
+```powershell
+docker compose -f compose.yml -f compose.relational.yml -f compose.authenticated.yml config --quiet
+docker compose -f compose.yml -f compose.relational.yml -f compose.authenticated.yml up -d --build
 ```
 
-To stop containers while preserving data volumes:
+Provision database/schema/accounts before starting authenticated API; see sections 10–11. Use `http://127.0.0.1:3001` for the target frontend; do not mix `localhost` and `127.0.0.1` in origin/cookie tests. API status is available at `http://127.0.0.1:3000/health`.
 
-```sh
-docker compose stop
-```
+## 8. Docker Operations & Lifecycle
 
-To take down containers and the internal network:
+Target images use `wave-05.5`. Inspect `docker compose ... ps` and bounded `logs --tail 100`; a running container is not proof of readiness. Stop with the same project/file selection. Ordinary restarts must preserve metadata, recordings and the bridge outbox. Do not use `down -v` on a retained stack.
 
-```sh
-docker compose down
-```
+## 9. Environment Variables & Storage Mounts
 
----
+| Target setting                                           | Default / obligation                                            |
+| -------------------------------------------------------- | --------------------------------------------------------------- |
+| `RUNTIME_DATA_DIR`                                       | `./runtime-data`, host configuration/runtime bind mount         |
+| `RECORDINGS_DIR`                                         | `./recordings`, host media bind mount; API read-only            |
+| `API_HOST_PORT` / `FRONTEND_HOST_PORT` / `POSTGRES_PORT` | 3000 / 3001 / 5432, loopback bindings                           |
+| `RELATIONAL_STORAGE` / `IDENTITY_MODE`                   | A: false/local; B: true/local; C: true/authenticated            |
+| `PERSISTENCE_MODE`                                       | A: direct_json; B/C: bridge                                     |
+| `OUTBOX_DIR`                                             | B/C: `/outbox`, persistent named volume `worker-outbox`         |
+| `POSTGRES_PASSWORD` / `INTERNAL_API_TOKEN`               | Required B/C, private configuration; no real values in docs/Git |
+| `AUTH_TRUSTED_ORIGINS`                                   | Required C; exact browser origin including scheme and port      |
 
-## JSON vs PostgreSQL Persistence Modes
+Container paths are Linux paths even on Windows. API `RECORDINGS_ROOT` and Worker `OUTPUT_DIR` refer to `/recordings`; `CONFIG_DIR` refers to `/data`. Never publish expanded Compose configuration containing secrets.
 
-| Mode | API Authority | Worker Persistence | Default `compose.yml` Configuration |
-|---|---|---|---|
-| **JSON (Default)** | Shared JSON adapters | Direct JSON files | API: `RELATIONAL_STORAGE: "false"`, Worker: `PERSISTENCE_MODE: direct_json` |
-| **Relational Bridge (Opt-in)** | PostgreSQL 17 (Drizzle ORM) | Internal API (`/internal/v1/*`) + Durable Outbox | API: `RELATIONAL_STORAGE: "true"`, `PERSISTENCE_MODE: bridge`; Worker: `PERSISTENCE_MODE: bridge` |
+## 10. Database Migrations and Cutover
 
-> **Critical Operational Guardrails**:
-> 1. **PostgreSQL container presence vs domain authority**: The `postgres` container starts automatically with `docker compose up` to ensure persistent storage readiness. However, in default JSON mode, **PostgreSQL is not the domain authority** and is not an operational requirement for the API (startup is decoupled). Shared JSON files remain the primary authority.
-> 2. **Explicit service configuration in `compose.yml`**: In `compose.yml`, `RELATIONAL_STORAGE: "false"` and `PERSISTENCE_MODE: direct_json` are explicitly set on the service definitions. Therefore, **adding `RELATIONAL_STORAGE=true` to an ambient `.env` file does NOT activate relational mode in Docker Compose**.
-> 3. **No implicit override**: Never name relational configuration `compose.override.yml`, because Docker Compose automatically loads that filename on plain `docker compose up`, which would trigger an uncoordinated, unauthorized cutover.
-> 4. **Overrides do not replace migration**: An override file only configures container environment and volume bindings; it does **not** execute schema migrations, data import, or outbox quiescence. Activating relational writers against an unmigrated database risks data loss or split-brain state.
+Startup does not apply migrations or import JSON. In a built production API image use `node dist/database/migrate.js`; the approved wrapper is `db:migrate:prod`. Source checkout command: `pnpm --dir api db:migrate`. Migration execution was verified against an isolated disposable PostgreSQL 17 container. Migration 0005 reconciles imported legacy history by introducing an explicit `origin` column and scoping the active-stream unique index; deploying it requires rebuilding the API/Worker images and keeping the Worker stopped during migration execution (see [database runbook](api/README.database.md)). For existing JSON follow the quiesced dry-run → backup → import → verify → cutover-check procedure in [database runbook](api/README.database.md). Retain backups; never switch back to stale JSON after relational writes.
 
-To run in **Relational Bridge Mode** safely after completing all migration prerequisites, use an explicitly named private override file (e.g. `compose.relational.local.yml`, which is git-ignored):
+## 11. Account Administration CLI
 
-```yaml
-# compose.relational.local.yml (MUST be invoked explicitly, never implicitly)
-services:
-  api:
-    environment:
-      RELATIONAL_STORAGE: "true"
-      PERSISTENCE_MODE: bridge
-      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:?A private secret token is required}"
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-streamrecorder}:${POSTGRES_PASSWORD:-streamrecorder_dev_local}@postgres:5432/${POSTGRES_DB:-streamrecorder}"
+Verified syntax: `create <username> [--email <email>]`, `set-password <username>`, `disable <username>`, `enable <username>`, `list`. Source: `pnpm --dir api users <command>`. Production: `node dist/auth/users-cli.js <command>`; wrapper `users:prod`. Passwords use a no-echo prompt or controlled stdin, never argv. Non-interactive automated user creation via stdin was verified in an isolated production container without password exposure in logs or arguments; interactive no-echo TTY verification remains reserved for manual testing. Use one-off API containers when authenticated startup is blocked; `exec` requires a running container. C startup requires reachable migrated PostgreSQL, ownership constraints and an enabled password-enrolled user.
 
-  worker:
-    environment:
-      PERSISTENCE_MODE: bridge
-      PERSISTENCE_BRIDGE_URL: "http://api:3000"
-      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:?A private secret token is required}"
-      OUTBOX_DIR: /outbox
-    volumes:
-      - worker_outbox:/outbox
+## 12. Worker Lifecycle, Bridge, and Recovery
 
-volumes:
-  worker_outbox:
-```
+Disabled targets launch no new work; active captures and pending terminal persistence continue independently. Probe ERROR is not OFFLINE. Quality fallback does not alter preference. B/C retain pending/active outbox records across recreation; restore connectivity and observe acknowledgment before declaring recovery. Do not manually delete or edit outbox entries.
 
-### Pre-requisites Before Starting in Relational Mode
+## 13. Local Storage, Containment, and Retention
 
-Do **not** launch the relational stack on an unmigrated database or existing installation without following the strict migration sequence:
+Retained local output is user data, not a cloud staging buffer. `recording_subdir` is relative to the configured root; traversal and unsafe links are rejected. Browsing is metadata-only, not playback/download. Keep history when a file is missing. Back up database, runtime configuration, outbox and media consistently after quiescing the Worker.
 
-1. **Validate Configuration**:
-   ```sh
-   docker compose -f compose.yml -f compose.relational.local.yml config --quiet
-   ```
-2. **Apply Database Migrations**:
-   ```sh
-   # On clean or upgraded database
-   docker compose exec api node dist/database/migrate.js
-   ```
-3. **Execute Historical Data Migration (for existing installations)**:
-   Never launch relational writers against historical JSON data without executing the explicit, quiesced CLI migration runbook (`dry-run`, `backup`, `import`, `verify`, and `cutover-check` with drained outbox) documented in the [Database Runbook](api/README.database.md).
-4. **Launch Coordinated Relational Services**:
-   Only after migrations and cutover checks succeed, start the stack with both files specified explicitly:
-   ```sh
-   docker compose -f compose.yml -f compose.relational.local.yml up -d
-   ```
+## 14. Security and Privacy Boundaries
 
----
+A/B are trusted-local modes, not secured hosting. C uses host-only HttpOnly sessions and backend ownership checks; the internal token authenticates the Worker, not people. Keep ports loopback, secrets out of logs and recordings private. Account provisioning is CLI-only. Users must comply with copyright and platform rules.
 
-## Worker Persistence Bridge and Durable Outbox
+## 15. Troubleshooting & Diagnostics
 
-The Python Worker uses the **Option A persistence bridge**:
-- **Zero Direct Database Coupling**: The Worker never connects directly to PostgreSQL. It communicates strictly via HTTP with the NestJS API.
-- **Fail-Closed Security**: Both API and Worker require matching `INTERNAL_API_TOKEN`. Missing or blank tokens fail closed.
-- **Outbox Architecture**:
-  - `outbox/pending/`: Stores unacknowledged events in `{timestamp_ms}_{sequence}_{event_id}.json` format.
-  - `outbox/active/`: Holds ongoing session checkpoints with PID tracking.
-- **Restart Recovery**: On startup, `recover()` scans checkpoints. Interrupted captures with dead PIDs are marked as `error` (reason: `worker_restart_interruption`), while pending events are replayed with exponential backoff and jitter.
+For startup failure check selected files, required variables, database/schema/account prerequisites and exact trusted origin. For 401/403 distinguish session, ownership, origin and internal-token failures. For stale recording state inspect Worker diagnostics and pending outbox; there is no heartbeat. For missing files check mounts/permissions/root before changing metadata. Never repair failure by deleting retained state.
 
----
+## 16. Testing and Command Inventory
 
-## Legacy JSON Migration and Authority Cutover
+Approved root interface: `test` runs API/frontend/Worker only; aliases `test:api`, `test:frontend`, `test:worker`, `typecheck`, `build`, `test:db`, `test:rehearsal`, `compose:config`, `compose:config:relational`, `compose:config:authenticated`. These commands are available from the repository root. Existing `test:smoke`, `test:smoke:json`, `test:smoke:bridge`, `lint` and `format:check` remain available. Source checks include `pnpm --dir api test --runInBand`, `pnpm --dir frontend test`, and Worker unittest discovery. Database/rehearsal/smoke checks are separate isolated operations, not implied by unit-test success.
 
-Existing installations with data in `watchlist.json`, `streams.json`, and `sessions.json` migrate using the built-in CLI:
+## 17. Current Limitations
 
-```sh
-# 1. Non-destructive validation
-pnpm --dir api migrate:legacy dry-run --source /path/to/runtime-data
+Success uses `finished`; zero exit plus nonempty output does not prove playable MP4. FFmpeg is installed but no separate finalization command is invoked. Legacy links may be unknown. No queue jobs, Worker heartbeat, SSE, cloud export or desktop packaging. Faster dashboard polling does not accelerate capture detection.
 
-# 2. Quiesced backup with SHA-256 manifest
-pnpm --dir api migrate:legacy backup --source /path/to/runtime-data --destination /path/to/backup --quiesced
+## 18. Roadmap and Milestone Status
 
-# 3. Transactional import into PostgreSQL
-pnpm --dir api migrate:legacy import --snapshot /path/to/backup --manifest /path/to/backup/manifest.json --quiesced
+See [PROJECT-STATUS.md](PROJECT-STATUS.md). This checkpoint improves operational guidance after Wave 05.5; it does not implement future queue, storage-management, realtime, desktop or cloud milestones.
 
-# 4. Verify database records against source snapshot
-pnpm --dir api migrate:legacy verify --snapshot /path/to/backup --manifest /path/to/backup/manifest.json
+## 19. Runbooks, Documentation, and Evidence
 
-# 5. Check cutover readiness and outbox status
-pnpm --dir api migrate:legacy cutover-check --source /path/to/runtime-data --api-url http://localhost:3000 --observation-ms 5000 --outbox /path/to/outbox
-```
+- [Human Docker stability matrix and safe cleanup](docs/DOCKER-STABILITY-TESTING.md)
+- [Database authority, migration and recovery](api/README.database.md)
+- [API Documentation](api/README.md)
+- [Frontend Documentation](frontend/README.md)
+- [Worker Documentation](worker/README.md)
+- [Repository Linting and Formatting Guide](README-LINTING.md)
 
-Post-cutover rollback rejects reverse export to legacy JSON because the legacy schema lacks `stream_id` and immutable snapshots. Recovery post-cutover is strictly forward repair. See [api/README.database.md](api/README.database.md) for runbooks.
-
----
-
-## Testing and Docker Integration QA
-
-The repository includes a comprehensive, deterministic test suite:
-
-```sh
-# 1. API Unit & Integration Tests
-pnpm --dir api test --runInBand
-pnpm --dir api exec tsc --noEmit
-pnpm --dir api build
-
-# 2. Frontend Tests & Typecheck
-pnpm --dir frontend test
-pnpm --dir frontend typecheck
-pnpm --dir frontend build
-
-# 3. Worker Python Tests
-python -m unittest discover -s worker -p "test_worker.py"
-pytest worker/test_worker.py -q
-
-# 4. Real Isolated PostgreSQL Integration Suite
-node scripts/test-db-foundation.mjs
-
-# 5. Full Migration & Forward-Repair Rehearsal
-node scripts/test-wave05-rehearsal.mjs
-
-# 6. Live Docker Integration Smoke (Scenario A JSON + Scenario B Bridge)
-pnpm test:smoke
-
-# 7. Git Whitespace Hygiene
-git diff --check
-```
-
----
-
-## Configuration and Environment Variables
-
-| Variable | Scope | Default | Description |
-|---|---|---|---|
-| `PORT` | API / Frontend | `3000` / `3001` | HTTP listening port inside container |
-| `API_HOST_PORT` | Host | `3000` | Loopback port mapped to NestJS API (`127.0.0.1`) |
-| `FRONTEND_HOST_PORT` | Host | `3001` | Loopback port mapped to Next.js UI (`127.0.0.1`) |
-| `POSTGRES_PORT` | Host | `5432` | Loopback port mapped to PostgreSQL (`127.0.0.1`) |
-| `RELATIONAL_STORAGE` | API | `false` | Enables PostgreSQL repositories when `true` |
-| `PERSISTENCE_MODE` | API / Worker | `direct_json` | Set to `bridge` for relational bridge mode |
-| `PERSISTENCE_BRIDGE_URL` | Worker | `""` | URL to internal API (e.g. `http://api:3000`) |
-| `INTERNAL_API_TOKEN` | API / Worker | `""` | Secret token guarding `/internal/v1/*` routes |
-| `DATABASE_URL` | API | *PostgreSQL URI* | Connection string for PostgreSQL database |
-| `CONFIG_DIR` | API / Worker | `/data` | Directory for shared runtime JSON files |
-| `OUTPUT_DIR` | Worker | `/recordings` | Base directory where video files are written |
-| `RECORDINGS_ROOT` | API | `/recordings` | Base directory for API read-only file browser |
-| `API_BASE_URL` | Frontend | `http://api:3000` | Upstream API address used by Next.js proxy |
-
----
-
-## Recording Storage, Security, and Privacy
-
-- **Private Local Files**: All video captures are stored strictly on the local filesystem within `OUTPUT_DIR`.
-- **No Public Media Exposure**: StreamRecorder Clone contains no public video distribution, indexing, or streaming feature.
-- **Trusted Environment**: The application is intended for single-user local development without built-in user authentication.
-- **Network Containment**: Do not expose host ports directly to untrusted public networks. Keep bindings on `127.0.0.1`.
-
----
-
-## Current Limitations
-
-- **No Multi-User Authentication**: Persisted user accounts, login, and authorization belong to **Wave 05.5**.
-- **No Distributed Queue**: Long-running captures are orchestrated directly by Worker polling; BullMQ/Redis jobs belong to **Wave 06**.
-- **No Cloud Export**: Cloud upload to Google Drive, Dropbox, or OneDrive belongs to **Waves 09–10**. Local recording success is completely independent of cloud status.
-- **No SSE / Heartbeat**: Status uses UI polling; server-sent events and Worker heartbeats belong to **Wave 08**.
-- **Desktop Packaging**: Tauri 2 desktop shell is planned for **Wave 08.5**.
-
----
-
-## Roadmap and Project Status
-
-- **Wave 01**: Validation and cleanup (`done`)
-- **Wave 02**: Domain model extraction and JSON adapters (`done`)
-- **Wave 03**: Containerization and Docker Compose (`done`)
-- **Wave 04 / 04.5 / 04.75**: Worker reliability, recording folder browser, and adaptive quality (`done`)
-- **Wave 05**: PostgreSQL Domain Persistence, Drizzle ORM, Worker Bridge, Migration CLI, and Docker QA (`completed`)
-- **Wave 05.5**: User Accounts, Authentication, and Resource Ownership (*planned next*)
-
-For full roadmap tracking, see [PROJECT-STATUS.md](PROJECT-STATUS.md).
-
----
-
-## Component Documentation Links
-
-- [API Technical Documentation](api/README.md)
-- [Database Runbook, Migrations & Recovery](api/README.database.md)
-- [Worker Technical Documentation](worker/README.md)
-- [Frontend Technical Documentation](frontend/README.md)
-
----
+Record actual commands, timestamps, isolated project/data paths and observed results. Blank human-test cells are unexecuted, not PASS. Component guides retain detailed English/Portuguese reference material.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+This project is licensed under the terms described in [LICENSE](LICENSE).
 
 ---
 
 # Português (Brasil)
 
-## Visão Geral
+## Índice de Conteúdo
 
-O **StreamRecorder Clone** é uma aplicação local-first inspirada no StreamRecorder, projetada para monitorar criadores de conteúdo na Twitch, YouTube e Kick e gravar transmissões ao vivo automaticamente em arquivos de vídeo locais e privados.
-
-O projeto foi desenhado com forte separação de responsabilidades entre quem é monitorado (`Creator`), como monitorar (`WatchTarget`), as transmissões reais detectadas (`Stream`) e as tentativas físicas de captura (`Recording`).
+- [1. Status do Checkpoint Operacional](#1-status-do-checkpoint-operacional)
+- [2. Visão Geral e Propósito Central](#2-visão-geral-e-propósito-central)
+- [3. Funcionalidades](#3-funcionalidades)
+- [4. Arquitetura e Stack Tecnológica](#4-arquitetura-e-stack-tecnológica)
+- [5. Modos de Implantação](#5-modos-de-implantação)
+- [6. Pré-requisitos](#6-pré-requisitos)
+- [7. Início Rápido](#7-início-rápido)
+- [8. Operações e Ciclo de Vida do Docker](#8-operações-e-ciclo-de-vida-do-docker)
+- [9. Variáveis de Ambiente e Volumes](#9-variáveis-de-ambiente-e-volumes)
+- [10. Migrações de Banco de Dados e Corte de Autoridade](#10-migrações-de-banco-de-dados-e-corte-de-autoridade)
+- [11. CLI de Administração de Contas](#11-cli-de-administração-de-contas)
+- [12. Ciclo de Vida do Worker, Ponte e Recuperação](#12-ciclo-de-vida-do-worker-ponte-e-recuperação)
+- [13. Armazenamento Local, Contenção e Retenção](#13-armazenamento-local-contenção-e-retenção)
+- [14. Fronteiras de Segurança e Privacidade](#14-fronteiras-de-segurança-e-privacidade)
+- [15. Solução de Problemas e Diagnósticos](#15-solução-de-problemas-e-diagnósticos)
+- [16. Testes e Inventário de Comandos](#16-testes-e-inventário-de-comandos)
+- [17. Limitações Atuais](#17-limitações-atuais)
+- [18. Roadmap e Status dos Marcos](#18-roadmap-e-status-dos-marcos)
+- [19. Guias Operacionais, Documentação e Evidências](#19-guias-operacionais-documentação-e-evidências)
+- [Licença](#licença)
 
 ---
 
-## Funcionalidades Principais
+## 1. Status do Checkpoint Operacional
 
-- **Monitoramento Multiplataforma**: Verificação contínua de status na Twitch, YouTube e Kick.
-- **Classificação Precisa**: Separação estrita entre `LIVE` (ao vivo), `OFFLINE` (fora do ar) e `ERROR` (falhas transitórias de rede).
-- **Qualidade Adaptativa**: Tentativa de gravação na qualidade configurada com fallback em tempo de execução sem alterar a preferência persistida.
-- **Persistência Dupla**:
-  - *Modo JSON (Padrão)*: Arquivos locais compartilhados.
-  - *Modo Relacional (Opt-in)*: Banco PostgreSQL 17 gerenciado via Drizzle ORM.
-- **Ponte de Persistência do Worker**: Comunicação desacoplada entre Worker Python e API NestJS via HTTP com token de autenticação e outbox durável em disco com tolerância a falhas e reinicializações.
-- **Painel de Controle em Next.js**: Interface moderna para gerenciar alvos, monitorar status, inspecionar histórico e navegar pelo sistema de arquivos de gravações locais de forma segura.
-- **Privacidade Total**: Gravações salvas estritamente no disco local do usuário, sem servidores públicos de vídeo ou uploads obrigatórios para a nuvem.
+Documentação de prontidão operacional pós-Wave 05.5; os testes de estabilidade humana **ainda não foram registrados**. Nenhum status de aceitação de onda foi alterado aqui. O contrato de modos abaixo é a meta aprovada do checkpoint, não evidência de implantação final.
 
----
+## 2. Visão Geral e Propósito Central
 
-## Início Rápido com Docker Compose
+Monitoramento local-first e captura local privada para Twitch, YouTube e Kick. Contas em nuvem, servidores VPS e autenticação OAuth externa não são pré-requisitos. O acesso à rede/plataforma e as devidas permissões para gravação continuam necessários.
 
-### Pré-requisitos
-- Docker Desktop com suporte a Compose v2.
+## 3. Funcionalidades
 
-### Inicialização
-Para construir as imagens e iniciar todos os serviços no modo padrão:
+Alvos de monitoramento (`WatchTarget`) independentes agrupados por Criador (`Creator`), qualidade/URL/pasta/habilitação configuráveis, sondagem contínua, captura adaptativa, histórico persistido de transmissões (`Stream`) e gravações (`Recording`), navegação segura somente-leitura pelo sistema de arquivos, propriedade relacional de recursos e autenticação opcional por senha/sessão.
 
-```sh
-docker compose up -d --build
+## 4. Arquitetura e Stack Tecnológica
+
+Navegador → Proxy Next.js → Serviços/Repositórios NestJS → JSON ou PostgreSQL. Worker Python independente → Streamlink → gravações locais. No modo relacional, eventos do Worker utilizam a API interna e outbox durável em disco. `Creator` representa quem; `WatchTarget` representa a configuração; `Stream` representa uma transmissão ao vivo real; `Recording` representa uma tentativa física de captura.
+
+```text
+Modo Padrão (JSON Legado):
+Navegador -> Proxy Next.js -> API NestJS -> Adaptadores JSON
+Worker Python -> Arquivos JSON Diretos
+Subprocesso Streamlink -> Armazenamento Local de Gravações
+
+Modo Ponte Relacional (PostgreSQL + Ponte):
+Navegador -> Proxy Next.js -> API NestJS -> PostgreSQL 17 (Drizzle)
+Worker Python -> API REST Interna (/internal/v1/*) -> PostgreSQL 17
+Worker -> Outbox Durável em Disco (pending/ e active/) -> Eventos Internos
+Subprocesso Streamlink -> Armazenamento Local de Gravações
 ```
 
-Acesse a interface no navegador:
-- **Painel**: [http://localhost:3001](http://localhost:3001)
-- **Status da API**: [http://localhost:3000/health](http://localhost:3000/health)
+| Camada                   | Tecnologias                                                                                           |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| **Frontend**             | Next.js 16 (App Router), React 19, Tailwind CSS, TypeScript 5.9                                       |
+| **API Backend**          | NestJS 11, Express, Node.js >=25.9.0, TypeScript 5.7+                                                 |
+| **Banco de Dados & ORM** | PostgreSQL 17 (`postgres:17-alpine`), Drizzle ORM 0.44+, Drizzle Kit                                  |
+| **Worker & Mídia**       | Python 3.12, Streamlink 8.6.1, FFmpeg (instalado na imagem do Worker; sem comando de remux explícito) |
+| **Orquestração**         | Docker & Docker Compose v2, imagens base Alpine/Debian slim                                           |
 
-Por segurança, as portas no host são publicadas exclusivamente em loopback `127.0.0.1`.
+## 5. Modos de Implantação
 
-*Nota sobre o serviço PostgreSQL:* O container `postgres` é iniciado pelo `docker compose up` para disponibilizar a infraestrutura local, mas **não** é um requisito operacional para a API no modo JSON padrão (inicialização desacoplada).
+| Modo | Arquivos Compose Aprovados      | Autoridade / Identidade                   | Serviços                              |
+| ---- | ------------------------------- | ----------------------------------------- | ------------------------------------- |
+| A    | `compose.yml`                   | JSON / local                              | API, frontend, Worker; sem PostgreSQL |
+| B    | A + `compose.relational.yml`    | PostgreSQL / local; ponte do Worker       | A + PostgreSQL 17                     |
+| C    | B + `compose.authenticated.yml` | PostgreSQL / autenticado; ponte do Worker | Idêntico ao B                         |
 
----
+Os Modos B e C exigem `INTERNAL_API_TOKEN` compartilhado entre API e Worker, e `POSTGRES_PASSWORD`. O Modo C exige adicionalmente `AUTH_TRUSTED_ORIGINS` exata e não-vazia para o navegador; a autenticação não é ativada apenas pela presença do banco relacional.
 
-## Modos de Persistência
+## 6. Pré-requisitos
 
-1. **Modo Padrão (JSON)**:
-   - A API e o Worker utilizam arquivos no diretório `runtime-data/` como autoridade primária.
-   - O container `postgres` pode estar em execução para disponibilizar a infraestrutura local, mas o PostgreSQL **não é a autoridade do domínio** nesse modo e não é obrigatório para o funcionamento da API (inicialização desacoplada).
-2. **Modo Relacional (PostgreSQL + Worker Bridge)**:
-   - No `compose.yml` padrão, `RELATIONAL_STORAGE: "false"` e `PERSISTENCE_MODE: direct_json` estão declarados explicitamente nos serviços. Portanto, **adicionar apenas `RELATIONAL_STORAGE=true` no `.env` NÃO ativa o modo relacional no Docker Compose**.
-   - O modo relacional **não pode ser ativado implicitamente**. Nunca utilize o nome `compose.override.yml`, pois o Docker Compose o carrega automaticamente em qualquer `docker compose up`.
-   - Utilize um arquivo de sobreposição explicitamente nomeado (ex: `compose.relational.local.yml`, incluído no `.gitignore`), configurando a API e o Worker de forma coordenada com volume dedicado para a outbox (`OUTBOX_DIR`) e o token interno (`INTERNAL_API_TOKEN`).
-   - Um arquivo de override **não substitui** o processo de migração. Para instalações existentes com dados legados, é obrigatório executar a sequência quiescida de migração (`dry-run`, `backup`, `import`, `verify`, `cutover-check`) antes de ativar os novos escritores.
+Docker Desktop com Compose v2 e espaço em disco suficiente. Ferramentas para execução via código-fonte: Node >=25.9.0, pnpm fixado no `package.json`, Python 3.12 e dependências do Worker. Utilize diretórios de dados descartáveis e isolados para testes, nunca dados reais de produção ou gravações retidas.
 
-Validação explícita da configuração relacional:
-```sh
-docker compose -f compose.yml -f compose.relational.local.yml config --quiet
+## 7. Início Rápido
+
+Valide a configuração selecionada antes de inicializar:
+
+```powershell
+docker compose -f compose.yml config --quiet
+docker compose -f compose.yml up -d --build
 ```
 
-Inicialização da stack relacional (somente após migração e verificação concluídas):
-```sh
-docker compose -f compose.yml -f compose.relational.local.yml up -d
+Para os Modos B e C, inclua todos os arquivos `-f` correspondentes em **cada** comando:
+
+Modo B:
+
+```powershell
+docker compose -f compose.yml -f compose.relational.yml config --quiet
+docker compose -f compose.yml -f compose.relational.yml up -d --build
 ```
 
-Consulte o [Runbook de Banco de Dados](api/README.database.md) para procedimentos completos de migração, cutover e forward-repair.
+Modo C:
 
----
+```powershell
+docker compose -f compose.yml -f compose.relational.yml -f compose.authenticated.yml config --quiet
+docker compose -f compose.yml -f compose.relational.yml -f compose.authenticated.yml up -d --build
+```
 
-## Limitações Atuais e Próximos Passos
+Provisione o banco, esquema e contas de usuário antes de inicializar a API autenticada (consulte as seções 10 e 11). Acesse o painel pelo endereço `http://127.0.0.1:3001`; não misture `localhost` e `127.0.0.1` em testes de origem/cookies. O status da API pode ser verificado em `http://127.0.0.1:3000/health`.
 
-- O sistema opera em ambiente local confiável e não possui tela de login ou autenticação de usuários (previsto para a **Wave 05.5**).
-- As capturas são orquestradas diretamente pelo Worker via polling; filas de segundo plano com Redis/BullMQ pertencem à **Wave 06**.
-- A exportação para Google Drive, Dropbox ou OneDrive é secundária e opcional, pertencente às **Waves 09 e 10**.
+## 8. Operações e Ciclo de Vida do Docker
 
-Consulte [PROJECT-STATUS.md](PROJECT-STATUS.md) para o roadmap completo do projeto.
+As imagens-alvo utilizam a tag `wave-05.5`. Inspecione `docker compose ... ps` e logs limitados `logs --tail 100`; um container em execução não comprova prontidão operacional. Interrompa a stack com a mesma seleção de arquivos e projeto. Reinicializações normais devem preservar metadados, gravações e a outbox da ponte. Nunca execute `down -v` em uma stack de dados retidos.
+
+## 9. Variáveis de Ambiente e Volumes
+
+| Configuração Alvo                                        | Padrão / Obrigação                                                       |
+| -------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `RUNTIME_DATA_DIR`                                       | `./runtime-data`, montagem bind de configuração/runtime no host          |
+| `RECORDINGS_DIR`                                         | `./recordings`, montagem bind de mídia no host; API somente leitura      |
+| `API_HOST_PORT` / `FRONTEND_HOST_PORT` / `POSTGRES_PORT` | 3000 / 3001 / 5432, vinculados a loopback                                |
+| `RELATIONAL_STORAGE` / `IDENTITY_MODE`                   | A: false/local; B: true/local; C: true/authenticated                     |
+| `PERSISTENCE_MODE`                                       | A: direct_json; B/C: bridge                                              |
+| `OUTBOX_DIR`                                             | B/C: `/outbox`, volume nomeado persistente `worker-outbox`               |
+| `POSTGRES_PASSWORD` / `INTERNAL_API_TOKEN`               | Obrigatórios em B/C, configuração privada; sem valores reais em docs/Git |
+| `AUTH_TRUSTED_ORIGINS`                                   | Obrigatório em C; origem exata do navegador incluindo protocolo e porta  |
+
+Caminhos em containers são caminhos Linux, mesmo no Windows. Na API, `RECORDINGS_ROOT` e no Worker `OUTPUT_DIR` apontam para `/recordings`; `CONFIG_DIR` aponta para `/data`. Nunca exponha arquivos Compose expandidos contendo senhas ou tokens reais.
+
+## 10. Migrações de Banco de Dados e Corte de Autoridade
+
+A inicialização não executa migrações automáticas nem importa dados JSON. Na imagem de produção da API, execute `node dist/database/migrate.js` (atalho aprovado: `db:migrate:prod`). Em ambiente de desenvolvimento: `pnpm --dir api db:migrate`. A execução de migrações foi verificada em um container isolado descartável com PostgreSQL 17. A migration 0005 reconcilia o histórico importado ao introduzir a coluna explícita `origin` e delimitar o índice único de streams ativos; sua aplicação exige reconstruir as imagens da API/Worker e manter o Worker desligado durante a execução da migration (consulte o [runbook de banco de dados](api/README.database.md)). Para migrar dados legados de JSON, siga o procedimento quiescido: dry-run → backup → import → verify → cutover-check detalhado no [runbook de banco de dados](api/README.database.md). Mantenha backups verificados; nunca reverta para arquivos JSON obsoletos após escritas relacionais.
+
+## 11. CLI de Administração de Contas
+
+Sintaxe verificada: `create <username> [--email <email>]`, `set-password <username>`, `disable <username>`, `enable <username>`, `list`. Código-fonte: `pnpm --dir api users <comando>`. Produção: `node dist/auth/users-cli.js <comando>`; wrapper `users:prod`. Senhas utilizam prompt sem eco ou entrada controlada via stdin, nunca argumentos de linha de comando. A criação automatizada não-interativa via stdin foi verificada em container de produção isolado sem exposição de senhas em logs ou argumentos; a verificação interativa em TTY sem eco permanece reservada para avaliação manual. Utilize containers API descartáveis avulsos quando a inicialização autenticada estiver bloqueada; o comando `exec` requer containers ativos. A inicialização no Modo C exige PostgreSQL acessível e migrado, restrições de propriedade aplicadas e um usuário habilitado com senha cadastrada.
+
+## 12. Ciclo de Vida do Worker, Ponte e Recuperação
+
+Alvos desabilitados não iniciam novas sondagens ou gravações; capturas ativas e persistências terminais pendentes continuam de forma independente. Erro de sondagem (`ERROR`) não significa que o canal está `OFFLINE`. Fallback de qualidade adaptativa não altera a preferência gravada. Os Modos B e C preservam eventos pendentes e ativos na outbox entre recriações de containers; restabeleça a conexão e observe a confirmação durável antes de declarar a recuperação concluída. Nunca apague arquivos da outbox manualmente.
+
+## 13. Armazenamento Local, Contenção e Retenção
+
+Arquivos locais concluídos são dados do usuário, não um buffer transitório de nuvem. O diretório `recording_subdir` é relativo à raiz configurada; caracteres de travessia de diretório e links inseguros são rejeitados. A navegação na API é restrita a metadados, sem reprodução ou download de mídia. O histórico é preservado mesmo se o arquivo físico estiver ausente. Faça backup coordenado do banco de dados, arquivos de configuração, outbox e mídia com o Worker quiescido.
+
+## 14. Fronteiras de Segurança e Privacidade
+
+Os Modos A e B destinam-se a ambientes locais confiáveis, não a hospedagem multiusuário exposta. O Modo C utiliza cookies de sessão HttpOnly com flag SameSite e validação de propriedade no backend; o token interno autentica exclusivamente o Worker, não pessoas. Portas permanecem restritas a loopback `127.0.0.1`, sem segredos em logs e com gravações privadas. O provisionamento de usuários ocorre exclusivamente via CLI. Os usuários permanecem responsáveis pelo cumprimento das regras de direitos autorais e dos termos das plataformas.
+
+## 15. Solução de Problemas e Diagnósticos
+
+Para falhas de inicialização, verifique os arquivos Compose selecionados, variáveis obrigatórias, migrações aplicadas e origens confiáveis exatas. Em erros 401/403, diferencie problemas de sessão, propriedade de recursos, origem ou token interno. Em casos de status estagnado, verifique os diagnósticos do Worker e eventos pendentes na outbox; não há heartbeat ativo. Se arquivos não forem encontrados, valide montagens e permissões antes de alterar metadados. Nunca tente reparar falhas excluindo dados retidos.
+
+## 16. Testes e Inventário de Comandos
+
+Interface aprovada na raiz: `test` executa apenas API, frontend e testes unitários do Worker; atalhos: `test:api`, `test:frontend`, `test:worker`, `typecheck`, `build`, `test:db`, `test:rehearsal`, `compose:config`, `compose:config:relational`, `compose:config:authenticated`. Estes comandos estão disponíveis na raiz do repositório. Os comandos existentes `test:smoke`, `test:smoke:json`, `test:smoke:bridge`, `lint` e `format:check` permanecem disponíveis. Verificações nos pacotes incluem `pnpm --dir api test --runInBand`, `pnpm --dir frontend test` e descoberta de unittests no Worker. Verificações de banco, rehearsal e fumaça Docker são operações isoladas, não implícitas pelo sucesso dos testes unitários.
+
+## 17. Limitações Atuais
+
+Capturas bem-sucedidas utilizam o status `finished`; código de saída zero e arquivo não-vazio não comprovam integridade de reprodução de MP4. O FFmpeg está instalado, mas nenhum comando de finalização explícito é disparado separadamente. Links em históricos legados podem constar como desconhecidos. Não há filas com Redis/BullMQ, heartbeat do Worker, SSE, exportação para nuvem ou empacotamento desktop. Acelerar o polling do painel não antecipa a detecção pelo Worker.
+
+## 18. Roadmap e Status dos Marcos
+
+Consulte [PROJECT-STATUS.md](PROJECT-STATUS.md). Este checkpoint consolida instruções operacionais após a Wave 05.5; ele não antecipa filas, gestão avançada de armazenamento, mensageria em tempo real, aplicativo desktop ou integração com provedores em nuvem.
+
+## 19. Guias Operacionais, Documentação e Evidências
+
+- [Matriz de estabilidade humana no Docker e limpeza segura](docs/DOCKER-STABILITY-TESTING.md)
+- [Autoridade de banco de dados, migração e recuperação](api/README.database.md)
+- [Documentação da API](api/README.md)
+- [Documentação do Frontend](frontend/README.md)
+- [Documentação do Worker](worker/README.md)
+- [Guia de Formatação e Linting do Repositório](README-LINTING.md)
+
+Registre comandos reais, horários, caminhos de projetos e dados isolados e resultados observados. Células de testes manuais em branco significam testes não executados, não aprovação. Guias específicos dos componentes mantêm documentação técnica bilíngue detalhada.
+
+## Licença
+
+Este projeto é distribuído sob os termos descritos no arquivo [LICENSE](LICENSE).

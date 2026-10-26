@@ -3,11 +3,10 @@ import { RecordingBrowser } from "./recording-browser";
 import { useEffect, useState } from "react";
 import { useDashboard } from "./provider";
 import { Badge, Empty, Json, ResourceStatus, Table } from "./ui";
-import { api } from "@/lib/api";
 import { timestamp, duration } from "@/lib/format";
 import { states, type Recording } from "@/lib/types";
 export function History({ kind }: { kind: "streams" | "recordings" }) {
-  const { snapshot } = useDashboard();
+  const { snapshot, request: api, generation, isCurrentGeneration } = useDashboard();
   const [locationId, setLocationId] = useState<string>();
   const [target, setTarget] = useState("");
   const [state, setState] = useState("");
@@ -21,25 +20,37 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
   useEffect(() => {
     if (!recordings || !target) return;
     let active = true;
-    setError("");
-    setFiltered(undefined);
-    api<Recording[]>(`/recordings?watchTargetId=${encodeURIComponent(target)}`)
-      .then((data) => {
-        if (active) {
-          if (!Array.isArray(data)) throw new Error("Invalid API response: expected an array");
-          setFiltered({ target, data });
-        }
-      })
-      .catch((e) => {
-        if (active) {
-          setFiltered(undefined);
-          setError(String(e));
-        }
-      });
+    const current = () => active && isCurrentGeneration(generation);
+    Promise.resolve().then(() => {
+      if (!current()) return;
+      setError("");
+      setFiltered(undefined);
+      return api<Recording[]>(`/recordings?watchTargetId=${encodeURIComponent(target)}`)
+        .then((data) => {
+          if (current()) {
+            if (!Array.isArray(data)) throw new Error("Invalid API response: expected an array");
+            setFiltered({ target, data });
+          }
+        })
+        .catch((e) => {
+          if (current()) {
+            setFiltered(undefined);
+            setError(String(e));
+          }
+        });
+    });
     return () => {
       active = false;
     };
-  }, [recordings, target, snapshot.recordings.updated, retry]);
+  }, [
+    recordings,
+    target,
+    snapshot.recordings.updated,
+    retry,
+    api,
+    generation,
+    isCurrentGeneration,
+  ]);
   const data = recordings
     ? target
       ? filtered?.target === target
@@ -48,19 +59,14 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
       : snapshot.recordings.data
     : snapshot.streams.data;
   const rows = data?.filter(
-    (row) =>
-      (!target || row.watch_target_id === target) &&
-      (!state || row.state === state),
+    (row) => (!target || row.watch_target_id === target) && (!state || row.state === state),
   );
   const targetOptions = new Map(
     (snapshot["watch-targets"].data || []).map((t) => [t.id, t.channel_name]),
   );
   for (const row of snapshot[kind].data || [])
     if (!targetOptions.has(row.watch_target_id))
-      targetOptions.set(
-        row.watch_target_id,
-        `${row.watch_target_id} (removed target)`,
-      );
+      targetOptions.set(row.watch_target_id, `${row.watch_target_id} (removed target)`);
   return (
     <>
       <div className="page-heading">
@@ -102,17 +108,13 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
       </div>
       <ResourceStatus resource={kind} />
       <ResourceStatus resource="watch-targets" />
-      {error && target && (
+      {error && target ? (
         <div className="error" role="alert">
           <pre>{error}</pre>
-          <button onClick={() => setRetry((n) => n + 1)}>
-            Retry filtered request
-          </button>
+          <button onClick={() => setRetry((n) => n + 1)}>Retry filtered request</button>
         </div>
-      )}
-      {recordings && target && !data && !error && (
-        <Empty>Loading filtered recordings…</Empty>
-      )}
+      ) : null}
+      {recordings && target && !data && !error ? <Empty>Loading filtered recordings…</Empty> : null}
       <section className="panel">
         {rows?.length ? (
           <Table
@@ -133,17 +135,14 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
                   <code>{"session_id" in row ? row.session_id : row.id}</code>
                 </td>
                 <td>
-                  {targetOptions.get(row.watch_target_id) ||
-                    row.watch_target_id}
+                  {targetOptions.get(row.watch_target_id) || row.watch_target_id}
                   <code className="subtext">{row.watch_target_id}</code>
                 </td>
-                {recordings && (
+                {recordings ? (
                   <td>
-                    <code>
-                      {(row as Recording).stream_id || "Not persisted"}
-                    </code>
+                    <code>{(row as Recording).stream_id || "Not persisted"}</code>
                   </td>
-                )}
+                ) : null}
                 <td>
                   <Badge state={row.state} />
                 </td>
@@ -153,38 +152,39 @@ export function History({ kind }: { kind: "streams" | "recordings" }) {
                 <td>
                   <code>{timestamp(row.finished_at)}</code>
                 </td>
-                <td className="nowrap">
-                  {duration(row.started_at, row.finished_at)}
-                </td>
-                {recordings && (
+                <td className="nowrap">{duration(row.started_at, row.finished_at)}</td>
+                {recordings ? (
                   <td>
-                    <code className="path">
-                      {(row as Recording).output_file || "—"}
-                    </code>
-                    <button type="button" className="secondary small"
-                      onClick={() => setLocationId((row as Recording).session_id)}>
+                    <code className="path">{(row as Recording).output_file || "—"}</code>
+                    <button
+                      type="button"
+                      className="secondary small"
+                      onClick={() => setLocationId((row as Recording).session_id)}
+                    >
                       Browse location
                     </button>
                   </td>
-                )}
+                ) : null}
               </tr>
             ))}
           </Table>
         ) : rows ? (
           <Empty>
-            No {kind} match this view. History appears after the Worker persists
-            activity.
+            No {kind} match this view. History appears after the Worker persists activity.
           </Empty>
         ) : null}
       </section>
       <p className="note">
-        Timestamps are shown as persisted. The current Worker omits timezone
-        offsets. Duration is calculated only when both timestamps are available.
-        {recordings &&
-          " Stream IDs may not be persisted. Output paths are local Worker filesystem information only."}
+        Timestamps are shown as persisted. The current Worker omits timezone offsets. Duration is
+        calculated only when both timestamps are available.
+        {recordings
+          ? " Stream IDs may not be persisted. Output paths are local Worker filesystem information only."
+          : null}
       </p>
-      {locationId && <RecordingBrowser recordingId={locationId} onClose={() => setLocationId(undefined)} />}
-      {data && <Json data={data} />}
+      {locationId ? (
+        <RecordingBrowser recordingId={locationId} onClose={() => setLocationId(undefined)} />
+      ) : null}
+      {data ? <Json data={data} /> : null}
     </>
   );
 }

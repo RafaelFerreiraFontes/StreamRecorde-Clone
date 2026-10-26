@@ -11,13 +11,9 @@ test("API client preserves errors, accepts empty DELETE responses, and bounds di
       assert.equal(init.method, "DELETE");
       return new Response(null, { status: 200 });
     };
-    assert.equal(
-      await api("/watch-targets/example", { method: "DELETE" }),
-      undefined,
-    );
+    assert.equal(await api("/watch-targets/example", { method: "DELETE" }), undefined);
     assert.equal(requestLog.snapshot()[0].status, 200);
-    globalThis.fetch = async () =>
-      new Response('{"message":"Upstream failed"}', { status: 500 });
+    globalThis.fetch = async () => new Response('{"message":"Upstream failed"}', { status: 500 });
     await assert.rejects(api("/streams"), /HTTP 500.*Upstream failed/);
     assert.equal(requestLog.snapshot()[0].status, 500);
     globalThis.fetch = async () => {
@@ -36,10 +32,7 @@ test("API client preserves errors, accepts empty DELETE responses, and bounds di
 test("timestamps preserve Worker wall-clock values and durations require valid endpoints", () => {
   assert.equal(timestamp("2026-09-15T13:00:00"), "2026-09-15 13:00:00");
   assert.equal(timestamp(undefined), "—");
-  assert.equal(
-    duration("2026-09-15T13:00:00", "2026-09-15T14:01:02"),
-    "1h 1m 2s",
-  );
+  assert.equal(duration("2026-09-15T13:00:00", "2026-09-15T14:01:02"), "1h 1m 2s");
   assert.equal(duration("2026-09-15T13:00:00"), "—");
   assert.equal(duration("invalid", "also invalid"), "—");
   assert.equal(duration("2026-09-15T14:00:00", "2026-09-15T13:00:00"), "—");

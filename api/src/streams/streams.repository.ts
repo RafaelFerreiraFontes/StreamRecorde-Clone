@@ -7,7 +7,6 @@
  */
 
 import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common";
-import * as path from "path";
 import { randomUUID } from "crypto";
 import { Mutex } from "async-mutex";
 import { SessionDto } from "./dto/session.dto";
@@ -21,13 +20,10 @@ import {
   StreamJsonAdapter,
   WatchTargetJsonAdapter,
   resolveAllConfigPaths,
-  resolveConfigPath,
 } from "./json-compatibility.adapters";
 
 type WatchlistEntries = Awaited<ReturnType<typeof WatchTargetJsonAdapter.read>>;
-type RuntimeStatuses = Awaited<
-  ReturnType<typeof RuntimeStatusJsonAdapter.read>
->;
+type RuntimeStatuses = Awaited<ReturnType<typeof RuntimeStatusJsonAdapter.read>>;
 
 interface SessionWithChannel extends SessionDto {
   channel_name: string | null;
@@ -47,16 +43,16 @@ function getConfigPaths() {
 
 @Injectable()
 export class StreamsRepository {
-  async createCreator(_dto: CreateCreatorDto): Promise<Creator> {
-    throw new BadRequestException("Creator mutations require relational storage");
+  createCreator(_dto: CreateCreatorDto, _ownerId?: string): Promise<Creator> {
+    return Promise.reject(new BadRequestException("Creator mutations require relational storage"));
   }
 
-  async updateCreator(_id: string, _dto: PatchCreatorDto): Promise<Creator> {
-    throw new BadRequestException("Creator mutations require relational storage");
+  updateCreator(_id: string, _dto: PatchCreatorDto, _ownerId?: string): Promise<Creator> {
+    return Promise.reject(new BadRequestException("Creator mutations require relational storage"));
   }
 
-  async removeCreator(_id: string): Promise<void> {
-    throw new BadRequestException("Creator mutations require relational storage");
+  removeCreator(_id: string, _ownerId?: string): Promise<void> {
+    return Promise.reject(new BadRequestException("Creator mutations require relational storage"));
   }
 
   /** Serializes read-modify-write operations inside this Node process only. */
@@ -94,28 +90,18 @@ export class StreamsRepository {
   }
 
   private toCreator(entry: WatchlistEntries[number]): Creator {
-    const displayName =
-      entry.display_name?.trim() || entry.channel_name || "unknown-creator";
+    const displayName = entry.display_name?.trim() || entry.channel_name || "unknown-creator";
     return {
       id: this.normalizeCreatorId(displayName),
       display_name: displayName,
     };
   }
 
-  private toWatchTarget(
-    entry: WatchlistEntries[number],
-    status: RuntimeStatuses,
-  ): WatchTarget {
-    return WatchTargetJsonAdapter.toDomain(
-      entry,
-      status[entry.id]?.state ?? "idle",
-    );
+  private toWatchTarget(entry: WatchlistEntries[number], status: RuntimeStatuses): WatchTarget {
+    return WatchTargetJsonAdapter.toDomain(entry, status[entry.id]?.state ?? "idle");
   }
 
-  private mergeStreamer(
-    entry: WatchlistEntries[number],
-    status: RuntimeStatuses,
-  ): StreamerDto {
+  private mergeStreamer(entry: WatchlistEntries[number], status: RuntimeStatuses): StreamerDto {
     const channelStatus = status[entry.id];
     return {
       id: entry.id,
@@ -128,10 +114,7 @@ export class StreamsRepository {
     };
   }
 
-  private mergeSession(
-    recording: Recording,
-    status: RuntimeStatuses,
-  ): SessionWithChannel {
+  private mergeSession(recording: Recording, status: RuntimeStatuses): SessionWithChannel {
     const channelStatus = status[recording.watch_target_id];
     return {
       session_id: recording.session_id,
@@ -149,7 +132,7 @@ export class StreamsRepository {
   // Streamer methods  (watchlist.json + channels_status.json merged by id)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async findAllCreators(): Promise<Creator[]> {
+  async findAllCreators(_ownerId?: string): Promise<Creator[]> {
     return this.mutex.runExclusive(async () => {
       const watchlist = await this.readWatchlist();
       const creators = new Map<string, Creator>();
@@ -165,13 +148,12 @@ export class StreamsRepository {
     });
   }
 
-  async findOneCreator(creatorId: string): Promise<Creator> {
+  async findOneCreator(creatorId: string, _ownerId?: string): Promise<Creator> {
     return this.mutex.runExclusive(async () => {
       const watchlist = await this.readWatchlist();
       const entry = watchlist.find(
         (item) =>
-          this.toCreator(item).id === creatorId ||
-          this.toCreator(item).display_name === creatorId,
+          this.toCreator(item).id === creatorId || this.toCreator(item).display_name === creatorId,
       );
 
       if (!entry) {
@@ -182,7 +164,7 @@ export class StreamsRepository {
     });
   }
 
-  async findWatchTargetsByCreator(creatorId: string): Promise<WatchTarget[]> {
+  async findWatchTargetsByCreator(creatorId: string, _ownerId?: string): Promise<WatchTarget[]> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
         this.readWatchlist(),
@@ -198,7 +180,7 @@ export class StreamsRepository {
     });
   }
 
-  async findAllWatchTargets(): Promise<WatchTarget[]> {
+  async findAllWatchTargets(_ownerId?: string): Promise<WatchTarget[]> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
         this.readWatchlist(),
@@ -208,7 +190,7 @@ export class StreamsRepository {
     });
   }
 
-  async findOneWatchTarget(id: string): Promise<WatchTarget> {
+  async findOneWatchTarget(id: string, _ownerId?: string): Promise<WatchTarget> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
         this.readWatchlist(),
@@ -220,7 +202,7 @@ export class StreamsRepository {
     });
   }
 
-  async createWatchTarget(dto: CreateWatchTargetDto): Promise<WatchTarget> {
+  async createWatchTarget(dto: CreateWatchTargetDto, _ownerId?: string): Promise<WatchTarget> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
         this.readWatchlist(),
@@ -240,19 +222,15 @@ export class StreamsRepository {
 
       watchlist.push(WatchTargetJsonAdapter.fromDomain(watchTarget));
       await this.writeWatchlist(watchlist);
-      return this.toWatchTarget(
-        WatchTargetJsonAdapter.fromDomain(watchTarget),
-        status,
-      );
+      return this.toWatchTarget(WatchTargetJsonAdapter.fromDomain(watchTarget), status);
     });
   }
 
-  async removeWatchTarget(id: string): Promise<void> {
+  async removeWatchTarget(id: string, _ownerId?: string): Promise<void> {
     return this.mutex.runExclusive(async () => {
       const watchlist = await this.readWatchlist();
       const index = watchlist.findIndex((entry) => entry.id === id);
-      if (index === -1)
-        throw new NotFoundException(`Watch target ${id} not found`);
+      if (index === -1) throw new NotFoundException(`Watch target ${id} not found`);
       watchlist.splice(index, 1);
       await this.writeWatchlist(watchlist);
     });
@@ -275,6 +253,7 @@ export class StreamsRepository {
       quality?: string;
       url?: string;
     },
+    _ownerId?: string,
   ): Promise<WatchTarget> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
@@ -282,8 +261,7 @@ export class StreamsRepository {
         this.readChannelsStatus(),
       ]);
       const index = watchlist.findIndex((entry) => entry.id === id);
-      if (index === -1)
-        throw new NotFoundException(`Watch target ${id} not found`);
+      if (index === -1) throw new NotFoundException(`Watch target ${id} not found`);
 
       const entry = watchlist[index];
       // Empty string -> delete the field (clear override)
@@ -309,7 +287,7 @@ export class StreamsRepository {
   /**
    * Returns all streamers from the watchlist with current state of each.
    */
-  async findAllStreamer(): Promise<StreamerDto[]> {
+  async findAllStreamer(_ownerId?: string): Promise<StreamerDto[]> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
         this.readWatchlist(),
@@ -323,7 +301,7 @@ export class StreamsRepository {
    * Returns a streamer by id (watchlist + status merged).
    * Throws NotFoundException if not found in watchlist.
    */
-  async findOneStreamer(id: string): Promise<StreamerDto> {
+  async findOneStreamer(id: string, _ownerId?: string): Promise<StreamerDto> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
         this.readWatchlist(),
@@ -338,7 +316,7 @@ export class StreamsRepository {
   /**
    * Creates a new entry in the watchlist (generates uuid v4) and persists.
    */
-  async createStreamer(dto: CreateStreamerDto): Promise<StreamerDto> {
+  async createStreamer(dto: CreateStreamerDto, _ownerId?: string): Promise<StreamerDto> {
     return this.mutex.runExclusive(async () => {
       const [watchlist, status] = await Promise.all([
         this.readWatchlist(),
@@ -365,12 +343,11 @@ export class StreamsRepository {
    * Removes a streamer from the watchlist by id and persists.
    * Throws NotFoundException if not found.
    */
-  async removeStreamer(id: string): Promise<void> {
+  async removeStreamer(id: string, _ownerId?: string): Promise<void> {
     return this.mutex.runExclusive(async () => {
       const watchlist = await this.readWatchlist();
       const idx = watchlist.findIndex((e) => e.id === id);
-      if (idx === -1)
-        throw new NotFoundException(`Streamer ${id} not found`);
+      if (idx === -1) throw new NotFoundException(`Streamer ${id} not found`);
       watchlist.splice(idx, 1);
       await this.writeWatchlist(watchlist);
     });
@@ -380,30 +357,28 @@ export class StreamsRepository {
   // Recording methods (sessions.json mapped to the internal Recording shape)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async findAllRecordings(): Promise<Recording[]> {
+  async findAllRecordings(_ownerId?: string): Promise<Recording[]> {
     return this.mutex.runExclusive(async () => {
       return this.readSessions();
     });
   }
 
-  async findOneRecording(sessionId: string): Promise<Recording> {
+  async findOneRecording(sessionId: string, _ownerId?: string): Promise<Recording> {
     return this.mutex.runExclusive(async () => {
       const sessions = await this.readSessions();
       const session = sessions.find((entry) => entry.session_id === sessionId);
-      if (!session)
-        throw new NotFoundException(`Recording ${sessionId} not found`);
+      if (!session) throw new NotFoundException(`Recording ${sessionId} not found`);
       return session;
     });
   }
 
   async findRecordingsByWatchTarget(
     watchTargetId: string,
+    _ownerId?: string,
   ): Promise<Recording[]> {
     return this.mutex.runExclusive(async () => {
       const sessions = await this.readSessions();
-      return sessions.filter(
-        (session) => session.watch_target_id === watchTargetId,
-      );
+      return sessions.filter((session) => session.watch_target_id === watchTargetId);
     });
   }
 
@@ -413,7 +388,7 @@ export class StreamsRepository {
   /**
    * Returns all recording sessions enriched with channel info.
    */
-  async findAllSessions(): Promise<SessionDto[]> {
+  async findAllSessions(_ownerId?: string): Promise<SessionDto[]> {
     const [recordings, status] = await Promise.all([
       this.findAllRecordings(),
       this.readChannelsStatus(),
@@ -425,7 +400,7 @@ export class StreamsRepository {
    * Returns a session by session_id.
    * Throws NotFoundException if not found.
    */
-  async findOneSession(sessionId: string): Promise<SessionDto> {
+  async findOneSession(sessionId: string, _ownerId?: string): Promise<SessionDto> {
     const [recording, status] = await Promise.all([
       this.findOneRecording(sessionId),
       this.readChannelsStatus(),
@@ -436,7 +411,7 @@ export class StreamsRepository {
   /**
    * Returns all sessions for a specific channel (channel_id).
    */
-  async findSessionsByChannel(channelId: string): Promise<SessionDto[]> {
+  async findSessionsByChannel(channelId: string, _ownerId?: string): Promise<SessionDto[]> {
     const [recordings, status] = await Promise.all([
       this.findRecordingsByWatchTarget(channelId),
       this.readChannelsStatus(),
@@ -450,7 +425,7 @@ export class StreamsRepository {
   /**
    * Returns all streams.
    */
-  async findAllStreams(): Promise<Stream[]> {
+  async findAllStreams(_ownerId?: string): Promise<Stream[]> {
     return this.mutex.runExclusive(async () => {
       return this.readStreams();
     });
@@ -461,14 +436,11 @@ export class StreamsRepository {
    */
   async findActiveStreamByWatchTarget(
     watchTargetId: string,
+    _ownerId?: string,
   ): Promise<Stream | null> {
     return this.mutex.runExclusive(async () => {
       const streams = await this.readStreams();
-      return (
-        streams.find(
-          (s) => s.watch_target_id === watchTargetId && !s.finished_at,
-        ) ?? null
-      );
+      return streams.find((s) => s.watch_target_id === watchTargetId && !s.finished_at) ?? null;
     });
   }
 
@@ -478,6 +450,7 @@ export class StreamsRepository {
   async findStreamsByWatchTarget(
     watchTargetId: string,
     since?: string,
+    _ownerId?: string,
   ): Promise<Stream[]> {
     return this.mutex.runExclusive(async () => {
       const streams = await this.readStreams();
@@ -489,7 +462,7 @@ export class StreamsRepository {
     });
   }
 
-  async findOneStream(id: string): Promise<Stream> {
+  async findOneStream(id: string, _ownerId?: string): Promise<Stream> {
     return this.mutex.runExclusive(async () => {
       const streams = await this.readStreams();
       const stream = streams.find((entry) => entry.id === id);

@@ -20,12 +20,15 @@ mkdirSync(activeDir, { recursive: true });
 mkdirSync(mediaDir, { recursive: true });
 
 const overrideFile = join(tempDir, "compose.override.yml");
-writeFileSync(overrideFile, `
+writeFileSync(
+  overrideFile,
+  `
 services:
   postgres-test:
-    ports:
+    ports: !override
       - "127.0.0.1::5432"
-`);
+`,
+);
 
 const composeArgs = ["compose", "-p", project, "-f", "compose.test-db.yml", "-f", overrideFile];
 
@@ -34,7 +37,12 @@ function compose(...args) {
 }
 
 function run(command, args, environment = process.env, cwd) {
-  const result = spawnSync(command, args, { stdio: "pipe", encoding: "utf8", env: environment, cwd });
+  const result = spawnSync(command, args, {
+    stdio: "pipe",
+    encoding: "utf8",
+    env: environment,
+    cwd,
+  });
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} failed\n${result.stdout}\n${result.stderr}`);
   }
@@ -106,32 +114,104 @@ try {
   const env = { ...process.env, DATABASE_URL: dynamicDatabaseUrl };
 
   console.log("1. Applying Drizzle migrations...");
-  run(process.execPath, ["-r", "ts-node/register", "src/database/migrate.ts"], env, "api");
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      run(process.execPath, ["-r", "ts-node/register", "src/database/migrate.ts"], env, "api");
+      break;
+    } catch (error) {
+      if (attempt === 5) throw error;
+      execFileSync("node", ["-e", "setTimeout(() => {}, 1000)"]);
+    }
+  }
   console.log("PASS 1: Clean migrations applied");
 
   console.log("2. Running legacy dry-run...");
-  const dryRunOutput = run(process.execPath, ["-r", "ts-node/register", "src/migrator/cli.ts", "dry-run", "--source", configDir], env, "api");
+  const dryRunOutput = run(
+    process.execPath,
+    ["-r", "ts-node/register", "src/migrator/cli.ts", "dry-run", "--source", configDir],
+    env,
+    "api",
+  );
   assert(dryRunOutput.includes('"errors": []'));
   console.log("PASS 2: dry-run passed with 0 errors");
 
   console.log("3. Creating quiesced backup...");
-  const backupOutput = run(process.execPath, ["-r", "ts-node/register", "src/migrator/cli.ts", "backup", "--source", configDir, "--destination", backupDir, "--quiesced"], env, "api");
+  const backupOutput = run(
+    process.execPath,
+    [
+      "-r",
+      "ts-node/register",
+      "src/migrator/cli.ts",
+      "backup",
+      "--source",
+      configDir,
+      "--destination",
+      backupDir,
+      "--quiesced",
+    ],
+    env,
+    "api",
+  );
   assert(backupOutput.includes("backup-created"));
   const manifestPath = join(backupDir, "manifest.json");
   console.log("PASS 3: Quiesced backup and SHA-256 manifest created");
 
   console.log("4. Executing transactional import...");
-  const importOutput = run(process.execPath, ["-r", "ts-node/register", "src/migrator/cli.ts", "import", "--snapshot", backupDir, "--manifest", manifestPath, "--quiesced"], env, "api");
+  const importOutput = run(
+    process.execPath,
+    [
+      "-r",
+      "ts-node/register",
+      "src/migrator/cli.ts",
+      "import",
+      "--snapshot",
+      backupDir,
+      "--manifest",
+      manifestPath,
+      "--quiesced",
+    ],
+    env,
+    "api",
+  );
   assert(importOutput.includes("imported"));
   console.log("PASS 4: Transactional import completed");
 
   console.log("5. Running post-import verify...");
-  const verifyOutput = run(process.execPath, ["-r", "ts-node/register", "src/migrator/cli.ts", "verify", "--snapshot", backupDir, "--manifest", manifestPath], env, "api");
+  const verifyOutput = run(
+    process.execPath,
+    [
+      "-r",
+      "ts-node/register",
+      "src/migrator/cli.ts",
+      "verify",
+      "--snapshot",
+      backupDir,
+      "--manifest",
+      manifestPath,
+    ],
+    env,
+    "api",
+  );
   assert(verifyOutput.includes('"outcome": "verified"'));
   console.log("PASS 5: Verification of imported entities against source shapes passed");
 
   console.log("6. Idempotent re-run validation...");
-  const reimportOutput = run(process.execPath, ["-r", "ts-node/register", "src/migrator/cli.ts", "import", "--snapshot", backupDir, "--manifest", manifestPath, "--quiesced"], env, "api");
+  const reimportOutput = run(
+    process.execPath,
+    [
+      "-r",
+      "ts-node/register",
+      "src/migrator/cli.ts",
+      "import",
+      "--snapshot",
+      backupDir,
+      "--manifest",
+      manifestPath,
+      "--quiesced",
+    ],
+    env,
+    "api",
+  );
   assert(reimportOutput.includes('"outcome": "idempotence-verified"'));
   console.log("PASS 6: Idempotent re-import verified (outcome: idempotence-verified)");
 
@@ -140,10 +220,18 @@ try {
   // Source JSON files remain 100% identical to backup manifest checksums:
   const sourceManifest = JSON.parse(readFileSync(manifestPath, "utf8")).sources;
   for (const [filename, sourceInfo] of Object.entries(sourceManifest)) {
-    const currentBytes = createHash("sha256").update(readFileSync(join(configDir, filename))).digest("hex");
-    assert.equal(currentBytes, sourceInfo.sha256, `Source file ${filename} must remain unchanged for clean pre-cutover rollback`);
+    const currentBytes = createHash("sha256")
+      .update(readFileSync(join(configDir, filename)))
+      .digest("hex");
+    assert.equal(
+      currentBytes,
+      sourceInfo.sha256,
+      `Source file ${filename} must remain unchanged for clean pre-cutover rollback`,
+    );
   }
-  console.log("PASS 7a: Pre-activation rollback verified (original JSON files untouched and checksum-verified)");
+  console.log(
+    "PASS 7a: Pre-activation rollback verified (original JSON files untouched and checksum-verified)",
+  );
 
   // B. Post-cutover state and forward-repair procedure execution:
   const postCutoverRecordingId = randomUUID();
@@ -158,13 +246,16 @@ try {
     async function setup() {
       const db = new DatabaseService();
       try {
+        const ownerId = await db.resolveBootstrapLocalUser();
         await db.connection.insert(streams).values({
+          ownerId,
           id: "${postCutoverStreamId}",
           watchTargetId: "${syntheticTargetId}",
           state: "recording",
           startedAt: new Date("2026-10-19T14:00:00Z")
         });
         await db.connection.insert(recordings).values({
+          ownerId,
           id: "${postCutoverRecordingId}",
           watchTargetId: "${syntheticTargetId}",
           streamId: "${postCutoverStreamId}",
@@ -194,7 +285,7 @@ try {
     stream_id: postCutoverStreamId,
     watch_target_id: syntheticTargetId,
     state: "finished",
-    occurred_at: "2026-10-19T15:00:00Z"
+    occurred_at: "2026-10-19T15:00:00Z",
   };
   writeFileSync(pendingEventFile, JSON.stringify(terminalEventPayload, null, 2));
 
@@ -232,37 +323,73 @@ try {
   run(process.execPath, ["-e", forwardRepairScript], env, "api");
 
   // Assertions for forward repair outcome:
-  assert(!existsSync(pendingEventFile), "Pending outbox event must be acknowledged/unlinked after forward repair");
+  assert(
+    !existsSync(pendingEventFile),
+    "Pending outbox event must be acknowledged/unlinked after forward repair",
+  );
   assert(existsSync(postCutoverMediaFile), "Post-cutover media file must be preserved intact");
-  console.log("PASS 7b: Post-cutover forward-repair procedure executed and verified (pending outbox drained, worker_events receipt committed, media preserved)");
+  console.log(
+    "PASS 7b: Post-cutover forward-repair procedure executed and verified (pending outbox drained, worker_events receipt committed, media preserved)",
+  );
 
   // C. Post-cutover rollback constraints and lossy-export invariants:
   // 1. Confirm migration CLI strictly allowlists only forward commands ['dry-run', 'backup', 'import', 'verify', 'cutover-check'];
   // no reverse-export or rollback command exists by architectural design (Section 16 of decisions):
   let unknownCommandError = false;
   try {
-    run(process.execPath, ["-r", "ts-node/register", "src/migrator/cli.ts", "rollback", "--config-dir", configDir], env, "api");
+    run(
+      process.execPath,
+      ["-r", "ts-node/register", "src/migrator/cli.ts", "rollback", "--config-dir", configDir],
+      env,
+      "api",
+    );
   } catch (error) {
-    unknownCommandError = error.message.includes("Expected dry-run, backup, import, verify or cutover-check") || error.message.includes("Legacy migration command failed");
+    unknownCommandError =
+      error.message.includes("Expected dry-run, backup, import, verify or cutover-check") ||
+      error.message.includes("Legacy migration command failed");
   }
-  assert(unknownCommandError, "CLI deliberately does not implement rollback; unsupported commands must be rejected");
+  assert(
+    unknownCommandError,
+    "CLI deliberately does not implement rollback; unsupported commands must be rejected",
+  );
 
   // 2. Prove why reverse-export to JSON cannot be safely implemented (lossy schema invariants):
   // - PostgreSQL recording has stream_id, typed ISO timestamptz, and immutable context (channel_name, platform, quality):
   assert.equal(typeof postCutoverRecordingId, "string", "Relational recording has primary UUID");
   // - Legacy sessions.json format strictly lacks stream_id and immutable snapshots:
-  const legacySessionsContent = JSON.parse(syntheticSessions[0].session_id ? JSON.stringify(syntheticSessions) : "[]");
-  assert.equal(legacySessionsContent[0].stream_id, undefined, "Legacy sessions.json format has no stream_id field");
-  assert.equal(legacySessionsContent[0].quality, undefined, "Legacy sessions.json format has no quality snapshot field");
-  console.log("PASS 7c: Post-cutover rollback invariants verified (absence of rollback command in CLI documented and confirmed; lossiness of reverse export to legacy JSON proven)");
+  const legacySessionsContent = JSON.parse(
+    syntheticSessions[0].session_id ? JSON.stringify(syntheticSessions) : "[]",
+  );
+  assert.equal(
+    legacySessionsContent[0].stream_id,
+    undefined,
+    "Legacy sessions.json format has no stream_id field",
+  );
+  assert.equal(
+    legacySessionsContent[0].quality,
+    undefined,
+    "Legacy sessions.json format has no quality snapshot field",
+  );
+  console.log(
+    "PASS 7c: Post-cutover rollback invariants verified (absence of rollback command in CLI documented and confirmed; lossiness of reverse export to legacy JSON proven)",
+  );
 
   console.log("ALL WAVE 05 REHEARSAL CHECKS PASSED!");
 } finally {
   if (containerStarted) {
     try {
-      const ownedVolumes = execFileSync("docker", ["volume", "ls", "-q", "--filter", `label=com.docker.compose.project=${project}`], { encoding: "utf8" }).trim().split(/\\r?\\n/).filter(Boolean);
+      const ownedVolumes = execFileSync(
+        "docker",
+        ["volume", "ls", "-q", "--filter", `label=com.docker.compose.project=${project}`],
+        { encoding: "utf8" },
+      )
+        .trim()
+        .split(/\\r?\\n/)
+        .filter(Boolean);
       for (const vol of ownedVolumes) {
-        const inspected = JSON.parse(execFileSync("docker", ["volume", "inspect", vol], { encoding: "utf8" }))[0];
+        const inspected = JSON.parse(
+          execFileSync("docker", ["volume", "inspect", vol], { encoding: "utf8" }),
+        )[0];
         assert.equal(inspected.Labels["com.docker.compose.project"], project);
       }
       compose("down", "--volumes", "--remove-orphans");
@@ -273,5 +400,7 @@ try {
   }
   try {
     rmSync(tempDir, { recursive: true, force: true });
-  } catch {}
+  } catch {
+    /* Best-effort temporary fixture cleanup after owned-container cleanup. */
+  }
 }

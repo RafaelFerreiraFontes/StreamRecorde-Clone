@@ -3,9 +3,25 @@ import { drizzle, NodePgDatabase } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool, PoolClient } from "pg";
 import { join } from "path";
+import { sql } from "drizzle-orm";
 import * as schema from "./schema";
 
 export type DatabaseConnection = NodePgDatabase<typeof schema>;
+
+export async function resolveBootstrapLocalUser(
+  client: Pick<DatabaseConnection, "execute">,
+): Promise<string> {
+  const inserted = await client.execute<{ id: string }>(sql`INSERT INTO users
+    (id, bootstrap_key, username, password_hash, created_at, updated_at)
+    VALUES (gen_random_uuid(), 'local', 'local', NULL, NOW(), NOW())
+    ON CONFLICT (bootstrap_key) DO NOTHING RETURNING id`);
+  if (inserted.rows[0]) return inserted.rows[0].id;
+  const existing = await client.execute<{ id: string }>(
+    sql`SELECT id FROM users WHERE bootstrap_key = 'local'`,
+  );
+  if (!existing.rows[0]) throw new Error("Bootstrap local user is unavailable");
+  return existing.rows[0].id;
+}
 
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
@@ -24,6 +40,14 @@ export class DatabaseService implements OnModuleDestroy {
 
   get connection(): DatabaseConnection {
     return this.database;
+  }
+
+  async resolveBootstrapLocalUser(
+    client?: PoolClient | Pick<DatabaseConnection, "execute">,
+  ): Promise<string> {
+    return resolveBootstrapLocalUser(
+      client && "release" in client ? drizzle(client, { schema }) : (client ?? this.database),
+    );
   }
 
   async ping(): Promise<void> {
@@ -65,8 +89,11 @@ export class DatabaseService implements OnModuleDestroy {
     return message
       .replace(/\bpostgres(?:ql)?:\/\/[^\s'"`]+/gi, "postgresql://***")
       .replace(/\b(password|pass|pwd)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=***")
-      .replace(/\b(host|hostaddr|port|database|dbname)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=***")
-        .replace(/\b(ENOTFOUND|ECONNREFUSED|ETIMEDOUT)\s+[a-zA-Z0-9.-]+/g, "$1 [redacted-host]")
+      .replace(
+        /\b(host|hostaddr|port|database|dbname)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        "$1=***",
+      )
+      .replace(/\b(ENOTFOUND|ECONNREFUSED|ETIMEDOUT)\s+[a-zA-Z0-9.-]+/g, "$1 [redacted-host]")
       .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, "[database-host]");
   }
 

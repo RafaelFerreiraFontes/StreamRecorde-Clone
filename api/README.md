@@ -1,5 +1,42 @@
 # API — StreamRecorder Clone
 
+## Post-Wave 05.5 Operations Checkpoint
+
+See the [root mode/environment contract](../README.md#5-deployment-modes) and [human stability runbook](../docs/DOCKER-STABILITY-TESTING.md). A is JSON/local; B adds relational/local PostgreSQL 17; C additionally enables authenticated identity. B/C require `POSTGRES_PASSWORD` and a shared API/Worker `INTERNAL_API_TOKEN`; C requires exact browser `AUTH_TRUSTED_ORIGINS` and an enabled password-enrolled user. Local mode is not authenticated hosting.
+
+Production API commands after building: `node dist/database/migrate.js` and `node dist/auth/users-cli.js <command>`. Approved wrappers `db:migrate:prod` and `users:prod` are available; existing `db:migrate` / `users` scripts use source TypeScript. Do not assume development tooling exists in the production image. Migrate and provision using a one-off API container before authenticated startup; migrations are not automatic.
+
+User CLI accepts `create <username> [--email <email>]`, `set-password <username>`, `disable <username>`, `enable <username>`, and `list`. Password input is a no-echo prompt or controlled stdin, never a command argument. Disabling/resetting an account and logout require explicit session-invalidation tests; UI navigation alone proves nothing.
+
+Target API image is `streamrecorder-api:wave-05.5`, loopback host `API_HOST_PORT=3000`. Select overlays explicitly as described in the root guide. Existing bilingual structure below is retained as reference, not evidence that the checkpoint passed.
+
+## Wave 05.5 Identity, Accounts And Recovery
+
+Normal modes are JSON/local (default, no login or User creation) and opt-in
+PostgreSQL/local (persistent bootstrap `local` owner). JSON/authenticated is
+unsupported. PostgreSQL/authenticated startup is available by explicit opt-in
+with `IDENTITY_MODE=authenticated`, `RELATIONAL_STORAGE=true`, a valid PostgreSQL
+`DATABASE_URL` and exact non-empty `AUTH_TRUSTED_ORIGINS`. Before any legacy JSON
+initialization or HTTP listener, startup validates database reachability, Wave 05.5
+ownership schema/composite constraints and an enabled password-enrolled user.
+Failure exits 1 without exposing database credentials. Provision accounts and apply
+migrations explicitly before activating; local remains the default.
+
+Account provisioning is CLI-only: `pnpm --dir api users create <username>`,
+`users set-password <username>`, `users enable <username>` and
+`users disable <username>`. Passwords use a no-echo prompt or stdin, never argv.
+There is no public signup or default password. Disablement revokes sessions and
+blocks new launches, not already accepted capture completion. Keep internal
+Worker tokens distinct from human cookies; the browser cannot call `/internal/*`.
+
+See [database operations](README.database.md) for the supported-mode matrix,
+`IDENTITY_MODE`, `RELATIONAL_STORAGE`, `PERSISTENCE_MODE`, `DATABASE_URL`,
+`AUTH_TRUSTED_ORIGINS`, `INTERNAL_API_TOKEN`, session/Origin policy and explicit
+backup/migration/cutover/rollback checkpoints. Relational outages return 503,
+never JSON fallback. Recordings remain private; authenticated metadata is
+owner-checked and never lists sibling files or absolute server paths. Local
+shared-root browsing is for a trusted single operator, not multi-user privacy.
+
 ## Wave 05 Mode Selection
 
 The API supports JSON compatibility mode (default) and opt-in PostgreSQL mode.
@@ -398,7 +435,7 @@ Known limitations verified in the current code:
 - JSON-mode `Creator.id` is name-derived; relational mode has stable persisted identity and CRUD;
 - `Recording.stream_id` is not persisted in the legacy `sessions.json`;
 - `WatchTarget.enabled` is enforced by the Worker; PATCH supports enabled, quality, URL and recording_subdir;
-- there is no authentication;
+- normal local operation has no login requirement; authenticated account/session and authorization support requires explicit opt-in and startup prerequisite validation;
 - PostgreSQL activation requires explicit migration and coordinated mode selection;
 - there is no external Redis queue;
 - there are no cloud storage providers implemented;
@@ -727,7 +764,7 @@ Limitações conhecidas e verificadas no código atual:
 - `Creator.id` é derivado de `display_name` e ainda não é uma identidade persistente independente;
 - `Recording.stream_id` não é persistido no legacy `sessions.json`;
 - `WatchTarget.enabled` é aplicado pelo Worker; a API expõe o valor persistido, mas não possui rota geral de atualização além de `recording_subdir`;
-- não há autenticação;
+- o modo local normal não exige login; contas, sessões e autorização autenticada permanecem atrás do bloqueio de inicialização em produção;
 - não há PostgreSQL;
 - não há Redis/queue externa;
 - não há cloud storage providers implementados;
@@ -774,6 +811,7 @@ Essa integração entre API e Worker é uma arquitetura transitória do MVP base
 ## Resumo executivo
 
 A API atual é uma camada de observação, domínio e compatibilidade em torno do MVP de monitoramento e gravação. Ela expõe o modelo atual de Creator/WatchTarget/Stream/Recording, preserva compatibility com o conjunto legacy e serve como integração entre o código de domínio e a gestão de arquivos JSON do Worker.
+
 # Wave 04.5 usability
 
 `PATCH /watch-targets/:id` accepts strict boolean `enabled` and/or `recording_subdir`; omitted fields stay unchanged. Legacy entries without `enabled` default to `true`, and explicit `false` survives reload. The existing Worker behavior is unchanged: disabled targets skip new probes while active captures continue.
@@ -781,3 +819,7 @@ A API atual é uma camada de observação, domínio e compatibilidade em torno d
 `GET /recordings/filesystem?path=<relative-path>` lists safe immediate entries under `RECORDINGS_ROOT`. `GET /recordings/:id/location` resolves a stored recording by ID and reports `available`, `file_not_found`, or `directory_unavailable`. The API returns metadata only, never file contents or host paths. Compose mounts the Worker recordings directory read-only at `/recordings` for the API and sets `RECORDINGS_ROOT=/recordings`.
 
 The frontend provides an Enabled row switch, a recording location browser, and a shared server-side directory picker for WatchTarget recording folders. Folder values remain relative paths; manual entry is supported. Absolute paths, traversal, malformed separators, control characters, hidden entries, and symlink/junction traversal are rejected. The browser does not invoke desktop file managers or client filesystem APIs.
+
+## Linting and Formatting
+
+See [repository linting and formatting](../README-LINTING.md) for setup, read-only checks, explicit fixes and coverage.

@@ -1,0 +1,7 @@
+# Mode C: requires compose.yml AND compose.relational.yml.
+# Migrate and enroll an enabled user before starting the authenticated API.
+services:
+  api:
+    environment:
+      IDENTITY_MODE: authenticated
+      AUTH_TRUSTED_ORIGINS: "${AUTH_TRUSTED_ORIGINS:?Set the exact trusted browser frontend origin}"

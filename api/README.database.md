@@ -1,5 +1,271 @@
 # Wave 05 PostgreSQL Persistence And Operations
 
+## Post-Wave 05.5 Production Operations
+
+Approved checkpoint modes B/C add `compose.relational.yml` to base Compose for PostgreSQL 17 and Worker bridge persistence. C also adds `compose.authenticated.yml`. See the [root operational guide](../README.md#1-operational-checkpoint-status). B/C require private `POSTGRES_PASSWORD` and matching API/Worker `INTERNAL_API_TOKEN`; C requires exact `AUTH_TRUSTED_ORIGINS`.
+
+For a built production API image run `node dist/database/migrate.js`, then `node dist/auth/users-cli.js create <username> [--email <email>]` with interactive no-echo password entry. Approved production wrappers are `db:migrate:prod` and `users:prod`. Existing source scripts remain `pnpm --dir api db:migrate` and `pnpm --dir api users ...`. Do not run source/ts-node scripts in the production image. Use a one-off container if the API cannot start before migration/account enrollment; the CLI does not require the HTTP server to be healthy.
+
+Authenticated startup fails closed for missing relational configuration, unreachable database, missing ownership schema/constraints or lack of an enabled password-enrolled account. It does not migrate or import automatically. Back up and quiesce writers before the legacy migration procedure below. After cutover, PostgreSQL is authority; operational `channels_status.json` is not a domain backup and stale JSON is not rollback.
+
+Preserve the bridge named volume `worker-outbox` mounted at `/outbox`, including pending events and active checkpoints, alongside database/media backups. Stop new work, allow or account for active captures, and record pending state before backup. Recover by restoring database/API connectivity and observing durable event acknowledgment; never delete outbox files to make a backlog disappear. Use the [unfilled stability matrix](../docs/DOCKER-STABILITY-TESTING.md) for outage/restart evidence. No new human recovery test is claimed here.
+
+## Wave 05.5 Operations: Supported Modes And Activation Gate
+
+| Persistence / identity     | Normal startup  | Operator contract                                                                                                                                                                                                                                                                                                                   |
+| -------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| JSON / local               | Default         | `RELATIONAL_STORAGE=false`, `IDENTITY_MODE=local`, `PERSISTENCE_MODE=direct_json`; no login, DB or User creation.                                                                                                                                                                                                                   |
+| PostgreSQL / local         | Opt-in          | `RELATIONAL_STORAGE=true`, `IDENTITY_MODE=local`, explicit migrations and `DATABASE_URL`; one persistent bootstrap `local` User. Use `PERSISTENCE_MODE=bridge` on API and Worker for relational authority.                                                                                                                          |
+| JSON / authenticated       | Unsupported     | Fails closed; never switches persistence or invents an owner.                                                                                                                                                                                                                                                                       |
+| PostgreSQL / authenticated | Explicit opt-in | Set `IDENTITY_MODE=authenticated`, `RELATIONAL_STORAGE=true`, valid PostgreSQL `DATABASE_URL` and non-empty exact `AUTH_TRUSTED_ORIGINS`. Startup validates reachability, Wave 05.5 ownership schema/composite constraints and an enabled password-enrolled user before JSON initialization or HTTP listening; any failure exits 1. |
+
+Local remains the default. Apply migrations and provision an enabled password user
+before explicitly opting into authenticated startup. Validation does not migrate
+or enroll users automatically; account provisioning alone does not activate login. Keep `DATABASE_URL` and `INTERNAL_API_TOKEN` server-side; never
+commit them or put them in browser configuration/logs. `AUTH_TRUSTED_ORIGINS`
+configures exact browser origins, not internal Worker identity. See account,
+cookie and Origin policy below. There is no public signup or default credential.
+
+### Clean Installation, Upgrade And Recovery Checkpoints
+
+- Clean relational installation: set an explicitly selected database connection,
+  run `pnpm --dir api db:migrate` (checked-in migrations 0000–0005), then start
+  relational/local API and bridge Worker. Migrations are not startup side effects.
+- Existing relational installation: quiesce writers and retain a tested,
+  known-good database backup before applying the ownership migration. Existing
+  domain rows belong to bootstrap `local`; IDs, history, raw timestamps,
+  unknown `stream_id` links and media metadata must survive. Do not import a
+  legacy snapshot into a populated destination.
+- Legacy JSON: follow dry-run -> quiesced backup -> SHA-256 manifest verification
+  -> explicit schema migration -> transactional import -> verify -> cutover-check
+  below. Drain Worker `pending/` and reconcile `active/` checkpoints explicitly;
+  `--quiesced` is an operator assertion, not a remote writer detector.
+- Before writes switch authority, retain source snapshots, DB backup, outbox and
+  private media. After relational writes, prefer forward repair. Never silently
+  switch to JSON, downgrade migrations or discard events to make a gate pass.
+
+### Migration 0005: Legacy History Reconciliation And Worker Outbox Recovery
+
+Migration 0005 introduces the `origin` column (`legacy_json` vs. `native`) on `streams` and `recordings`, recreates the partial unique index `uq_streams_active_per_target` to scope active status strictly to native streams, and refines Worker outbox recovery.
+
+For an existing Docker installation (Mode B or Mode C):
+
+1. **Rebuild Application Images:**
+   Rebuild the API and Worker images so the production image includes migration 0005 and updated outbox recovery code:
+
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml build api worker
+   ```
+
+   _(For Mode C, append `-f compose.authenticated.yml` to all compose commands)._
+
+2. **Quiesce the Worker:**
+   Stop the Worker container to prevent concurrent recording events during migration:
+
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml stop worker
+   ```
+
+3. **Execute Migration 0005:**
+   Run the migration using a one-off API container preserving the operator's active Compose overlays:
+
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml run --rm --no-deps api node dist/database/migrate.js
+   ```
+
+4. **Audit and Verify Historical Data:**
+   Query the database to confirm imported legacy rows are classified as `legacy_json` without synthetic end timestamps:
+
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml exec postgres psql -U streamrecorder -d streamrecorder -c "SELECT id, watch_target_id, state, origin, legacy_started_at_raw, finished_at FROM recordings WHERE origin = 'legacy_json' AND finished_at IS NULL LIMIT 10;"
+   ```
+
+5. **Re-activate the Stack and Observe Outbox Recovery:**
+   Start all services and monitor Worker logs for outbox drainage:
+   ```powershell
+   docker compose -f compose.yml -f compose.relational.yml up -d
+   docker compose -f compose.yml -f compose.relational.yml logs -f --tail 50 worker
+   ```
+   _Any unlaunched `start_committed` session will be cleanly compensated with a terminal error event (`worker_restart_before_launch`), releasing the WatchTarget for active monitoring._
+
+### Approved Relational/Local Rollback (Decision Section 12)
+
+This is a rehearsal/runbook, not authorization for normal-installation changes.
+If authenticated operation is separately activated later:
+
+1. Stop new launches and quiesce API/Worker writers. Finish accepted captures,
+   drain pending events and reconcile active checkpoints. Preserve media/outbox.
+2. Take and verify a known-good relational backup with the deployment's PostgreSQL
+   backup tooling. Test restoration only into a separate disposable database;
+   a backup command returning zero does not establish restore correctness.
+3. Revoke sessions before reopening access. Against the explicitly selected,
+   quiesced relational database, an approved operator can execute
+   `UPDATE sessions SET revoked_at = NOW() WHERE revoked_at IS NULL;` and verify
+   no unrevoked sessions remain. This is not a public API or automatic startup
+   action. CLI disablement also transactionally revokes that account's sessions.
+   Disable other accounts via `pnpm --dir api users disable <username>` when
+   their monitoring must stop; re-enabling does not restore revoked sessions.
+   Preserve the bootstrap account and verify its identity rather than
+   deleting/recreating it.
+4. Explicitly select `IDENTITY_MODE=local`, retain `RELATIONAL_STORAGE=true`,
+   `PERSISTENCE_MODE=bridge` and the verified relational database. Restart services
+   only after writer/outbox reconciliation. Do not select direct JSON authority.
+5. Verify bootstrap `local` domain visibility. Other-owner rows remain stored,
+   unchanged and invisible to local-principal domain routes. The Worker still
+   receives enabled targets of all non-disabled owners: local human identity
+   is not a Worker ownership filter.
+
+**Privacy warning:** local filesystem browsing is a trusted single-operator view
+of the shared recording root and can reveal other users' filenames. Returning
+to local mode is not a private multi-user deployment. No rollback reassigns or
+deletes owners, moves media, drops volumes or automatically restores a backup.
+Any restore that loses committed metadata requires an explicit reconciliation
+and human decision before writers resume.
+
+### Troubleshooting And Evidence Limits
+
+- 401: expired/revoked session or disabled account; sign in again only after the
+  cause is resolved. Domain 404 includes foreign/missing IDs and does not mean
+  logout. Invalid unsafe Origin/Referer is 403; rate limiting can return 429.
+- 503 in relational mode: restore PostgreSQL connectivity/schema availability;
+  never select JSON or bootstrap fallback to hide an outage. Frontend proxy
+  transport errors/timeouts are not successful local-session discovery.
+- API/DB restart: valid sessions and committed domain ownership are durable.
+  Worker restart: retain its single-owner `OUTBOX_DIR`; replay pending events
+  and recover active checkpoints before new work. Acknowledgement follows commit.
+- Human logout/expiry does not cancel an accepted capture. Account disablement
+  blocks new launches but permits already accepted work to finish durably.
+- Startup failure: check the selected mode, explicit migrations, connection and
+  internal-token prerequisites without printing secrets. Authenticated startup's
+  fixed guard is expected in Phase A/C, not an installation defect to bypass.
+
+Regression gates: root `pnpm lint`, `pnpm format:check`, `git diff --check`;
+API typecheck/test/build; frontend typecheck/test/build and guarded HTTP
+integration; Worker unittest/pytest; `node scripts/test-db-foundation.mjs`,
+`node scripts/test-wave05-rehearsal.mjs`, Compose config and `pnpm test:smoke`.
+Use only disposable resources. Required skipped/blocked checks are not PASS.
+Synthetic Streamlink output does not establish playable MP4 or live-platform
+recovery. No public media, per-user physical folders, hosted deployment, Redis,
+Tags, SSE or cloud export is introduced.
+
+## Wave 05.5 Task 04: Domain Authorization
+
+Task 04 propagates the verified human principal through modern domain and
+legacy `/streamer` and `/session` routes. Owner IDs are explicit request-local
+arguments, never shared singleton state. Relational reads, filters, updates
+and archives are scoped in SQL; creation and automatic Creator grouping use
+the resolved owner, including owner-scoped advisory locks. Client-supplied
+`owner_id` and `ownerId` mutation fields are rejected with 400. Identity claims
+in query parameters or headers never select the owner.
+
+JSON/local behavior remains single-user and creates no database user.
+Relational/local routes resolve only the bootstrap `local` owner; other
+accounts' rows remain stored and invisible. Direct relational service calls
+without an owner retain this bootstrap-local behavior. An explicitly supplied
+invalid owner fails rather than falling back to local.
+
+In isolated authenticated testing apps, domain routes require a valid
+`sr_session`; missing, expired, revoked, or disabled-user sessions return 401.
+The internal Worker token is not a human credential. Unsafe POST/PATCH/DELETE
+requests additionally require a trusted Origin or Referer (403 otherwise).
+Unknown and foreign resources or parent filters return 404. Same-name Creators
+are independent across owners; ambiguous active names within one owner return 409. Database failures return a bounded `503 Database unavailable`, without SQL
+details or a JSON fallback.
+
+History retains its original owner after configuration archival. Recording
+and Session detail reads include legacy recordings with NULL `stream_id`.
+`GET /recordings?watchTargetId=...` and `GET /session/channel/:id` first authorize
+the target, including archived owned targets; foreign or unknown filters
+return 404 rather than an empty list. Existing IDs, raw timestamps and
+`finished` success states are unchanged.
+
+Authenticated filesystem listing is unavailable: `GET /recordings/filesystem`
+returns 404 after authentication. `GET /recordings/:id/location` checks ownership
+first (foreign/missing IDs return 404) and returns only owner-safe metadata,
+without sibling filenames or absolute server paths. Local mode retains the
+existing trusted single-operator browser; relational/local location lookup
+authorizes the bootstrap owner's recording.
+No media is moved, exposed or deleted. Privileged internal Worker operations
+retain their existing token-based contracts and are not human-owner-scoped.
+
+Phase B now permits `IDENTITY_MODE=authenticated` only after the fail-closed
+startup prerequisites above pass. JSON/authenticated remains unsupported.
+The two-user HTTP authorization suite uses real login sessions, an isolated
+PostgreSQL database and temporary filesystem fixtures. It is registered in
+`test:db:integration` and the disposable foundation harness below.
+
+## Wave 05.5 Task 03: Accounts And Sessions
+
+Task 03 adds CLI-only account provisioning and `/auth/session`, `/auth/login`,
+and `/auth/logout`. Phase B enables explicitly configured authenticated startup
+with the fail-closed prerequisites above. Tests exercise authenticated paths using
+isolated Nest testing apps.
+There is no registration endpoint, default password or automatic data cutover.
+
+Apply the explicit migrations first and configure `DATABASE_URL` for the
+intended database. Run these commands from the repository root:
+
+```bash
+pnpm --dir api users create alice --email alice@example.test
+pnpm --dir api users set-password local
+pnpm --dir api users disable alice
+pnpm --dir api users enable alice
+pnpm --dir api users list
+```
+
+`create` and `set-password` read one password from a no-echo TTY prompt or
+piped stdin. Never put a password in argv, shell history or a committed file;
+password flags and extra positional arguments are rejected. Passwords are
+12-256 characters, stored as salted asynchronous scrypt hashes (N=32768,
+r=8, p=1, 64-byte key, 16-byte salt). Username and optional email are trimmed,
+NFKC-normalized and lowercased. Username must match
+`^[a-z0-9][a-z0-9._-]{2,31}$`. Email is not a login identifier. The `list`
+command exposes account status, not password hashes. `set-password local`
+preserves the bootstrap UUID and bootstrap key. Disablement revokes all
+sessions transactionally without deleting domain history; enablement clears
+lockout state. Password enrollment also clears failed-login/lockout state.
+
+In default JSON/local mode, `GET /auth/session` returns local/json with
+`user: null` and creates no database identity. Relational/local mode resolves
+the stable bootstrap local user. Login/logout are 404 in local mode. Database
+failure in relational mode returns a bounded 503, never JSON/local fallback.
+Public identities contain only `id`, `username`, and `email`.
+
+For the future authenticated mode, configure `AUTH_TRUSTED_ORIGINS` as a
+comma-separated list of exact HTTP/HTTPS origins, for example
+`http://localhost:3000,https://app.example.test`. Paths, trailing slashes,
+wildcards, credentials, queries and fragments are invalid. Every unsafe
+cookie request (including login/logout) requires a matching Origin, with
+Referer-origin fallback only when Origin is absent. Missing/untrusted origins
+or an empty allowlist return 403. CORS remains disabled. T04 uses
+`AuthService.requireUnsafeOrigin` and `resolvePrincipal` for domain guards.
+Human identity never accepts `x-internal-token` or client-supplied owner IDs;
+Worker service authentication remains separate.
+
+Sessions use 32-byte random opaque tokens, stored only as SHA-256 hashes.
+The host-only `sr_session` cookie is HttpOnly, Path=/, SameSite=Lax and Secure
+only for a validated HTTPS origin. All auth responses are no-store. Sessions
+expire after 24 idle hours or seven absolute days; use extends idle expiry at
+most once per five minutes without exceeding the absolute deadline. Login
+rotates any supplied previous session and opportunistically purges expired
+sessions. Logout revokes the current session and clears the cookie; repeated
+logout is 401. Disabled users cannot use existing sessions. Valid sessions
+survive API/database restarts; no signing secret is required.
+
+Unknown users, wrong passwords, disabled accounts and locked accounts receive
+the same `401 {"message":"Invalid credentials"}`. Ten consecutive account
+failures produce a 15-minute database lock; concurrent failures serialize on
+the account row. Successful login resets the counter. The additional bounded
+in-process source-IP limiter permits 20 attempts per 15 minutes, uses the
+socket address rather than forwarded headers, and is best effort across API
+instances/restarts. It returns 429 when exhausted.
+
+Deterministic auth unit tests run with the API suite. The auth PostgreSQL
+integration suite is registered in `test:db:integration` and runs with
+`node scripts/test-db-foundation.mjs` against the disposable test database,
+including lifecycle, lockout, outages and API/database restart durability.
+These tests never use normal runtime data or recordings.
+
 Tasks 01-06 implement the persistence transition: Drizzle/PostgreSQL schema,
 stable Creator/WatchTarget CRUD, relational Stream/Recording history, internal
 Worker events, durable outbox recovery, and explicit legacy migration/cutover.
@@ -32,19 +298,19 @@ requires an empty domain database; it is not a merge/upsert tool.
 ### Quiesce And Capture
 
 1. Prevent new launches (disable targets through the current API if necessary),
-	wait for existing captures and terminal persistence to finish, and record any
-	configuration changes. Disabled targets remain disabled after migration.
+   wait for existing captures and terminal persistence to finish, and record any
+   configuration changes. Disabled targets remain disabled after migration.
 2. If an outbox exists, drain pending events and resolve active checkpoints.
-	Never delete pending events to force a gate. Stop API and Worker writers.
+   Never delete pending events to force a gate. Stop API and Worker writers.
 3. Retain original JSON, outbox/checkpoints and media. Back up any existing DB;
-	use a new empty destination rather than dropping existing data for import.
+   use a new empty destination rather than dropping existing data for import.
 4. Run dry-run and resolve every error. Exact repeated Creator names group
-	sibling targets. Different trimmed spellings with the same lowercase key are
-	ambiguous: correct an explicitly reviewed source copy rather than guessing
-	by channel or URL. No automatic mapping override is provided.
+   sibling targets. Different trimmed spellings with the same lowercase key are
+   ambiguous: correct an explicitly reviewed source copy rather than guessing
+   by channel or URL. No automatic mapping override is provided.
 5. Capture a new backup outside the source directory. `--quiesced` attests that
-	writers are stopped and the outbox is drained; it cannot prove remote process
-	state. The CLI rereads all bytes to reject observed movement during capture.
+   writers are stopped and the outbox is drained; it cannot prove remote process
+   state. The CLI rereads all bytes to reject observed movement during capture.
 
 Examples from the repository root (placeholder private synthetic directories):
 
@@ -70,7 +336,7 @@ leaves its partial directory for inspection; retry with a new destination.
 ### Import And Verify
 
 Set DATABASE_URL explicitly to the disposable destination for rehearsals. Apply
-checked-in migrations first, including 0003_migration_manifests. The CLI never
+checked-in migrations first, including 0004_user_ownership. The CLI never
 migrates the schema implicitly.
 
 ```bash
@@ -173,6 +439,102 @@ opt-in relational repositories, bridge events and cutover tooling. JSON remains
 the default authority until explicit activation. The database service is lazy;
 HTTP liveness alone does not prove relational readiness. Check database-backed
 routes and authenticated execution configuration before launching the Worker.
+
+## Wave 05.5 Task 02: Local User And Ownership Foundation
+
+Migration `0004_user_ownership` adds User and session storage and explicit
+`owner_id` on Creators, WatchTargets, Streams, Recordings and migration manifests.
+It does not activate authentication, implement sessions/login, scope all API
+queries, or change normal installation authority. Authorization and authenticated
+startup gating remain successor-task work; this checkpoint is not a multi-user
+security boundary. JSON remains the unchanged, single-user default and creates
+no User. Do not enable authenticated operation at this checkpoint.
+
+The bootstrap account has `bootstrap_key='local'`, canonical username `local`
+and no password. Its UUID is generated once, not derived from its username.
+Migration creates it and runtime insertion paths repair a missing bootstrap via
+insert-on-conflict followed by reselect. Concurrent bootstrap calls converge on
+the same persistent UUID. A username collision without the designated bootstrap
+key fails rather than adopting an arbitrary account. No password, login route,
+account-management CLI, automatic downgrade or ownership transfer is supplied.
+Usernames must match `^[a-z0-9][a-z0-9._-]{2,31}$`; optional email is unique when
+present. Account input normalization belongs to the forthcoming account writer.
+The new `sessions` table is an inert authentication foundation, distinct from
+legacy Recording/session resources and JSON files.
+
+### Synthetic Fresh Install And Repeat Migration
+
+From the repository root in Bash, use only the disposable Compose project:
+
+```bash
+docker compose -f compose.test-db.yml -p streamrecorder-test-db up -d --wait
+export DATABASE_URL='postgresql://streamrecorder_test:streamrecorder_test_local@127.0.0.1:55432/streamrecorder_test'
+pnpm --dir api db:migrate
+pnpm --dir api db:migrate
+docker compose -f compose.test-db.yml -p streamrecorder-test-db exec -T postgres-test psql -U streamrecorder_test -d streamrecorder_test -c "SELECT id, bootstrap_key, username, password_hash IS NULL AS passwordless FROM users;"
+```
+
+Expect one passwordless local User and empty domain/session tables on a fresh
+database. Rerunning the migration runner is a no-op; do not execute raw migration
+SQL twice. Applied Wave 05 migrations are unchanged. All migration statements
+and ledger advancement run in the existing Drizzle migration transaction.
+
+### Populated Relational Upgrade And Recovery
+
+No real installation upgrade is authorized by this task. For any separately
+authorized upgrade, first quiesce all API/Worker writers, drain/reconcile outbox
+work, and take a verified consistent PostgreSQL backup. Record domain and
+manifest counts, IDs and historical fields before applying `db:migrate` to the
+explicit destination. The same migration assigns all existing rows/manifests to
+the designated local UUID, then enforces NOT NULL and composite parent/owner
+foreign keys. Existing IDs, typed/raw timestamps, NULL Stream links, archival
+state, configuration and output paths remain unchanged; no media is accessed.
+
+Rehearse populated upgrade and late-failure recovery with synthetic data only:
+
+```bash
+node scripts/test-db-foundation.mjs
+```
+
+The harness uses port 55432, temporary schemas/source files and the test-only
+volume. It checks fresh/repeated migrations, concurrent bootstrap, populated
+Wave 05 backfill, late-failure rollback, cross-owner FK rejection, imports and
+restart durability, then removes only its disposable project/volume. Do not run
+it while another process owns that test project or database. A failed migration
+does not switch authority: retain diagnostics/backup, inspect migration state,
+repair forward and rerun the runner, or restore the verified backup while
+writers remain stopped. Never manually mark a failed migration applied, remove
+normal volumes, reassign owners, or fall back to stale JSON after relational
+writes.
+
+### Legacy Import And Owner-Aware Replay
+
+Keep `TOOL_VERSION=legacy-json-v1` and the existing manifest file format. With
+`DATABASE_URL` still pointing at the disposable database, use a new empty domain
+database and synthetic private paths:
+
+```bash
+pnpm --dir api migrate:legacy dry-run --source /private/synthetic-source
+pnpm --dir api migrate:legacy backup --source /private/synthetic-source --destination /private/synthetic-backup --quiesced
+pnpm --dir api migrate:legacy import --snapshot /private/synthetic-backup --manifest /private/synthetic-backup/manifest.json --quiesced
+pnpm --dir api migrate:legacy verify --snapshot /private/synthetic-backup --manifest /private/synthetic-backup/manifest.json
+pnpm --dir api migrate:legacy import --snapshot /private/synthetic-backup --manifest /private/synthetic-backup/manifest.json --quiesced
+```
+
+Import resolves bootstrap inside the import transaction and assigns it to every
+row and manifest. Existing destination rows still reject first import, including
+foreign-owner ID collisions. Replay compares manifest provenance and ownership
+of surviving imported IDs without overwriting later edits. Unrelated new owners
+are not imported identities. Read-only verification compares bootstrap owner,
+ledger, counts and all imported fields. A conflicting owner or ledger fails
+without reassignment; do not edit manifests/owners to force acceptance. Preserve
+the database, snapshot and outbox for diagnosis/forward repair. Cleanup is only
+for resources created by the isolated rehearsal:
+
+```bash
+docker compose -f compose.test-db.yml -p streamrecorder-test-db down --volumes
+unset DATABASE_URL
+```
 
 ## Local database
 
@@ -383,14 +745,14 @@ or declaring persistence successful.
 Startup replays pending events before scanning active checkpoints:
 
 - A verified-dead recorded PID produces `error` with reason
-	`worker_restart_interruption`; its checkpoint is removed only after terminal
-	acknowledgement. Windows uses read-only process queries, never `os.kill`.
+  `worker_restart_interruption`; its checkpoint is removed only after terminal
+  acknowledgement. Windows uses read-only process queries, never `os.kill`.
 - Missing/live/uncertain PIDs block only that target and retain its checkpoint.
-	PID reuse also remains blocked; no unknown process is terminated. Other
-	targets can proceed once pending deliveries are drained.
+  PID reuse also remains blocked; no unknown process is terminated. Other
+  targets can proceed once pending deliveries are drained.
 - A saved terminal event replays its original outcome and ID, not a fabricated
-	interruption. A corrupt checkpoint refuses Worker startup; corrupt pending
-	events block launches instead of losing data.
+  interruption. A corrupt checkpoint refuses Worker startup; corrupt pending
+  events block launches instead of losing data.
 
 For ambiguous ownership, stop new work, preserve outbox/media, identify the
 actual capture process and corresponding database Recording, and reconcile the
@@ -407,15 +769,15 @@ after container recreation, and removes only its disposable project/volume.
 Python must be available (`PYTHON` can select its executable). The seven matrix
 rows are covered by internal API and fake-process Worker tests:
 
-| Scenario | Automated evidence |
-| --- | --- |
-| Unavailable before capture | Actual stopped test PostgreSQL returns 503; Worker unit tests prevent launch without start acknowledgement/config refresh. |
-| Unavailable during capture | A fake-process Worker stays managed through actual PostgreSQL shutdown; output remains local. |
-| Terminal write outage | The same Worker retains its checkpoint/event and pending runtime state, then retries after PostgreSQL returns. |
-| Worker restart | A terminated Python process's verified-dead PID is reconciled through the real API/database; unit tests cover ambiguous ownership and immutable saved terminals. |
-| API restart | The API application/pool is recreated and returns the original committed response without duplicate rows. |
-| PostgreSQL restart | Terminal replay succeeds after actual test PostgreSQL restart; the foundation harness also recreates the container and verifies retained data. |
-| Duplicate/out-of-order | Concurrent/exact replay, conflicting payloads, pre-start terminals, cross-target updates and terminal regressions use the real database. |
+| Scenario                   | Automated evidence                                                                                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unavailable before capture | Actual stopped test PostgreSQL returns 503; Worker unit tests prevent launch without start acknowledgement/config refresh.                                       |
+| Unavailable during capture | A fake-process Worker stays managed through actual PostgreSQL shutdown; output remains local.                                                                    |
+| Terminal write outage      | The same Worker retains its checkpoint/event and pending runtime state, then retries after PostgreSQL returns.                                                   |
+| Worker restart             | A terminated Python process's verified-dead PID is reconciled through the real API/database; unit tests cover ambiguous ownership and immutable saved terminals. |
+| API restart                | The API application/pool is recreated and returns the original committed response without duplicate rows.                                                        |
+| PostgreSQL restart         | Terminal replay succeeds after actual test PostgreSQL restart; the foundation harness also recreates the container and verifies retained data.                   |
+| Duplicate/out-of-order     | Concurrent/exact replay, conflicting payloads, pre-start terminals, cross-target updates and terminal regressions use the real database.                         |
 
 Fake subprocesses and fixture bytes do not prove real-platform behavior, MP4
 validity, or playability. This stage does not modify the media pipeline.

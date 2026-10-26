@@ -16,9 +16,7 @@ export class StreamDto {
 
   @IsIn(["youtube", "twitch", "kick"])
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "youtube",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "youtube")
   platform: string;
 
   @IsString()

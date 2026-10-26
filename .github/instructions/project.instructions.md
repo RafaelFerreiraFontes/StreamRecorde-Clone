@@ -729,6 +729,32 @@ Rules:
 
 ---
 
+## 39.1 Task Status and Wave README Synchronization
+
+**Rule A1 - Dual-File Status Authority:** Every task status transition must be reflected in both the task's YAML frontmatter in its `.task.md` file and the corresponding task-table row in the Wave `README.md` (for example, `.github/tasks/wave-05.5/06-frontend-authentication.task.md` and `.github/tasks/wave-05.5/README.md`). Use only `planned`, `implement`, `review/QA`, `fixing`, `coordinator-review`, `user-approve`, and `done`. These representations must not intentionally diverge.
+
+**Rule A2 - Lifecycle Transitions:** Synchronize both files for `planned -> implement`, `implement -> review/QA`, `review/QA -> user-approve`, `review/QA -> fixing`, `fixing -> review/QA`, `review/QA -> coordinator-review`, `coordinator-review -> implement | fixing`, and `user-approve -> done`. `user-approve` means QA is complete but human acceptance remains pending. `done` requires the established human acceptance conditions in section 39; changing README metadata never bypasses the human gate.
+
+**Rule A3 - Atomic Logical Update:** A transition is logically complete only when both files agree:
+
+1. Update the `.task.md` frontmatter.
+2. Update the corresponding Wave README task-table entry.
+3. Verify the exact status match.
+4. Adjust the README introductory status summary if it has become inaccurate.
+5. Preserve task names, order, dependencies, and links.
+
+**Rule A4 - Mandatory Synchronization Gates:**
+
+- **Gate 1 - Preflight (before first delegation to Sol):** Identify the active Wave, task files, and README status table. Compare statuses and identify stale or contradictory entries. Correct confirmed documentation drift only with clear historical evidence and within authorized scope. Stop and request resolution if uncertain; never guess that a task is complete.
+- **Gate 2 - Before Terra Implementation:** Synchronize `planned -> implement` in both files before the implementation handoff.
+- **Gate 3 - Before Luna Review:** After objective Coordinator validation passes, synchronize `review/QA` in both files. Luna must not review while task frontmatter and README disagree.
+- **Gate 4 - After Luna Verdict:** On `PASS`, Coordinator synchronizes `user-approve`. On `CHANGES_REQUIRED`, Terra synchronizes `fixing` before corrections. On review-limit exhaustion or blocking architectural conflict, Coordinator synchronizes `coordinator-review`.
+- **Gate 5 - Final Human Approval:** Before reporting `READY_FOR_COMMIT`, confirm `user-approve` in both files. After explicit user authorization to finalize, synchronize `done` and validate consistency before committing. This gate does not itself grant commit authority.
+
+**Rule A5 - README Introductory Summary:** Keep the Wave README introduction accurate for active and completed tasks. Preserve sections explicitly identified as historical planning baselines.
+
+**Rule A6 - Special Cases:** Do not invent an unrelated Wave structure for tasks without a Wave README. Documentation-only tasks represented in a Wave task table follow the same rules. Do not arbitrarily rewrite historical completed tasks without evidence. Report missing or duplicate README rows and correct them only when unambiguous. Do not mistake non-task tables for task-status tables. Preserve legitimate decimal orders such as `05.5`; never match tasks solely through integer parsing that collapses `05.5` into `05`.
+
 # 40. Agent Workflow Efficiency and Safety
 
 ## 40.1 Mandatory Branch Pre-flight
@@ -806,9 +832,14 @@ Current skill entry points, selected by relevance rather than as a mandatory che
 | Isolated containers, mounts, volumes, and smoke validation | `streamrecorder-docker-validation` |
 | Privacy, secrets, paths, platform access, and exposure | `streamrecorder-security-compliance` |
 | Independent diff, acceptance-criteria, and validation audit | `streamrecorder-review-gate` |
+| Repository linting, formatting, static quality, and safe remediation across root scripts, API, Frontend, and Worker | `streamrecorder-code-quality` |
 
 Coordinator (including Delegate Coordinator in the reserve workflow) identifies relevant available skills during preflight. Sol consults architectural skills applicable to the plan; Terra applies implementation and testing skills appropriate to the approved scope; Luna selects review skills from the actual diff and independently verifies the evidence. Direct agent sessions also discover and select skills for their role.
 
 Keep handoffs compact: include selected skill names/paths and a brief reason within existing fields such as `RELEVANT FILES`, `CONSTRAINTS`, `VALIDATION COMMANDS`, or `KNOWN LIMITATIONS`. Recipients verify applicability and availability; references do not prove that a procedure or check was executed. Do not copy whole skill bodies into agent files or handoffs. If a relevant skill is unavailable, report the gap and continue under permanent instructions where required evidence can still be obtained; use existing blocking rules if required validation cannot be completed.
 
 Skills complement permanent project/MVP instructions and the authorized task; they do not override them, expand scope, authorize later tasks, or replace validation gates. Preserve current models, tools, automatic handoffs, task states, `AGENT_RESULT` protocols, review/debugging limits, Coordinator validation, and the final human gate. Skill use grants no commit or push authority. Do not edit skill contents without an objective task-related reason.
+
+## Repository Linting and Formatting Gate
+
+Follow [README-LINTING.md](../../README-LINTING.md) for the bounded source inventory, supported runtimes and setup. After code changes, run the affected component checks and the required repository-wide `pnpm lint` and `pnpm format:check` before independent review. These commands are read-only; use `lint:fix` and `format:write` only as deliberate remediation, then inspect semantic diffs and rerun affected tests. Do not weaken rules, broadly suppress findings or run mutating lint as a validation check. Preserve the existing Coordinator/Sol/Terra/Luna workflow and human acceptance gate.

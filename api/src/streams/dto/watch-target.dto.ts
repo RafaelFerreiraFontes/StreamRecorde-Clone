@@ -3,8 +3,17 @@ import { Transform } from "class-transformer";
 import { normalizeTextInput } from "../sanitize";
 
 export const WATCH_TARGET_QUALITIES = [
-  "best", "worst", "source", "chunked",
-  "1080p60", "720p60", "1080p", "720p", "480p", "360p", "160p",
+  "best",
+  "worst",
+  "source",
+  "chunked",
+  "1080p60",
+  "720p60",
+  "1080p",
+  "720p",
+  "480p",
+  "360p",
+  "160p",
 ] as const;
 
 export const WATCH_TARGET_URL_OPTIONS: NonNullable<Parameters<typeof IsUrl>[0]> = {
@@ -26,9 +35,7 @@ export class CreateWatchTargetDto {
 
   @IsIn(["youtube", "twitch", "kick"])
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "twitch",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "twitch")
   platform: "youtube" | "twitch" | "kick";
 
   @IsUrl(WATCH_TARGET_URL_OPTIONS)
@@ -37,9 +44,7 @@ export class CreateWatchTargetDto {
 
   @IsIn(WATCH_TARGET_QUALITIES)
   @IsString()
-  @Transform(
-    ({ value }: { value: string }) => value.toLowerCase().trim() || "best",
-  )
+  @Transform(({ value }: { value: string }) => value.toLowerCase().trim() || "best")
   quality: string;
 
   /**

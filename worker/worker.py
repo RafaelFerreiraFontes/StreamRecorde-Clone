@@ -17,22 +17,22 @@ online status) of the plan, intentionally excluding: the queue (BullMQ),
 OAuth, and cloud upload (Phase 4.4), which will be implemented later.
 """
 
-import uuid
 import json
 import logging
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
-import time
-import re
-from datetime import datetime, timezone
+import uuid
+from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Mapping, Optional
 
 try:
     from worker.outbox import Outbox
@@ -43,16 +43,24 @@ bridge = None
 
 
 def bridge_enabled():
-    return os.environ.get("PERSISTENCE_MODE") == "bridge" or bool(os.environ.get("PERSISTENCE_BRIDGE_URL", "").strip())
+    return os.environ.get("PERSISTENCE_MODE") == "bridge" or bool(
+        os.environ.get("PERSISTENCE_BRIDGE_URL", "").strip()
+    )
 
 
 def get_bridge():
     global bridge
     if bridge is None:
-        directory = os.environ.get("OUTBOX_DIR") or str(pathlib.Path(_resolve_all_paths()["channels_status"]).parent / "outbox")
-        bridge = Outbox(directory, os.environ.get("PERSISTENCE_BRIDGE_URL") or "http://api:3000",
-                        os.environ.get("INTERNAL_API_TOKEN"))
+        directory = os.environ.get("OUTBOX_DIR") or str(
+            pathlib.Path(_resolve_all_paths()["channels_status"]).parent / "outbox"
+        )
+        bridge = Outbox(
+            directory,
+            os.environ.get("PERSISTENCE_BRIDGE_URL") or "http://api:3000",
+            os.environ.get("INTERNAL_API_TOKEN"),
+        )
     return bridge
+
 
 try:
     from worker.json_adapters import (
@@ -86,7 +94,7 @@ def _get_default_config_dir():
     return str(_get_module_dir() / "config")
 
 
-def _is_non_empty(val: Optional[str]) -> bool:
+def _is_non_empty(val: str | None) -> bool:
     """Check if value is non-empty when trimmed."""
     return val is not None and val.strip() != ""
 
@@ -109,10 +117,8 @@ def _get_env_int(name: str, default: int) -> int:
         return default
     try:
         return int(raw.strip())
-    except ValueError:
-        raise ValueError(
-            f"Environment variable {name} must be an integer, got: {raw!r}"
-        )
+    except ValueError as error:
+        raise ValueError(f"Environment variable {name} must be an integer, got: {raw!r}") from error
 
 
 def _resolve_output_dir() -> str:
@@ -127,7 +133,7 @@ POLL_INTERVAL = _get_env_int("POLL_INTERVAL", 60)
 
 
 def _resolve_all_paths(
-    env: Optional[Mapping[str, str]] = None,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Resolve all four config paths from an explicit env mapping.
 
@@ -159,7 +165,7 @@ def _resolve_all_paths(
     # Level 3: module-relative default
     default_dir = _get_default_config_dir()
 
-    def resolve_single(filename: str, override: Optional[str]) -> str:
+    def resolve_single(filename: str, override: str | None) -> str:
         # Level 1: non-empty individual override wins
         if override is not None and _is_non_empty(override):
             return override.strip()
@@ -216,12 +222,8 @@ def initialize_runtime_files(paths: dict) -> None:
         parent_dir.mkdir(parents=True, exist_ok=True)
 
         # Exclusive-create missing file (skip if already exists)
-        try:
-            with open(file_path, "x", encoding="utf-8") as f:
-                json.dump(canonical_shapes[key], f, indent=2)
-        except FileExistsError:
-            # File already exists - this is fine, skip
-            pass
+        with suppress(FileExistsError), open(file_path, "x", encoding="utf-8") as f:
+            json.dump(canonical_shapes[key], f, indent=2)
 
 
 def ensure_runtime_dirs() -> None:
@@ -272,18 +274,16 @@ def _probe_atomic_replace(path: str) -> None:
         from json_adapters import write_json_atomically
 
     target = pathlib.Path(path)
-    with open(target, "r", encoding="utf-8") as file_handle:
+    with open(target, encoding="utf-8") as file_handle:
         json.load(file_handle)
     probe_path = target.with_name(f".{target.name}.{uuid.uuid4().hex}.probe")
     try:
         write_json_atomically(str(probe_path), {"probe": True})
-        with open(probe_path, "r", encoding="utf-8") as file_handle:
+        with open(probe_path, encoding="utf-8") as file_handle:
             json.load(file_handle)
     finally:
-        try:
+        with suppress(FileNotFoundError):
             probe_path.unlink()
-        except FileNotFoundError:
-            pass
 
 
 def _probe_output_dir(output_dir: str) -> None:
@@ -306,10 +306,8 @@ def _probe_output_dir(output_dir: str) -> None:
         if file_descriptor is not None:
             os.close(file_descriptor)
         if probe_path is not None:
-            try:
+            with suppress(FileNotFoundError):
                 os.unlink(probe_path)
-            except FileNotFoundError:
-                pass
 
 
 def normalize_recording_subdir(input_str: str) -> str | None:
@@ -412,31 +410,29 @@ def resolve_output_dir(entry: dict, output_base: str) -> pathlib.Path:
     """
     recording_subdir = entry.get("recording_subdir")
 
-    if "recording_subdir" in entry:
-        # Field is present - must have a valid normalized value
-        if recording_subdir:
-            # Non-empty value provided - normalize and validate
-            normalized = normalize_recording_subdir(recording_subdir)
-            if normalized:
-                candidate = pathlib.Path(output_base) / normalized
-                try:
-                    # Resolve to absolute for strict containment check
-                    resolved = candidate.resolve()
-                    base_resolved = pathlib.Path(output_base).resolve()
-                    # Verify strict containment
-                    resolved.relative_to(base_resolved)
-                    return candidate
-                except (ValueError, OSError):
-                    # Not contained or resolution failed - reject explicitly
-                    raise ValueError(
-                        f"Invalid recording_subdir '{recording_subdir}': must be a relative path"
-                    )
-            else:
-                # Value present but failed normalization - raise, do not fallback
+    if "recording_subdir" in entry and recording_subdir:
+        # Non-empty value provided - normalize and validate
+        normalized = normalize_recording_subdir(recording_subdir)
+        if normalized:
+            candidate = pathlib.Path(output_base) / normalized
+            try:
+                # Resolve to absolute for strict containment check
+                resolved = candidate.resolve()
+                base_resolved = pathlib.Path(output_base).resolve()
+                # Verify strict containment
+                resolved.relative_to(base_resolved)
+                return candidate
+            except (ValueError, OSError) as error:
+                # Not contained or resolution failed - reject explicitly
                 raise ValueError(
                     f"Invalid recording_subdir '{recording_subdir}': must be a relative path"
-                )
-        # Empty/whitespace value - use legacy fallback
+                ) from error
+        else:
+            # Value present but failed normalization - raise, do not fallback
+            raise ValueError(
+                f"Invalid recording_subdir '{recording_subdir}': must be a relative path"
+            )
+    # Empty/whitespace value - use legacy fallback
 
     # Legacy fallback: use sanitized channel name
     channel_name = str(entry.get("channel_name") or "unknown-channel")
@@ -450,18 +446,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("worker")
 
-active_recordings = (
-    {}
-)  # watch_target_id -> {process, output_file, started_at, channel_name, url, platform, session_id(current), stream_id}
-channels_status = (
-    {}
-)  # watch_target_id -> { channel_name, platform, state(idle, offline, recording, finished, error)}
-recordings = (
-    []
-)  # session_id -> {watch_target_id, started_at, finished_at, output_file, state}
-streams_data = (
-    []
-)  # Array<Stream> - actual detected live broadcast occurrences
+active_recordings = {}  # watch_target_id -> {process, output_file, started_at, channel_name, url, platform, session_id(current), stream_id}
+channels_status = {}  # watch_target_id -> { channel_name, platform, state(idle, offline, recording, finished, error)}
+recordings = []  # session_id -> {watch_target_id, started_at, finished_at, output_file, state}
+streams_data = []  # Array<Stream> - actual detected live broadcast occurrences
 lock = threading.Lock()
 shutdown_event = threading.Event()
 
@@ -579,8 +567,7 @@ def reload_streams_preserving_active():
     # Keep every in-memory stream; add disk-only streams that are finished
     # (active disk streams would already be in active_recordings and thus in memory)
     streams_data = list(streams_data) + [
-        s for s in loaded_streams
-        if s.get("id") not in in_memory_ids
+        s for s in loaded_streams if s.get("id") not in in_memory_ids
     ]
 
 
@@ -590,9 +577,7 @@ def reload_recordings_preserving_active():
     loaded_recordings = load_recordings()
     active_recording_ids = {info["session_id"] for info in active_recordings.values()}
     active_recordings_in_memory = [
-        recording
-        for recording in recordings
-        if recording["session_id"] in active_recording_ids
+        recording for recording in recordings if recording["session_id"] in active_recording_ids
     ]
     recordings = [
         recording
@@ -615,7 +600,9 @@ def preserve_active_channel_status():
         status = channels_status.setdefault(
             channel_id,
             {
-                "channel_name": info.get("channel_name") or existing.get("channel_name") or channel_id,
+                "channel_name": info.get("channel_name")
+                or existing.get("channel_name")
+                or channel_id,
                 "platform": info.get("platform") or existing.get("platform") or "unknown",
                 "state": "recording",
             },
@@ -639,10 +626,13 @@ def _safe_identifier(value: object) -> str:
     """Return a bounded identifier suitable for structured log fields."""
     normalized = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value))
     normalized = re.sub(r"\s+", " ", normalized).strip()
-    return "".join(
-        character if character.isalnum() or character in "-_." else "_"
-        for character in normalized
-    )[:DIAGNOSTIC_MAX_LENGTH] or "unknown"
+    return (
+        "".join(
+            character if character.isalnum() or character in "-_." else "_"
+            for character in normalized
+        )[:DIAGNOSTIC_MAX_LENGTH]
+        or "unknown"
+    )
 
 
 def _sanitize_diagnostic(value: object) -> str | None:
@@ -656,9 +646,19 @@ def _sanitize_diagnostic(value: object) -> str | None:
         return None
     lowered = normalized.lower()
     unsafe_markers = (
-        "authorization", "bearer", "cookie", "set-cookie", "token",
-        "access_token", "refresh_token", "signature", "sig=", "key=",
-        "signed=", "password", "credential",
+        "authorization",
+        "bearer",
+        "cookie",
+        "set-cookie",
+        "token",
+        "access_token",
+        "refresh_token",
+        "signature",
+        "sig=",
+        "key=",
+        "signed=",
+        "password",
+        "credential",
     )
     if (
         re.search(r"[a-z][a-z0-9+.-]*://", lowered)
@@ -804,6 +804,7 @@ def select_quality(preferred: str, available: list[str]) -> SelectionResult:
 def _pick_fps(candidates: list[tuple[str, int, int | None]], pref_fps: int | None) -> str:
     """Pick the best FPS match within same-resolution candidates."""
     if pref_fps is not None:
+
         def key_explicit(candidate: tuple[str, int, int | None]):
             name, _, fps = candidate
             difference = abs(fps - pref_fps) if fps is not None else 10000
@@ -847,9 +848,7 @@ def _best_ranked(
     return None
 
 
-def classify_probe_result(
-    invoked_url: str, returncode: int, stdout: str | None
-) -> ProbeResult:
+def classify_probe_result(invoked_url: str, returncode: int, stdout: str | None) -> ProbeResult:
     """Classify Streamlink's JSON probe response without retaining diagnostics."""
     if not isinstance(stdout, str) or not stdout.strip():
         return ProbeResult(ProbeState.ERROR, "empty_output", returncode)
@@ -863,9 +862,7 @@ def classify_probe_result(
         return ProbeResult(ProbeState.ERROR, "invalid_root", returncode)
 
     if "error" in data:
-        expected_no_streams_error = (
-            f"No playable streams found on this URL: {invoked_url}"
-        )
+        expected_no_streams_error = f"No playable streams found on this URL: {invoked_url}"
         if (
             returncode == 1
             and set(data) == {"error"}
@@ -955,12 +952,16 @@ def start_recording(entry: dict, stream_id: str | None = None, quality: str = "b
 
     checkpoint = None
     if bridge_enabled():
-        checkpoint = get_bridge().start(watch_target_id, session_id, stream_id, str(out_path), entry.get("quality", quality))
+        checkpoint = get_bridge().start(
+            watch_target_id, session_id, stream_id, str(out_path), entry.get("quality", quality)
+        )
         stream_id = checkpoint["stream_id"]
         current_stream = find_active_stream(watch_target_id)
         if current_stream:
             current_stream["id"] = stream_id
 
+    if checkpoint:
+        get_bridge().launch_intent(checkpoint)
     try:
         process = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
@@ -1014,11 +1015,11 @@ def start_recording(entry: dict, stream_id: str | None = None, quality: str = "b
             channels_status[watch_target_id]["state"] = prior_state
             _stop_launched_process(process)
             if checkpoint:
-                get_bridge().terminal(checkpoint, "error", str(out_path), reason="checkpoint_failure")
-            try:
+                get_bridge().terminal(
+                    checkpoint, "error", str(out_path), reason="checkpoint_failure"
+                )
+            with suppress(Exception):
                 save_status()
-            except Exception:
-                pass
             log.error(
                 "Recording persistence failed (watch_target_id=%s, session_id=%s, "
                 "exception_type=%s)",
@@ -1046,17 +1047,13 @@ def start_recording(entry: dict, stream_id: str | None = None, quality: str = "b
         _safe_identifier(stream_id),
     )
 
-    threading.Thread(
-        target=monitor_recording, args=(watch_target_id,), daemon=True
-    ).start()
+    threading.Thread(target=monitor_recording, args=(watch_target_id,), daemon=True).start()
 
 
 def _stop_launched_process(process) -> None:
     """Terminate and reap a child when its recording cannot be persisted."""
-    try:
+    with suppress(OSError, AttributeError):
         process.terminate()
-    except (OSError, AttributeError):
-        pass
     _wait_for_process(process)
 
 
@@ -1075,7 +1072,10 @@ def drain_stderr(process, channel_name):
             try:
                 summary = _sanitize_diagnostic(line)
                 if summary is None and line.strip():
-                    log.info("Streamlink diagnostic suppressed (watch_target_id=%s)", _safe_identifier(channel_name))
+                    log.info(
+                        "Streamlink diagnostic suppressed (watch_target_id=%s)",
+                        _safe_identifier(channel_name),
+                    )
                 elif summary:
                     log.info(
                         "Streamlink diagnostic (watch_target_id=%s, message=%s)",
@@ -1083,14 +1083,12 @@ def drain_stderr(process, channel_name):
                         summary,
                     )
             except Exception as error:
-                try:
+                with suppress(Exception):
                     log.warning(
                         "Streamlink diagnostic handling failed (watch_target_id=%s, exception_type=%s)",
                         _safe_identifier(channel_name),
                         type(error).__name__,
                     )
-                except Exception:
-                    pass
     except Exception as error:
         log.warning(
             "Streamlink stderr drain failed (watch_target_id=%s, exception_type=%s)",
@@ -1110,16 +1108,27 @@ def _persist_terminal_recording(id: str) -> bool:
 
     if bridge_enabled():
         try:
-            if not get_bridge().terminal(info["checkpoint"], terminal["state"], terminal["output_file"], terminal["finished_at"]):
+            if not get_bridge().terminal(
+                info["checkpoint"],
+                terminal["state"],
+                terminal["output_file"],
+                terminal["finished_at"],
+            ):
                 return False
         except Exception as error:
-            log.error("Terminal bridge persistence pending (watch_target_id=%s, exception_type=%s)",
-                      _safe_identifier(id), type(error).__name__)
+            log.error(
+                "Terminal bridge persistence pending (watch_target_id=%s, exception_type=%s)",
+                _safe_identifier(id),
+                type(error).__name__,
+            )
             return False
 
     recording_index = next(
-        (i for i, recording in enumerate(recordings)
-         if recording["session_id"] == info["session_id"]),
+        (
+            i
+            for i, recording in enumerate(recordings)
+            if recording["session_id"] == info["session_id"]
+        ),
         None,
     )
     if recording_index is None:
@@ -1138,11 +1147,13 @@ def _persist_terminal_recording(id: str) -> bool:
     recording = recordings[recording_index]
     prior_recording = dict(recording)
     target_status["state"] = terminal["state"]
-    recording.update({
-        "state": terminal["state"],
-        "finished_at": terminal["finished_at"],
-        "output_file": terminal["output_file"],
-    })
+    recording.update(
+        {
+            "state": terminal["state"],
+            "finished_at": terminal["finished_at"],
+            "output_file": terminal["output_file"],
+        }
+    )
     try:
         save_status()
         save_recordings()
@@ -1152,7 +1163,9 @@ def _persist_terminal_recording(id: str) -> bool:
         recording.update(prior_recording)
         log.error(
             "Terminal recording persistence failed (watch_target_id=%s, session_id=%s, exception_type=%s)",
-            _safe_identifier(id), _safe_identifier(info["session_id"]), type(error).__name__,
+            _safe_identifier(id),
+            _safe_identifier(info["session_id"]),
+            type(error).__name__,
         )
         return False
 
@@ -1160,7 +1173,8 @@ def _persist_terminal_recording(id: str) -> bool:
     log.info(
         "Recording finished (outcome=%s, watch_target_id=%s, returncode=%s)",
         "completed" if terminal["state"] == "finished" else "error",
-        _safe_identifier(id), terminal["returncode"],
+        _safe_identifier(id),
+        terminal["returncode"],
     )
     return True
 
@@ -1182,7 +1196,9 @@ def monitor_recording(id: str):
         if not info:
             return
 
-        finished_at = datetime.now(timezone.utc).isoformat() if bridge_enabled() else datetime.now().isoformat()
+        finished_at = (
+            datetime.now(UTC).isoformat() if bridge_enabled() else datetime.now().isoformat()
+        )
 
         output_file = info["output_file"]
         shutdown_interrupted = info.get("shutdown_requested", False)
@@ -1300,12 +1316,14 @@ def poll_loop():
                 or not isinstance(platform, str)
             ):
                 invalid_fields = tuple(
-                    field for field, value in (
+                    field
+                    for field, value in (
                         ("url", url),
                         ("channel_name", channel_name),
                         ("id", id),
                         ("platform", platform),
-                    ) if not isinstance(value, str)
+                    )
+                    if not isinstance(value, str)
                 )
                 log.warning(
                     "Invalid watch target (watch_target_id=%s, missing_fields=%s)",
@@ -1335,7 +1353,9 @@ def poll_loop():
                     log.info(
                         "Probe: LIVE (watch_target_id=%s, returncode=%s, diagnostic=%s)",
                         safe_target_id,
-                        probe_result.returncode if probe_result.returncode is not None else "absent",
+                        probe_result.returncode
+                        if probe_result.returncode is not None
+                        else "absent",
                         probe_result.stderr_summary or "absent",
                     )
                     log.info("Live detected! (watch_target_id=%s)", safe_target_id)
@@ -1352,11 +1372,17 @@ def poll_loop():
                         )
                         continue
                     refreshed_entry = next(
-                        (candidate for candidate in refreshed_watchlist if candidate.get("id") == id),
+                        (
+                            candidate
+                            for candidate in refreshed_watchlist
+                            if candidate.get("id") == id
+                        ),
                         None,
                     )
                     if refreshed_entry is None:
-                        log.warning("Watch target refresh missing (watch_target_id=%s)", safe_target_id)
+                        log.warning(
+                            "Watch target refresh missing (watch_target_id=%s)", safe_target_id
+                        )
                         continue
                     refreshed_enabled = watch_target_enabled(refreshed_entry)
                     refreshed_missing = any(
@@ -1364,10 +1390,16 @@ def poll_loop():
                         for field in ("url", "channel_name", "id", "platform")
                     )
                     if refreshed_enabled is not True or refreshed_missing:
-                        log.warning("Watch target refresh blocked launch (watch_target_id=%s)", safe_target_id)
+                        log.warning(
+                            "Watch target refresh blocked launch (watch_target_id=%s)",
+                            safe_target_id,
+                        )
                         continue
                     if refreshed_entry["url"] != url:
-                        log.warning("Watch target URL changed during probe (watch_target_id=%s)", safe_target_id)
+                        log.warning(
+                            "Watch target URL changed during probe (watch_target_id=%s)",
+                            safe_target_id,
+                        )
                         continue
                     if bridge_enabled() and not get_bridge().ready(id):
                         continue
@@ -1377,7 +1409,11 @@ def poll_loop():
                     selection = select_quality(preferred_quality, available_qualities)
 
                     safe_preferred_quality = _sanitize_diagnostic(preferred_quality) or "suppressed"
-                    safe_selected_quality = _sanitize_diagnostic(selection.selected) if selection.selected is not None else "absent"
+                    safe_selected_quality = (
+                        _sanitize_diagnostic(selection.selected)
+                        if selection.selected is not None
+                        else "absent"
+                    )
                     safe_fallback_reason = _sanitize_diagnostic(selection.reason) or "suppressed"
 
                     if selection.selected is None:
@@ -1414,7 +1450,9 @@ def poll_loop():
                     log.info(
                         "Probe: OFFLINE (watch_target_id=%s, returncode=%s, diagnostic=%s)",
                         safe_target_id,
-                        probe_result.returncode if probe_result.returncode is not None else "absent",
+                        probe_result.returncode
+                        if probe_result.returncode is not None
+                        else "absent",
                         probe_result.stderr_summary or "absent",
                     )
                     with lock:
@@ -1423,9 +1461,7 @@ def poll_loop():
                     save_status()
                 elif probe_result.state is ProbeState.ERROR:
                     returncode = (
-                        probe_result.returncode
-                        if probe_result.returncode is not None
-                        else "absent"
+                        probe_result.returncode if probe_result.returncode is not None else "absent"
                     )
                     exception_type = probe_result.exception_type or "absent"
                     log.warning(
@@ -1435,7 +1471,9 @@ def poll_loop():
                         probe_result.reason,
                         returncode,
                         exception_type,
-                        probe_result.timeout_seconds if probe_result.timeout_seconds is not None else "absent",
+                        probe_result.timeout_seconds
+                        if probe_result.timeout_seconds is not None
+                        else "absent",
                         probe_result.stderr_summary or "absent",
                     )
             except Exception as error:
@@ -1501,21 +1539,28 @@ def shutdown_worker():
                     try:
                         info["process"].terminate()
                     except OSError:
-                        log.warning("Capture already exited during shutdown (watch_target_id=%s)", _safe_identifier(channel_id))
+                        log.warning(
+                            "Capture already exited during shutdown (watch_target_id=%s)",
+                            _safe_identifier(channel_id),
+                        )
         for channel_id, info in active_procs:
             _wait_for_process(info["process"])
             with lock:
                 if channel_id in active_recordings:
-                    info.setdefault("pending_terminal", {"state": "error", "finished_at": datetime.now(timezone.utc).isoformat(),
-                                    "output_file": info["output_file"], "returncode": info["process"].returncode})
+                    info.setdefault(
+                        "pending_terminal",
+                        {
+                            "state": "error",
+                            "finished_at": datetime.now(UTC).isoformat(),
+                            "output_file": info["output_file"],
+                            "returncode": info["process"].returncode,
+                        },
+                    )
                     _persist_terminal_recording(channel_id)
         return
     with lock:
         # Snapshot active processes before terminating
-        active_procs = [
-            (channel_id, info)
-            for channel_id, info in active_recordings.items()
-        ]
+        active_procs = list(active_recordings.items())
 
         finished_at = datetime.now().isoformat()
 
@@ -1540,7 +1585,7 @@ def shutdown_worker():
         save_recordings()
 
     # Wait for all processes outside the lock to avoid deadlocks
-    for channel_id, info in active_procs:
+    for _channel_id, info in active_procs:
         _wait_for_process(info["process"])
 
 
@@ -1591,7 +1636,10 @@ def run_worker() -> int:
     try:
         ensure_runtime_dirs()
     except Exception as error:
-        log.error("Worker startup failed (category=runtime_initialization, exception_type=%s)", type(error).__name__)
+        log.error(
+            "Worker startup failed (category=runtime_initialization, exception_type=%s)",
+            type(error).__name__,
+        )
         return 1
     paths = _resolve_all_paths()
     config_dir = str(pathlib.Path(paths["watchlist"]).parent)
@@ -1612,7 +1660,10 @@ def run_worker() -> int:
             try:
                 get_bridge().recover()
             except Exception as error:
-                log.error("Worker bridge recovery failed; refusing launches (exception_type=%s)", type(error).__name__)
+                log.error(
+                    "Worker bridge recovery failed; refusing launches (exception_type=%s)",
+                    type(error).__name__,
+                )
                 return 1
         poll_loop()
     finally:

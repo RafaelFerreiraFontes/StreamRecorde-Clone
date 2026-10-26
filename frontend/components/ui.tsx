@@ -8,13 +8,7 @@ export function Badge({ state }: { state: RecordingState }) {
     </span>
   );
 }
-export function Json({
-  data,
-  title = "Inspect JSON response",
-}: {
-  data: unknown;
-  title?: string;
-}) {
+export function Json({ data, title = "Inspect JSON response" }: { data: unknown; title?: string }) {
   return (
     <details className="json">
       <summary>{title}</summary>
@@ -42,13 +36,7 @@ export function ResourceStatus({ resource }: { resource: Resource }) {
 export function Empty({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
 }
-export function Table({
-  headings,
-  children,
-}: {
-  headings: string[];
-  children: React.ReactNode;
-}) {
+export function Table({ headings, children }: { headings: string[]; children: React.ReactNode }) {
   return (
     <div className="table-wrap">
       <table>
