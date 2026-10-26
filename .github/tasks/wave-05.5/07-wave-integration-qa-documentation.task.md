@@ -12,6 +12,7 @@ status: done
 ## Status and Preconditions
 
 Phase A (full isolated integration, security and recovery QA across all 12 validation areas, including relational/local rollback rehearsal) and Phase C (operational documentation and repository-wide regression gates) have been executed against the accepted [wave specification](README.md), [T01 decision record](authentication-ownership-decisions.md), project/MVP instructions and accepted T01–T06 deliverables:
+
 - Normal startup in `api/src/database/identity-mode.ts` intentionally retains the fail-closed guard (`authenticated mode not yet available`) pending separate Phase B human approval (`AUTHENTICATED_ACTIVATION_APPROVAL_REQUIRED`).
 - Executed verification under Node 25.9.0, pnpm 11.20.0, Python 3.12.4 and `.venv` Python 3.13.9 / Ruff 0.15.6:
   - `pnpm lint` (`node scripts/lint-repository.mjs lint`): PASS (exit 0, 0 diagnostics across `scripts`, `api`, `frontend`, `worker`; SHA-256 tracked-file inventory identical before and after).
@@ -34,6 +35,31 @@ Phase A (full isolated integration, security and recovery QA across all 12 valid
   - Isolation and cleanup: `docker ps -a` and `docker volume ls` confirmed empty before and after; pre-existing `wave-05` image tags preserved and restored; temporary directories removed; normal `runtime-data` and `recordings` untouched.
 
 T01's accepted authentication-ownership-decisions.md is required. If it is missing or a relevant decision is unresolved, return to Coordinator review rather than inventing a policy.
+
+## Post-QA Worker Bridge Hotfix Evidence (2026-10-26)
+
+The following closure evidence supplements the historical Phase A/C checkpoint
+above; task status is `done` following formal QA and human acceptance.
+
+- Commit: `3d7f115` (`fix(worker): align bridge recovery reason with API event contract`).
+- Root cause: the Worker emitted `worker_restart_before_launch`, but the API event
+  DTO did not include that recovery reason in its accepted values.
+- Minimal correction: add the reason to the DTO's explicit allowlist, preserving
+  strict validation and rejection of unknown, empty or whitespace-suffixed reasons.
+- Regression coverage: isolated PostgreSQL verifies durable terminal acknowledgment,
+  unchanged Recording data and identical acknowledgment on replay after an API
+  restart, with one Recording, one Stream and one matching Worker event row.
+- Recorded post-hotfix validation at HEAD `3d7f115`: API 291/291 passed (0 skipped,
+  isolated PostgreSQL and restart probe); Worker 201/201 passed (0 skipped);
+  Frontend 38/38 passed (0 skipped); disposable bridge smoke 3/3 gates passed;
+  API/frontend typechecks and production builds, repository lint and format checks passed.
+
+These results were supplied as executed post-hotfix evidence for documentary
+closure; application suites were not rerun by this documentation-only change.
+The wave is officially complete and accepted for merge into `master`; merge remains
+unperformed. Human Docker User Stability Testing remains pending, independently
+of automated smoke/restart checks. Synthetic fixtures do not establish playable
+MP4 media or real-platform stability.
 
 ## Context / Objective
 

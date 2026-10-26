@@ -29,7 +29,9 @@ Operational packaging now uses explicit tracked overlays and production CLI wrap
 ## Wave 05.5 — User, Authentication and Ownership (Completed & Human-Approved)
 
 Wave 05.5 implementation, integration QA (Phases A, B, C) and operational
-documentation are complete and formally human-approved.
+documentation are complete and formally human-approved. Post-QA hotfix `3d7f115`
+closes the Worker bridge recovery contract gap; the wave is officially completed and
+accepted for merge into `master`, with the merge itself still unperformed.
 
 - Authenticated startup implementation: completed.
 - Authenticated startup QA: passed across unit, isolated PostgreSQL integration, and Docker smoke suites.
@@ -64,7 +66,36 @@ Python 3.12.4 and `.venv` Python 3.13.9 / Ruff 0.15.6):
 - `docker compose -f compose.yml config --quiet` and `pnpm test:smoke` (18 JSON gates + relational bridge E2E proxy, Worker outbox recovery, zero duplicates, and DB/API restart durability): PASS (exit 0).
 - Test containers/volumes and private temporary fixtures were removed (`docker ps -a` and `docker volume ls` empty); pre-existing application image tags were restored. No normal storage, engines, dependencies or global runtimes were changed.
 
+### Post-QA Hotfix and Official Closure (2026-10-26)
+
+Hotfix `3d7f115` (`fix(worker): align bridge recovery reason with API event contract`)
+resolves a mismatch between the Worker's recovery reason and the API event DTO.
+The minimal correction accepts `worker_restart_before_launch` in the DTO's explicit
+allowlist while preserving strict validation and rejection of unknown reasons.
+Regression coverage verifies durable acknowledgment and idempotent terminal-event
+replay after an API restart against isolated PostgreSQL, with unchanged Recording
+data and no duplicate Recording, Stream or Worker event rows.
+
+Recorded post-hotfix automated validation at HEAD `3d7f115`:
+
+- API: 291/291 passed, 0 skipped, with isolated PostgreSQL and restart probe.
+- Worker: 201/201 passed, 0 skipped.
+- Frontend: 38/38 passed, 0 skipped.
+- Relational bridge smoke: 3/3 gates passed in a disposable environment.
+- API/frontend typechecks and production builds, repository lint and format checks: passed.
+
+These results are the post-hotfix execution evidence supplied for this closure,
+not new application-suite executions performed by the documentation consolidation.
+Automated smoke/restart checks do not replace human Docker User Stability Testing,
+which remains pending in the matrix above; synthetic media does not prove playable MP4.
+
 ## Current Milestone
+
+Wave 05.5 (User Authentication & Ownership) is officially complete and accepted for
+merge into `master` on branch `wave-05.5-user-authentication-ownership`, including
+post-QA hotfix `3d7f115` and the automated validation recorded above. All wave tasks
+are done. Merge, personal-installation authenticated activation and hosted deployment
+remain unperformed; human Docker stability testing remains pending.
 
 Wave 05 (PostgreSQL Domain Persistence, Option A Worker Bridge, Migration CLI, and Live Docker Integration) is complete and integrated into `master` via PR #2, with Compose volume driver hardening incorporated. All automated suites and live Docker smoke scenarios have been verified. Existing installations remain JSON-authoritative by default until explicit operator cutover; no automatic user data migration has occurred.
 
@@ -150,7 +181,7 @@ The inspected Wave 04, 04.5, 04.75, 05, and 05.5 task frontmatter is done:
 
 - Wave 04/04.5/04.75: Worker reliability/probe corrections; enabled and recording-folder/browser controls; quality/URL editing and adaptive quality integration.
 - Wave 05 ([PostgreSQL + Definitive Domain Persistence](.github/tasks/wave-05/README.md)): Architecture decisions (T01), PostgreSQL 17 + Drizzle foundation (T02), Creator & WatchTarget relational persistence (T03), Stream & Recording persistence with composite foreign key (T04), Option A Worker bridge with durable outbox and fail-closed checkpoints (T05), Legacy JSON migration CLI with transactional import and SHA-256 manifests (T06), and Docker live integration QA (Scenarios A and B) and documentation (T07).
-- Wave 05.5 ([User, Authentication and Ownership](.github/tasks/wave-05.5/README.md)): Identity & ownership decisions (T01), User schema & local account migration (T02), Authentication & session lifecycle (T03), Domain ownership & legacy authorization (T04), Worker ownership & filesystem isolation (T05), Repository linting & code readability (T05.5), Frontend authentication & proxy isolation (T06), and Wave integration QA, Phase B startup prerequisite validation & operational documentation (T07). All tasks completed and human-approved on branch `wave-05.5-user-authentication-ownership`.
+- Wave 05.5 ([User, Authentication and Ownership](.github/tasks/wave-05.5/README.md)): Identity & ownership decisions (T01), User schema & local account migration (T02), Authentication & session lifecycle (T03), Domain ownership & legacy authorization (T04), Worker ownership & filesystem isolation (T05), Repository linting & code readability (T05.5), Frontend authentication & proxy isolation (T06), and Wave integration QA, Phase B startup prerequisite validation & operational documentation (T07). Task 07 is in final review/QA for closure on branch `wave-05.5-user-authentication-ownership`.
 
 ### Next Wave
 
@@ -197,6 +228,8 @@ A local user/profile configures Creator and independent WatchTargets, detects a 
 Optional hosted operation with ownership, authentication, invite limits, deployment security, and production hardening. It must not replace Local Mode or make remote infrastructure essential to local recording.
 
 ## Last Updated
+
+2026-10-26: Official Wave 05.5 closure includes post-QA hotfix `3d7f115` and recorded post-hotfix automated validation. All tasks are done; accepted for merge into master. Human Docker User Stability Testing remains pending.
 
 2026-10-23: Wave 05.5 completed and human-approved on branch wave-05.5-user-authentication-ownership. All tasks (01–07, including 05.5) are done. Authenticated startup capability is available via explicit opt-in with fail-closed prerequisite validation. Merge into master, deployment, and personal installation activation remain unperformed. See the summary above.
 

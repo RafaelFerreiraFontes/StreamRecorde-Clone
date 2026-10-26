@@ -6,6 +6,24 @@ Wave completed. All tasks T01-T07, including T05.5 (see its [validation report](
 
 Introduce stable User identity, a low-friction local account, credential/session handling and backend resource isolation. Local Mode remains primary; authenticated operation is a capability to validate locally, not authorization for hosted deployment.
 
+### Post-QA Closure Addendum (2026-10-26)
+
+Official Wave 05.5 closure includes hotfix `3d7f115`
+(`fix(worker): align bridge recovery reason with API event contract`). The API DTO
+now accepts the Worker's `worker_restart_before_launch` recovery reason while
+retaining strict validation. Isolated PostgreSQL coverage verifies idempotent replay
+after an API restart without duplicate database rows.
+
+Recorded post-hotfix validation at HEAD `3d7f115`: API 291/291, Worker 201/201 and
+Frontend 38/38 passed (0 skipped in each suite); disposable bridge smoke passed
+3/3 gates; typechecks, production builds, lint and format checks passed. See
+[Task 07 evidence](07-wave-integration-qa-documentation.task.md#post-qa-worker-bridge-hotfix-evidence-2026-10-26)
+and [project status](../../../PROJECT-STATUS.md#post-qa-hotfix-and-official-closure-2026-10-26).
+These are recorded execution results, not application suites rerun during this
+documentation consolidation. All task statuses are `done`; the wave is accepted
+for merge into `master`, with the merge itself unperformed. Human Docker User Stability
+Testing remains pending and is separate from automated validation.
+
 ## Historical Planning Baseline and Evidence
 
 Original planning baseline: master at 28e42a1b8b96724b3e1eb7f057b836b65bf8a7f5 (post-Wave 05). The observations below describe that historical baseline, not the current implementation after T01-T05. Read current task reports, accepted decisions and code before execution.
@@ -22,16 +40,16 @@ Original planning baseline: master at 28e42a1b8b96724b3e1eb7f057b836b65bf8a7f5 (
 
 ## Tasks and Dependencies
 
-| Order | Task | Depends on | Status |
-| --- | --- | --- | --- |
-| 01 | [Identity, Authentication and Ownership Decisions](01-authentication-ownership-decisions.task.md) | Wave 05 completion | done |
-| 02 | [User Schema, Local Account and Ownership Migration](02-user-schema-migration.task.md) | 05.5-T01 | done |
-| 03 | [Authentication and Session Lifecycle](03-authentication-session.task.md) | 05.5-T02 | done |
-| 04 | [Domain Ownership and Legacy Route Authorization](04-domain-authorization.task.md) | 05.5-T03 | done |
-| 05 | [Worker Ownership and Filesystem Access Boundaries](05-worker-filesystem-ownership.task.md) | 05.5-T04 | done |
-| 05.5 | [Repository Linting and Code Readability](05.5-repository-linting-code-readability.task.md) | 05.5-T05 | done |
-| 06 | [Frontend Identity, Proxy and Session UX](06-frontend-authentication.task.md) | 05.5-T05.5 | done |
-| 07 | [Wave Integration QA and Operational Documentation](07-wave-integration-qa-documentation.task.md) | 05.5-T06 | done |
+| Order | Task                                                                                              | Depends on         | Status |
+| ----- | ------------------------------------------------------------------------------------------------- | ------------------ | ------ |
+| 01    | [Identity, Authentication and Ownership Decisions](01-authentication-ownership-decisions.task.md) | Wave 05 completion | done   |
+| 02    | [User Schema, Local Account and Ownership Migration](02-user-schema-migration.task.md)            | 05.5-T01           | done   |
+| 03    | [Authentication and Session Lifecycle](03-authentication-session.task.md)                         | 05.5-T02           | done   |
+| 04    | [Domain Ownership and Legacy Route Authorization](04-domain-authorization.task.md)                | 05.5-T03           | done   |
+| 05    | [Worker Ownership and Filesystem Access Boundaries](05-worker-filesystem-ownership.task.md)       | 05.5-T04           | done   |
+| 05.5  | [Repository Linting and Code Readability](05.5-repository-linting-code-readability.task.md)       | 05.5-T05           | done   |
+| 06    | [Frontend Identity, Proxy and Session UX](06-frontend-authentication.task.md)                     | 05.5-T05.5         | done   |
+| 07    | [Wave Integration QA and Operational Documentation](07-wave-integration-qa-documentation.task.md) | 05.5-T06           | done   |
 
 Execute sequentially: T01 decisions -> T02 schema/migration -> T03 authentication -> T04 domain authorization -> T05 Worker/filesystem -> T05.5 linting/code remediation -> T06 frontend -> T07 integration/documentation. A completed implementation is not accepted dependency evidence; follow validation, review and human acceptance gates.
 
@@ -65,16 +83,16 @@ Redis/BullMQ/jobs (06), Tags (06.5), general file-management/retention (07/07.5 
 
 ## Acceptance Matrix
 
-| Requirement | Decision | Implementation | Final evidence |
-| --- | --- | --- | --- |
-| Modes, local identity and activation gates | T01 | T02/T03/T06 | T07 |
-| User schema, ownership constraints, upgrade/import/replay | T01 | T02 | T07 |
-| Passwords, sessions, logout, expiry, CSRF and abuse controls | T01 | T03/T06 | T07 |
-| Two-user isolation, modern/legacy routes and history | T01 | T04 | T07 |
-| Service identity, replay, account state and capture continuity | T01 | T05 | T07 |
-| Directory and sibling metadata isolation | T01 | T05 | T07 |
-| Proxy transport and stale-response/account-switch handling | T01 | T06 | T07 |
-| Lint/format coverage and behavior-preserving code remediation | T05.5 plan | T05.5; maintained by T06 | T07 |
+| Requirement                                                    | Decision   | Implementation           | Final evidence |
+| -------------------------------------------------------------- | ---------- | ------------------------ | -------------- |
+| Modes, local identity and activation gates                     | T01        | T02/T03/T06              | T07            |
+| User schema, ownership constraints, upgrade/import/replay      | T01        | T02                      | T07            |
+| Passwords, sessions, logout, expiry, CSRF and abuse controls   | T01        | T03/T06                  | T07            |
+| Two-user isolation, modern/legacy routes and history           | T01        | T04                      | T07            |
+| Service identity, replay, account state and capture continuity | T01        | T05                      | T07            |
+| Directory and sibling metadata isolation                       | T01        | T05                      | T07            |
+| Proxy transport and stale-response/account-switch handling     | T01        | T06                      | T07            |
+| Lint/format coverage and behavior-preserving code remediation  | T05.5 plan | T05.5; maintained by T06 | T07            |
 
 ## Validation and Agent Workflow
 
