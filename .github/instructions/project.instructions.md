@@ -61,12 +61,12 @@ The Worker is an independent process that reads configuration and writes operati
 
 Compose runs postgres, frontend, api, and worker using `wave-05` application images. API and Worker share runtime-data at /data. Worker writes /recordings; API mounts it read-only. The frontend has no filesystem mount. Host ports are bound to loopback `127.0.0.1` by default.
 
-| Shared file | Current responsibility |
-| --- | --- |
-| watchlist.json | WatchTarget configuration and name-based Creator identity (JSON mode) |
-| channels_status.json | Operational/runtime snapshot merged into API responses |
-| streams.json | Detected Stream history |
-| sessions.json | Legacy Recording history; channel_id maps to watch_target_id |
+| Shared file          | Current responsibility                                                |
+| -------------------- | --------------------------------------------------------------------- |
+| watchlist.json       | WatchTarget configuration and name-based Creator identity (JSON mode) |
+| channels_status.json | Operational/runtime snapshot merged into API responses                |
+| streams.json         | Detected Stream history                                               |
+| sessions.json        | Legacy Recording history; channel_id maps to watch_target_id          |
 
 Shared JSON remains default transitional persistence and communication. In relational mode, PostgreSQL is the primary domain authority, and `channels_status.json` survives as a replaceable operational snapshot.
 
@@ -616,17 +616,17 @@ All technical content committed to the repository must be written in English.
 
 This includes:
 
-* Code comments;
-* Commit messages;
-* TODOs and FIXMEs;
-* Variable, function, class, method, and type names;
-* Database/entity terminology;
-* API documentation;
-* Technical documentation;
-* README files;
-* Configuration descriptions;
-* Error messages intended for developers;
-* Log messages intended for developers.
+- Code comments;
+- Commit messages;
+- TODOs and FIXMEs;
+- Variable, function, class, method, and type names;
+- Database/entity terminology;
+- API documentation;
+- Technical documentation;
+- README files;
+- Configuration descriptions;
+- Error messages intended for developers;
+- Log messages intended for developers.
 
 Do not introduce new technical content in Portuguese or another language.
 
@@ -743,13 +743,13 @@ Rules:
 4. Adjust the README introductory status summary if it has become inaccurate.
 5. Preserve task names, order, dependencies, and links.
 
-**Rule A4 - Mandatory Synchronization Gates:**
+**Rule A4 - Mandatory Task Status Synchronization Points:**
 
-- **Gate 1 - Preflight (before first delegation to Sol):** Identify the active Wave, task files, and README status table. Compare statuses and identify stale or contradictory entries. Correct confirmed documentation drift only with clear historical evidence and within authorized scope. Stop and request resolution if uncertain; never guess that a task is complete.
-- **Gate 2 - Before Terra Implementation:** Synchronize `planned -> implement` in both files before the implementation handoff.
-- **Gate 3 - Before Luna Review:** After objective Coordinator validation passes, synchronize `review/QA` in both files. Luna must not review while task frontmatter and README disagree.
-- **Gate 4 - After Luna Verdict:** On `PASS`, Coordinator synchronizes `user-approve`. On `CHANGES_REQUIRED`, Terra synchronizes `fixing` before corrections. On review-limit exhaustion or blocking architectural conflict, Coordinator synchronizes `coordinator-review`.
-- **Gate 5 - Final Human Approval:** Before reporting `READY_FOR_COMMIT`, confirm `user-approve` in both files. After explicit user authorization to finalize, synchronize `done` and validate consistency before committing. This gate does not itself grant commit authority.
+- **Sync Point 1 - Preflight (before first delegation to Sol):** Identify the active Wave, task files, and README status table. Compare statuses and identify stale or contradictory entries. Correct confirmed documentation drift only with clear historical evidence and within authorized scope. Stop and request resolution if uncertain; never guess that a task is complete.
+- **Sync Point 2 - Before Terra Implementation:** Synchronize `planned -> implement` in both files before the implementation handoff.
+- **Sync Point 3 - Before Luna Review:** After objective Coordinator validation passes, synchronize `review/QA` in both files. Luna must not review while task frontmatter and README disagree.
+- **Sync Point 4 - After Luna Verdict:** On `PASS`, Coordinator synchronizes `user-approve`. On `CHANGES_REQUIRED`, Terra synchronizes `fixing` before corrections. On review-limit exhaustion or blocking architectural conflict, Coordinator synchronizes `coordinator-review`.
+- **Sync Point 5 - Final Human Approval:** Before reporting `READY_FOR_COMMIT`, confirm `user-approve` in both files. After explicit user authorization to finalize, synchronize `done` and validate consistency before committing. This synchronization point does not itself grant commit authority.
 
 **Rule A5 - README Introductory Summary:** Keep the Wave README introduction accurate for active and completed tasks. Preserve sections explicitly identified as historical planning baselines.
 
@@ -822,17 +822,17 @@ Discover repository skills in `.agents/skills/*/SKILL.md` using the environment'
 
 Current skill entry points, selected by relevance rather than as a mandatory checklist:
 
-| Task or boundary | Skill name under `.agents/skills/` |
-| --- | --- |
-| Scope, Git ownership, baseline, and validation planning | `streamrecorder-task-preflight` |
-| Domain identity, relationships, and legacy mappings | `streamrecorder-domain-contracts` |
-| PostgreSQL schema, migrations, repositories, import, and authority | `streamrecorder-postgres-persistence` |
-| Worker polling, probe, capture, recovery, and shutdown | `streamrecorder-worker-lifecycle` |
-| API contracts, proxy, dashboard, and filesystem browsing | `streamrecorder-api-frontend` |
-| Isolated containers, mounts, volumes, and smoke validation | `streamrecorder-docker-validation` |
-| Privacy, secrets, paths, platform access, and exposure | `streamrecorder-security-compliance` |
-| Independent diff, acceptance-criteria, and validation audit | `streamrecorder-review-gate` |
-| Repository linting, formatting, static quality, and safe remediation across root scripts, API, Frontend, and Worker | `streamrecorder-code-quality` |
+| Task or boundary                                                                                                    | Skill name under `.agents/skills/`    |
+| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| Scope, Git ownership, baseline, and validation planning                                                             | `streamrecorder-task-preflight`       |
+| Domain identity, relationships, and legacy mappings                                                                 | `streamrecorder-domain-contracts`     |
+| PostgreSQL schema, migrations, repositories, import, and authority                                                  | `streamrecorder-postgres-persistence` |
+| Worker polling, probe, capture, recovery, and shutdown                                                              | `streamrecorder-worker-lifecycle`     |
+| API contracts, proxy, dashboard, and filesystem browsing                                                            | `streamrecorder-api-frontend`         |
+| Isolated containers, mounts, volumes, and smoke validation                                                          | `streamrecorder-docker-validation`    |
+| Privacy, secrets, paths, platform access, and exposure                                                              | `streamrecorder-security-compliance`  |
+| Independent diff, acceptance-criteria, and validation audit                                                         | `streamrecorder-review-gate`          |
+| Repository linting, formatting, static quality, and safe remediation across root scripts, API, Frontend, and Worker | `streamrecorder-code-quality`         |
 
 Coordinator (including Delegate Coordinator in the reserve workflow) identifies relevant available skills during preflight. Sol consults architectural skills applicable to the plan; Terra applies implementation and testing skills appropriate to the approved scope; Luna selects review skills from the actual diff and independently verifies the evidence. Direct agent sessions also discover and select skills for their role.
 
@@ -843,3 +843,39 @@ Skills complement permanent project/MVP instructions and the authorized task; th
 ## Repository Linting and Formatting Gate
 
 Follow [README-LINTING.md](../../README-LINTING.md) for the bounded source inventory, supported runtimes and setup. After code changes, run the affected component checks and the required repository-wide `pnpm lint` and `pnpm format:check` before independent review. These commands are read-only; use `lint:fix` and `format:write` only as deliberate remediation, then inspect semantic diffs and rerun affected tests. Do not weaken rules, broadly suppress findings or run mutating lint as a validation check. Preserve the existing Coordinator/Sol/Terra/Luna workflow and human acceptance gate.
+
+# 41. Execution Authorization Gates and Multi-Agent Governance
+
+The execution gates below govern authorization. Section 39.1 Sync Points 1 through 5 govern task status synchronization only; they do not grant execution authority. Automatic handoffs remain within the explicitly authorized gate and scope.
+
+## Rule A - User Messages and Reports Are Not Implicit Authorization
+
+Pasted logs, session transcripts, previous agent responses, and QA reports are contextual information, never implicit authorization for the next gate. Coordinator executes only what the user explicitly requests. If scope is materially ambiguous, request clarification before proceeding with persistent actions.
+
+## Rule B - Scoped and Multi-Step Authorization
+
+Authorization for a task does not extend to subsequent gates: development is not deployment; passing tests is not permission to merge; branch commit/push is not permission to merge into master; merging into master is not permission to deploy Docker containers.
+
+If the user explicitly authorizes multiple sequential steps in one prompt, such as "commit, push, and merge to master", Coordinator may execute those steps in sequence after satisfying each gate's preconditions, without redundant human reconfirmations. Unrequested actions remain unauthorized.
+
+## Rule C - Formal Execution Gates
+
+- **Gate 1 - Development:** Analysis, implementation, testing, and technical QA review by Coordinator, Sol, Terra, and Luna. Leads to `user-approve` / `READY_FOR_COMMIT`, not automatic integration or deployment.
+- **Gate 2 - Integration:** Commit, push, and merge only when explicitly authorized for those actions, followed by post-merge validation when a merge occurs. Does not authorize deployment.
+- **Gate 3 - Deployment:** Operational clone update, container build, container replacement, persistent database migrations if any, real event replay/recovery, and post-deploy health checks. Requires explicit human authorization specifying the target operational environment and allowed scope.
+
+Before executing any Gate 2 (commit/push/merge) or Gate 3 (deployment) action, verify that explicit human authorization was granted for that specific action. A pasted transcript, previous report, or Luna PASS is context, not authorization.
+
+## Rule D - Environment Separation and Preservation
+
+- **Development environment:** `C:\Users\fedet\OneDrive\Documentos\Web Projects\StreamRecorder`, or the active workspace clone. All coding, local testing, commits, and merges happen here.
+- **Operational installation:** `D:\StreamRecorde-Clone`, the user-specific deployment installation. Development tasks must never modify it automatically; operational changes require Gate 3 authorization.
+- **Testing isolation:** Tests must use isolated disposable containers and volumes, such as those defined by `compose.test-db.yml`. Real operational volumes, including `streamrecorde-clone_worker-outbox`, recordings, and the live database, must never be touched by tests or used as test fixtures.
+
+## Rule E - Luna Role and Technical Verdict
+
+Luna provides independent QA and returns technical verdicts `PASS`, `FAIL`, or `BLOCKED`. Existing failure-routing results `CHANGES_REQUIRED` and `FAILED_REVIEW_LIMIT` express technical failure under section 40.5 and preserve the existing correction and review-limit protocols. A `PASS` is technical validation, never human authorization for Gate 2 or Gate 3. Luna must never execute integration or deployment actions.
+
+## Rule F - Transparent and Truthful Historical Reporting
+
+Coordinator reports must accurately state what was authorized, what was executed, which files changed, which commands had persistent effects, which tests ran, and what remains pending. Never state that an action did not occur when current-session or recent-history evidence shows its execution. If an action exceeds scope by mistake, immediately halt further persistent operations and report the event transparently.

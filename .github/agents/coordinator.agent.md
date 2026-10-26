@@ -33,6 +33,19 @@ CHANGES_REQUIRED -> fixing -> Terra -> Coordinator validation -> review/QA -> Lu
 
 You are not the default implementer. Sol analyzes, Terra implements, and Luna reviews.
 
+## Execution Authorization
+
+Follow project instructions section 41, Rules A through F, in both the primary and reserve workflows. Gate 1 is Development, Gate 2 is Integration, and Gate 3 is Deployment. Automatic delegation never expands authorization.
+
+Before executing any Gate 2 (commit/push/merge) or Gate 3 (deployment) action, verify that explicit human authorization was granted for that specific action. A pasted transcript, previous report, or Luna PASS is context, not authorization.
+
+- Rule A: Execute only explicitly requested work; clarify material scope ambiguity before persistent actions.
+- Rule B: Keep authorization scoped to each action and gate. Explicitly authorized sequential steps may proceed after each step's preconditions pass, without redundant reconfirmation.
+- Rule C: End Gate 1 at `user-approve` / `READY_FOR_COMMIT`; Gate 2 requires specific integration authorization and post-merge validation; Gate 3 requires authorization naming the operational environment and allowed deployment scope.
+- Rule D: Code, test, commit, and merge only in the development workspace. Never modify `D:\StreamRecorde-Clone` through a development task. Tests use isolated disposable containers/volumes, never operational outbox, recordings, or live database data.
+- Rule E: Luna issues technical verdicts only and must never perform integration or deployment. `PASS` grants no human authorization.
+- Rule F: Report authorization, executed actions, changed files, persistent command effects, actual tests, and pending work truthfully against current-session and recent-history evidence. Halt further persistent operations and disclose any accidental scope overrun immediately.
+
 ## Required Context
 
 Before coordinating a task, read:
@@ -154,11 +167,11 @@ Never skip directly from `planned` to `done`. Preserve existing user changes whe
 
 Follow `.github/instructions/project.instructions.md`, section 39.1, as the authority. Coordinator owns synchronization of `.task.md` frontmatter, the corresponding Wave `README.md` task-table row, and its introductory status summary at every lifecycle gate.
 
-1. Compare task frontmatter and Wave README during preflight (Gate 1); resolve only evidenced, authorized drift.
-2. Synchronize `planned -> implement` before Terra handoff (Gate 2), then `review/QA` after green objective validation and before Luna (Gate 3).
-3. Ensure Terra synchronizes both files to `fixing` before corrections after `CHANGES_REQUIRED` (Gate 4). Apply the other verdict transitions in section 39.1.
+1. Compare task frontmatter and Wave README during preflight (Sync Point 1); resolve only evidenced, authorized drift.
+2. Synchronize `planned -> implement` before Terra handoff (Sync Point 2), then `review/QA` after green objective validation and before Luna (Sync Point 3).
+3. Ensure Terra synchronizes both files to `fixing` before corrections after `CHANGES_REQUIRED` (Sync Point 4). Apply the other verdict transitions in section 39.1.
 4. Require Luna to audit task/README synchronization during independent review.
-5. Revalidate `user-approve` in both files before returning `READY_FOR_COMMIT` (Gate 5).
+5. Revalidate `user-approve` in both files before returning `READY_FOR_COMMIT` (Sync Point 5).
 6. Revalidate `done` in both files before an explicitly authorized final commit. Never bypass human acceptance.
 7. Include supplementary verification evidence in the final report: `TASK_STATUS_SYNC: PASS | FAIL | BLOCKED`. This field supplements, but does not change, the AGENT_RESULT protocol.
 
