@@ -8,17 +8,110 @@ const source = readFileSync("app/api/backend/[...path]/route.ts", "utf8");
 const code = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext },
 }).outputText;
-const { GET, POST, PATCH } = await import(
+const { GET, POST, PATCH, DELETE } = await import(
   "data:text/javascript;base64," + Buffer.from(code).toString("base64")
 );
 function request(method, pathname, body) {
   return {
     method,
-    headers: new Headers(),
+    headers: new Headers({ Host: "localhost", Referer: "http://localhost/" }),
     nextUrl: new URL("http://localhost" + pathname),
     text: async () => JSON.stringify(body),
   };
 }
+
+test("proxy validates mutation origin evidence and Host before fetching upstream", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOrigins = process.env.FRONTEND_TRUSTED_ORIGINS;
+  const trusted = "http://127.0.0.1:3001,http://localhost:3001,https://console.example";
+  const cases = [
+    [trusted, "http://127.0.0.1:3001", "127.0.0.1:3001", null, true],
+    [trusted, "http://localhost:3001", "localhost:3001", null, true],
+    [trusted, "https://console.example", "console.example", null, true],
+    [undefined, "http://localhost:3001", "localhost:3001", null, true],
+    [undefined, "https://127.0.0.1:3001", "127.0.0.1:3001", null, true],
+    ["", "http://localhost", "localhost", null, true],
+    [undefined, "http://console.example", "console.example", null, false],
+    [undefined, "http://localhost.evil.example", "localhost.evil.example", null, false],
+    [trusted, "http://evil.example", "evil.example", null, false],
+    [trusted, "http://localhost:3002", "localhost:3002", null, false],
+    [trusted, "https://localhost:3001", "localhost:3001", null, false],
+    [trusted, "http://localhost:3001", "localhost:3002", null, false],
+    [trusted, "http://localhost:3001", "evil.example", null, false],
+    [trusted, "http://localhost:3001", null, null, false],
+    [trusted, null, "localhost:3001", "http://localhost:3001/watch-targets?q=1#edit", true],
+    [undefined, null, "localhost", "http://localhost/watch-targets", true],
+    [trusted, null, "localhost:3001", null, false],
+    [trusted, null, "localhost:3001", "http://user:pass@localhost:3001/", false],
+    [trusted, null, "localhost:3001", "not a URL", false],
+    [trusted, null, "evil.example", "http://evil.example/", false],
+    ...[
+      "null",
+      "",
+      "not a URL",
+      "http://localhost:3001/",
+      "http://localhost:3001?q=1",
+      "http://localhost:3001#fragment",
+      "http://user:pass@localhost:3001",
+      "http://localhost:3001,http://evil.example",
+      "http://*.example",
+      "ftp://localhost:3001",
+    ].map((origin) => [trusted, origin, "localhost:3001", "http://localhost:3001/", false]),
+    ...[
+      "",
+      "localhost:3001/",
+      "user@localhost:3001",
+      "localhost:3001,evil.example",
+      "localhost:3001 extra",
+      "localhost:3001?query",
+      "localhost:3001#fragment",
+    ].map((host) => [trusted, "http://localhost:3001", host, null, false]),
+    ...[
+      "http://localhost:3001/",
+      "http://*.example",
+      "http://user@localhost:3001",
+      "http://localhost:3001,",
+      "http://localhost:3001,not-a-url",
+    ].map((configured) => [configured, "http://localhost:3001", "localhost:3001", null, false]),
+  ];
+  try {
+    for (const [configured, origin, host, referer, allowed] of cases) {
+      if (configured === undefined) delete process.env.FRONTEND_TRUSTED_ORIGINS;
+      else process.env.FRONTEND_TRUSTED_ORIGINS = configured;
+      for (const handler of [POST, PATCH, DELETE]) {
+        let calls = 0;
+        globalThis.fetch = async () => {
+          calls += 1;
+          return Response.json({});
+        };
+        const method = handler === POST ? "POST" : handler === PATCH ? "PATCH" : "DELETE";
+        const input = request(method, "/", {});
+        input.headers = new Headers();
+        if (origin !== null) input.headers.set("origin", origin);
+        if (host !== null) input.headers.set("host", host);
+        if (referer !== null) input.headers.set("referer", referer);
+        const response = await handler(input, {
+          params: Promise.resolve({
+            path: method === "POST" ? ["watch-targets"] : ["watch-targets", "id"],
+          }),
+        });
+        const label = JSON.stringify({ method, configured, origin, host, referer });
+        assert.equal(response.status, allowed ? 200 : 403, label);
+        assert.equal(calls, allowed ? 1 : 0, label);
+        if (!allowed)
+          assert.deepEqual(
+            await response.json(),
+            { message: "Cross-origin mutation rejected" },
+            label,
+          );
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOrigins === undefined) delete process.env.FRONTEND_TRUSTED_ORIGINS;
+    else process.env.FRONTEND_TRUSTED_ORIGINS = originalOrigins;
+  }
+});
 
 test("proxy forwards relative browsing query and recording-ID location only on allowed routes", async () => {
   const original = globalThis.fetch;
@@ -106,6 +199,7 @@ test("proxy forwards only the session cookie and original origin evidence and re
       };
       const input = request(method, "/", {});
       input.headers = new Headers({
+        Host: "localhost",
         Cookie: `unrelated=secret; sr_session=${token}`,
         Origin: "http://localhost",
         Referer: "http://localhost/watch-targets",
@@ -152,7 +246,7 @@ test("proxy rejects unsupported auth/internal routes, cross-origin mutations and
     }
     const crossOrigin = request("POST", "/", {});
     crossOrigin.headers.set("origin", "https://localhost");
-    crossOrigin.headers.set("host", "localhost");
+    crossOrigin.headers.set("host", "different-host");
     assert.equal(
       (await POST(crossOrigin, { params: Promise.resolve({ path: ["auth", "login"] }) })).status,
       403,

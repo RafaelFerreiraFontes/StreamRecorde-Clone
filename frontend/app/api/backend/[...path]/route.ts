@@ -1,12 +1,38 @@
 import type { NextRequest } from "next/server";
 export const dynamic = "force-dynamic";
 
-function isSameOrigin(request: NextRequest): boolean {
+function parseHttpUrl(value: string): URL {
+  const parsed = new URL(value);
+  if (
+    !/^https?:\/\//.test(value) ||
+    /[\s\\,*]/.test(value) ||
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password
+  )
+    throw new Error("Invalid origin evidence");
+  return parsed;
+}
+
+function isAllowedOrigin(request: NextRequest): boolean {
   const origin = request.headers.get("origin");
-  if (!origin) return true;
+  const host = request.headers.get("host");
   try {
-    const parsed = new URL(origin);
-    return parsed.origin === request.nextUrl.origin;
+    const evidence = origin ?? request.headers.get("referer");
+    if (!evidence || !host || /[\s\\,/@?#]/.test(host)) return false;
+    const parsed = parseHttpUrl(evidence);
+    if (origin !== null && parsed.origin !== origin) return false;
+    const authority = new URL(`${parsed.protocol}//${host}`);
+    if (authority.host !== host || parsed.host !== host) return false;
+
+    const configured = process.env.FRONTEND_TRUSTED_ORIGINS?.trim();
+    if (!configured) return ["localhost", "127.0.0.1"].includes(parsed.hostname);
+    const allowedOrigins = configured.split(",").map((value) => {
+      const entry = value.trim();
+      if (parseHttpUrl(entry).origin !== entry) throw new Error("Invalid trusted origin");
+      return entry;
+    });
+    return allowedOrigins.includes(parsed.origin);
   } catch {
     return false;
   }
@@ -39,7 +65,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     path.some((segment) => segment === "." || segment === ".." || /[\\/]/.test(segment))
   )
     return Response.json({ message: "Unsupported API route" }, { status: 404 });
-  if (request.method !== "GET" && request.headers.get("origin") && !isSameOrigin(request))
+  if (request.method !== "GET" && !isAllowedOrigin(request))
     return Response.json({ message: "Cross-origin mutation rejected" }, { status: 403 });
   try {
     const base = new URL(process.env.API_BASE_URL || "http://localhost:3000");

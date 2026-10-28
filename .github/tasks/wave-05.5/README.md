@@ -50,6 +50,7 @@ Original planning baseline: master at 28e42a1b8b96724b3e1eb7f057b836b65bf8a7f5 (
 | 05.5  | [Repository Linting and Code Readability](05.5-repository-linting-code-readability.task.md)       | 05.5-T05           | done   |
 | 06    | [Frontend Identity, Proxy and Session UX](06-frontend-authentication.task.md)                     | 05.5-T05.5         | done   |
 | 07    | [Wave Integration QA and Operational Documentation](07-wave-integration-qa-documentation.task.md) | 05.5-T06           | done   |
+| 08    | [Frontend Origin Validation Security Hotfix](08-frontend-origin-validation-hotfix.task.md)         | 05.5-T07           | done   |
 
 Execute sequentially: T01 decisions -> T02 schema/migration -> T03 authentication -> T04 domain authorization -> T05 Worker/filesystem -> T05.5 linting/code remediation -> T06 frontend -> T07 integration/documentation. A completed implementation is not accepted dependency evidence; follow validation, review and human acceptance gates.
 
